@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 enum StatsProvider {
     #[default]
     Claude,
+    Codebuddy,
     Codex,
     ForgeCode,
     OpenCode,
@@ -56,6 +57,7 @@ fn parse_stats_mode(stats_mode: Option<String>) -> StatsMode {
 fn stats_provider_id(provider: StatsProvider) -> &'static str {
     match provider {
         StatsProvider::Claude => "claude",
+        StatsProvider::Codebuddy => "codebuddy",
         StatsProvider::Codex => "codex",
         StatsProvider::ForgeCode => "forgecode",
         StatsProvider::OpenCode => "opencode",
@@ -209,6 +211,7 @@ fn should_include_stats_message(message: &ClaudeMessage, mode: StatsMode) -> boo
 fn all_stats_providers() -> HashSet<StatsProvider> {
     [
         StatsProvider::Claude,
+        StatsProvider::Codebuddy,
         StatsProvider::Codex,
         StatsProvider::ForgeCode,
         StatsProvider::OpenCode,
@@ -229,6 +232,7 @@ fn parse_active_stats_providers(active_providers: Option<Vec<String>>) -> HashSe
         .into_iter()
         .filter_map(|provider| match provider.as_str() {
             "claude" => Some(StatsProvider::Claude),
+            "codebuddy" => Some(StatsProvider::Codebuddy),
             "codex" => Some(StatsProvider::Codex),
             "forgecode" => Some(StatsProvider::ForgeCode),
             "opencode" => Some(StatsProvider::OpenCode),
@@ -260,6 +264,8 @@ fn detect_project_provider(project_path: &str) -> StatsProvider {
         StatsProvider::OpenCode
     } else if is_antigravity_path(project_path) {
         StatsProvider::Antigravity
+    } else if is_codebuddy_path(project_path) {
+        StatsProvider::Codebuddy
     } else {
         StatsProvider::Claude
     }
@@ -277,6 +283,12 @@ fn detect_session_provider(session_path: &str) -> StatsProvider {
 
     if session_path.starts_with("forgecode://") || session_path.starts_with("forgecode-db://") {
         return StatsProvider::ForgeCode;
+    }
+
+    // CodeBuddy: path is anchored under ~/.codebuddy/projects (not just substring
+    // match, which would misclassify paths like "/work/foo.codebuddy-test").
+    if is_codebuddy_path(session_path) {
+        return StatsProvider::Codebuddy;
     }
 
     let is_rollout = PathBuf::from(session_path)
@@ -300,6 +312,23 @@ fn is_antigravity_path(path: &str) -> bool {
     crate::commands::antigravity::resolve_antigravity_root()
         .map(|root| Path::new(path).starts_with(root.as_path()))
         .unwrap_or(false)
+}
+
+/// Whether `path` lies under `~/.codebuddy/projects/`. Anchored detection avoids
+/// false positives from arbitrary substrings (e.g. `/work/foo.codebuddy-test`).
+fn is_codebuddy_path(path: &str) -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    is_codebuddy_path_under(path, &home)
+}
+
+/// Implementation of [`is_codebuddy_path`] parameterized by the home dir,
+/// so tests can drive the anchored check with a fixed home and not depend
+/// on whether the CI runner has a HOME env at all.
+fn is_codebuddy_path_under(path: &str, home: &Path) -> bool {
+    let root = home.join(".codebuddy").join("projects");
+    Path::new(path).starts_with(root)
 }
 
 /// Parse a line using simd-json (requires mutable slice)
@@ -966,6 +995,7 @@ fn collect_provider_global_file_stats(
     }
 
     let projects = match provider {
+        StatsProvider::Codebuddy => providers::codebuddy::scan_projects().unwrap_or_default(),
         StatsProvider::Codex => providers::codex::scan_projects().unwrap_or_default(),
         StatsProvider::ForgeCode => providers::forgecode::scan_projects().unwrap_or_default(),
         StatsProvider::OpenCode => providers::opencode::scan_projects().unwrap_or_default(),
@@ -974,6 +1004,7 @@ fn collect_provider_global_file_stats(
     };
 
     let provider_tag = match provider {
+        StatsProvider::Codebuddy => "codebuddy",
         StatsProvider::Codex => "codex",
         StatsProvider::ForgeCode => "forgecode",
         StatsProvider::OpenCode => "opencode",
@@ -989,6 +1020,7 @@ fn collect_provider_global_file_stats(
         project_keys.insert(format!("{provider_tag}:{}", project.path));
 
         let sessions = match provider {
+            StatsProvider::Codebuddy => providers::codebuddy::load_sessions(&project.path, false),
             StatsProvider::Codex => providers::codex::load_sessions(&project.path, false),
             StatsProvider::ForgeCode => providers::forgecode::load_sessions(&project.path, false),
             StatsProvider::OpenCode => providers::opencode::load_sessions(&project.path, false),
@@ -1009,6 +1041,7 @@ fn collect_provider_global_file_stats(
         .par_iter()
         .filter_map(|(project_name, file_path)| {
             let messages = match provider {
+                StatsProvider::Codebuddy => providers::codebuddy::load_messages(file_path),
                 StatsProvider::Codex => providers::codex::load_messages(file_path),
                 StatsProvider::ForgeCode => providers::forgecode::load_messages(file_path),
                 StatsProvider::OpenCode => providers::opencode::load_messages(file_path),
@@ -1580,6 +1613,18 @@ fn resolve_provider_project_name(provider: StatsProvider, project_path: &str) ->
             .and_then(|n| n.to_str())
             .unwrap_or("Unknown")
             .to_string(),
+        StatsProvider::Codebuddy => {
+            if let Ok(projects) = providers::codebuddy::scan_projects() {
+                if let Some(project) = projects.into_iter().find(|p| p.path == project_path) {
+                    return project.name;
+                }
+            }
+            PathBuf::from(project_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Unknown")
+                .to_string()
+        }
         StatsProvider::Codex => {
             let cwd = project_path
                 .strip_prefix("codex://")
@@ -1646,6 +1691,19 @@ fn resolve_provider_project_name_from_session(
             let project_path = format!("opencode://{project_part}");
             resolve_provider_project_name(provider, &project_path)
         }
+        StatsProvider::Codebuddy => {
+            if let Ok(projects) = providers::codebuddy::scan_projects() {
+                for project in projects {
+                    if let Ok(sessions) = providers::codebuddy::load_sessions(&project.path, false)
+                    {
+                        if sessions.iter().any(|s| s.file_path == session_path) {
+                            return project.name;
+                        }
+                    }
+                }
+            }
+            "codebuddy".to_string()
+        }
         StatsProvider::Codex => {
             if let Ok(projects) = providers::codex::scan_projects() {
                 for project in projects {
@@ -1669,6 +1727,7 @@ fn load_provider_sessions_for_stats(
     project_path: &str,
 ) -> Result<Vec<crate::models::ClaudeSession>, String> {
     match provider {
+        StatsProvider::Codebuddy => providers::codebuddy::load_sessions(project_path, false),
         StatsProvider::Codex => providers::codex::load_sessions(project_path, false),
         StatsProvider::ForgeCode => providers::forgecode::load_sessions(project_path, false),
         StatsProvider::OpenCode => providers::opencode::load_sessions(project_path, false),
@@ -1685,6 +1744,7 @@ fn load_provider_messages_for_stats(
     session: &crate::models::ClaudeSession,
 ) -> Result<Vec<ClaudeMessage>, String> {
     match provider {
+        StatsProvider::Codebuddy => providers::codebuddy::load_messages(&session.file_path),
         StatsProvider::Codex => providers::codex::load_messages(&session.file_path),
         StatsProvider::ForgeCode => providers::forgecode::load_messages(&session.file_path),
         StatsProvider::OpenCode => providers::opencode::load_messages(&session.file_path),
@@ -2429,6 +2489,7 @@ pub async fn get_session_token_stats(
         }
 
         let messages = match provider {
+            StatsProvider::Codebuddy => providers::codebuddy::load_messages(&session_path)?,
             StatsProvider::Codex => providers::codex::load_messages(&session_path)?,
             StatsProvider::ForgeCode => providers::forgecode::load_messages(&session_path)?,
             StatsProvider::OpenCode => providers::opencode::load_messages(&session_path)?,
@@ -3270,6 +3331,13 @@ pub async fn get_global_stats_summary(
         .par_iter()
         .filter_map(|path| process_session_file_for_global_stats(path, mode, s_ref, e_ref))
         .collect();
+
+    if providers_to_include.contains(&StatsProvider::Codebuddy) {
+        let (codebuddy_stats, codebuddy_projects) =
+            collect_provider_global_file_stats(StatsProvider::Codebuddy, mode, s_ref, e_ref);
+        project_names.extend(codebuddy_projects);
+        file_stats.extend(codebuddy_stats);
+    }
 
     if providers_to_include.contains(&StatsProvider::Codex) {
         let (codex_stats, codex_projects) =
@@ -5498,5 +5566,49 @@ mod tests {
         assert_eq!(stats.total_cache_creation_tokens, 28644);
         assert_eq!(stats.total_cache_read_tokens, 14732);
         assert_eq!(stats.total_tokens, 6 + 222 + 28644 + 14732);
+    }
+
+    /// `CodeBuddy` provider detection must be anchored under
+    /// `~/.codebuddy/projects`, not a substring match. Otherwise paths like
+    /// `/work/foo.codebuddy-test/...` get routed to `CodeBuddy` loaders that
+    /// then return empty / error, breaking stats for the actual provider.
+    /// Uses an injected home so the assertion is meaningful regardless of
+    /// the runner's environment.
+    #[test]
+    fn is_codebuddy_path_rejects_substring_lookalikes() {
+        let home = Path::new("/test-home/user");
+        // Substring-style matches that the OLD `path.contains(".codebuddy")`
+        // logic would have accepted — all must be rejected by the anchored
+        // version.
+        assert!(
+            !is_codebuddy_path_under("/work/foo.codebuddy-test/projects/abc.jsonl", home),
+            "name suffix lookalike must not match"
+        );
+        assert!(
+            !is_codebuddy_path_under("/Users/dev/notes/.codebuddy-clone/data.jsonl", home),
+            "hidden-dir lookalike must not match"
+        );
+        assert!(
+            !is_codebuddy_path_under("/tmp/sample.codebuddy.jsonl", home),
+            "filename containing the substring must not match"
+        );
+    }
+
+    /// Real-shaped `CodeBuddy` paths must still be detected. Mirrors the
+    /// runtime layout: `~/.codebuddy/projects/<project>/<session>.jsonl`.
+    /// Uses an injected home so the test does not silently skip on runners
+    /// without `$HOME` and does not depend on the actual user's filesystem.
+    #[test]
+    fn is_codebuddy_path_accepts_real_layout() {
+        let home = Path::new("/test-home/user");
+        let real = home
+            .join(".codebuddy")
+            .join("projects")
+            .join("my-project")
+            .join("session-1.jsonl");
+        assert!(
+            is_codebuddy_path_under(real.to_string_lossy().as_ref(), home),
+            "anchored detection must accept ~/.codebuddy/projects/.../*.jsonl"
+        );
     }
 }
