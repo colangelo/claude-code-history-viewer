@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.1] - 2026-06-23
+
+Patch release fixing conversation loading for several assistants added in 1.17.0.
+
+### Fixed
+- **Kilo Code conversations now load.** The task index is read from VS Code's `globalState` (the global `state.vscdb`, keyed by extension id) where Kilo actually stores it — previously only the on-disk index files (`state/taskHistory.json` / `tasks/_index.json`) that Kilo never writes were checked, so Kilo always showed zero sessions. (#422)
+- **Roo Code projects now group by workspace.** Roo (and Kilo) name the working-directory field `workspace`, not Cline's `cwdOnTaskInitialization`, so every conversation previously collapsed into a single "unknown" project. (#422)
+- **Zed tool results render as readable text** instead of raw tagged JSON. Zed stores a tool result's content as `Vec<LanguageModelToolResultContent>` (e.g. `[{"Text":"…"}]`); it is now unwrapped to its text (images become an `[image]` placeholder) rather than shown verbatim. (#423)
+- **Zed is now detected on Linux and Windows.** The threads database is read from Zed's real per-OS location — lowercase `~/.local/share/zed` on Linux and `%LOCALAPPDATA%\Zed` on Windows (it was looking under `Zed` / `%APPDATA%`). macOS was already correct. (#424)
+- **Zed no longer errors on older thread databases.** Project/session queries adapt to the columns actually present (`folder_paths` / `created_at` are absent on older schemas), so threads from older Zed versions load instead of failing the whole provider. (#424)
+
 ## [1.17.0] - 2026-06-22
 
 ### Added
