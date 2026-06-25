@@ -13,4 +13,5 @@ pub mod export;
 pub mod fs_utils;
 pub mod models;
 pub mod providers;
+pub mod search_text;
 pub mod utils;

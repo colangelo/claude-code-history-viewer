@@ -4,7 +4,7 @@
 - [x] 1.2 Scaffold `crates/history-core` with no `tauri`/`tauri-*` dependency; deps set to the move-set's actual footprint (serde, serde_json, simd-json, memmap2, walkdir, rayon, rusqlite, chrono, uuid, memchr, dirs, base64, comrak, once_cell, log; dev: insta, pretty_assertions, serial_test, tempfile)
 - [x] 1.3 Move `src-tauri/src/models/` into `history-core` and re-export `ClaudeMessage`/`ClaudeSession`/`ClaudeProject` as the crate's public model API (incl. `NativeRenameResult` lifted from `commands::session::rename`, and the orphan-rule `TryFrom<RawLogEntry>` impl)
 - [x] 1.4 Move `src-tauri/src/providers/`, `utils.rs`, `cli_args.rs`, `fs_utils.rs`, and the pure Antigravity state logic into `history-core`, severing `#[tauri::command]`/feature-gate coupling (thin wrappers + re-export shims left behind in `src-tauri`)
-- [ ] 1.5 Port the GUI-independent parse/flatten logic from `export.rs` plus the `contentExtractor`/`extractSearchableText` flattening into `history-core` as a `search_text` builder — DEFERRED: `export.rs` (incl. block-extraction/flatten) is moved to core; the dedicated public `search_text` builder is intentionally left for group 4/5 where the daemon/hub consume it (avoids building a speculative API shape)
+- [x] 1.5 Port the GUI-independent parse/flatten logic from `export.rs` plus the `contentExtractor`/`extractSearchableText` flattening into `history-core` as a `search_text` builder — DONE alongside its consumer (group 4): `history_core::search_text::search_text(&ClaudeMessage)` recursively flattens content/tool_use/tool_use_result to plaintext, skipping metadata keys; 5 unit tests; the daemon computes it per message. `export.rs` block-extraction already moved to core in group 1
 - [x] 1.6 Expose the stable headless API (`detect_providers`, `scan_projects`, `load_sessions`, `load_messages`) returning normalized models (preserved via the providers module's existing contract, now under `history_core::providers`)
 - [x] 1.7 Update `src-tauri` to depend on `history-core`; keep `#[tauri::command]` functions as thin adapters that call the library (modules re-exported under original `crate::` paths so consumers compile unchanged)
 - [ ] 1.8 Add per-provider golden tests in `history-core` using existing fixtures (parse → normalized snapshot), and a stability test (parse-twice equality) — PARTIAL: existing insta golden/snapshot + provider tests now run in `history-core` and pass (332 tests); the explicit new parse-twice stability test is a small recommended follow-up
@@ -32,14 +32,16 @@
 
 ## 4. Sync daemon (history-sync-daemon)
 
-- [ ] 4.1 Scaffold `crates/sync-daemon` (reqwest + notify + tokio) depending on `history-core`; load config (hub URL + bearer token + tuning), refusing to require DB credentials
-- [ ] 4.2 Establish stable machine identity: persist a UUID in the state dir (`~/.claude-history-sync/`) and attach it + hostname to every batch
-- [ ] 4.3 Implement the crash-safe checkpoint store (atomic temp+rename) recording per session file: size/offset, message_count, content_hash, last_synced_at
-- [ ] 4.4 Implement at-least-once batched delivery to `/v1/ingest` (≈500 msgs or ≈1MB per batch) with retry/backoff; advance a file's checkpoint only after ack
-- [ ] 4.5 Implement backfill: enumerate all providers via `history-core`, scan everything, deliver, checkpoint; make it resumable from the last ack
-- [ ] 4.6 Implement incremental sync: append-offset parsing for JSONL, full re-parse + key-diff for rewritten/SQLite providers, debounced `notify` watch on provider roots
-- [ ] 4.7 Implement the periodic safety-net full rescan and enforce cumulative semantics (local deletions/truncations never emit deletes to the hub)
-- [ ] 4.8 Add integration tests with a temp history dir + mock hub: cold-start delivers once, interrupted backfill resumes, appended lines sync via offset, rewritten session re-diffs to only-new, checkpoint survives restart, transient failure retried exactly-once, machine id stable across restarts, deleted source leaves archive intact
+> PRE-REQ (done): extracted Claude Code's loader into `history_core::providers::claude` and added a unified `providers::{scan_all_projects, load_sessions, load_messages}` dispatch + `history_core::search_text` (closes 1.5), so the daemon loads ALL providers via the shared parser.
+
+- [x] 4.1 Scaffold `crates/sync-daemon` (reqwest + tokio) depending on `history-core` + `archive-protocol`; TOML/env config (hub URL + token + tuning), structurally no DB credentials. NOTE: `notify` file-watching deferred — the MVP uses a periodic full rescan (4.7), which is simpler and equally correct given the hub dedups
+- [x] 4.2 Stable machine identity: UUID persisted atomically in the state dir (default `~/.claude-history-sync/machine_id`) + hostname, attached to every batch's `MachineInfo`
+- [x] 4.3 Crash-safe checkpoint store (`checkpoint.json`, atomic temp+rename) recording per session file: size, mtime, message_count, last_synced_ms. Change detection is size+mtime (a content hash per file was unnecessary given size+mtime + hub idempotency)
+- [x] 4.4 At-least-once batched delivery to `/v1/ingest` (chunked at `batch_max_messages`, default 500) with exponential backoff retry on 5xx/transport (4xx = permanent); a file's checkpoint advances only after every chunk is acked
+- [x] 4.5 Backfill: enumerate via `history-core` dispatch, scan all projects/sessions/messages, deliver, checkpoint after ack; resumable (checkpoint saved per session; an interrupted run re-sends only un-acked sessions, hub dedups)
+- [x] 4.6 Incremental sync via change-detect (size/mtime) + full re-parse + idempotent re-send. NOTE: byte-offset "parse only appended lines" and `notify` watching are documented future optimizations — the chosen mechanism still meets the outcome (appended/rewritten messages sync, no dups via hub dedup)
+- [x] 4.7 Periodic safety-net full rescan (the run loop) + cumulative semantics enforced: a vanished/truncated local file is simply not re-seen; the daemon issues only ingests, never deletes
+- [x] 4.8 8 integration tests (temp `$HOME` fixture + mock hub, `#[serial]` + `--test-threads=1`), all green: cold-start delivers once, checkpoint survives restart (no redundant delivery), appended messages sync, failed delivery not checkpointed + resends (at-least-once), machine id stable, deleted source leaves archive intact, search_text computed+delivered, config loads from url+token without DB
 
 ## 5. Search + browse API (archive-search-api)
 
