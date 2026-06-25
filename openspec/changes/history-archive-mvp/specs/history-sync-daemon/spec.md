@@ -16,26 +16,26 @@ On first run against an empty checkpoint, the daemon SHALL enumerate every suppo
 
 ### Requirement: Incremental synchronization
 
-After backfill the daemon SHALL keep the archive current incrementally. For append-only JSONL sources it MUST track the last byte offset per file and parse only newly appended lines. For rewritten or database-backed sources (e.g. patch-log and SQLite providers) it MUST re-parse the affected session and send only records not already delivered, identified by message key. The daemon MUST also run a periodic safety-net full rescan to catch changes missed by the file watcher.
+After backfill the daemon SHALL keep the archive current incrementally. It MUST detect a changed session file (by comparing the file's size and mtime against the checkpoint), re-parse the changed session, and re-deliver its records; the hub's idempotent ingest drops already-stored messages, so re-delivery never produces duplicates. The daemon MUST run a periodic safety-net full rescan so that no change is missed. (Byte-offset "parse only the appended bytes" and file-watch-triggered syncing are future optimizations, not required for correctness given hub-side dedup; see the change's design.md.)
 
-#### Scenario: Appended JSONL lines sync without re-reading the whole file
+#### Scenario: Appended messages sync on the next pass
 
-- **WHEN** new lines are appended to a previously synced JSONL session file
-- **THEN** the daemon parses only the appended bytes from the stored offset and delivers only the new messages
+- **WHEN** new messages are appended to a previously synced session file
+- **THEN** the next sync pass detects the change (size/mtime differ), re-delivers the session, and the appended messages become present in the archive (existing ones deduped)
 
-#### Scenario: Rewritten session re-diffs and sends only new records
+#### Scenario: Rewritten session re-syncs without duplicates
 
 - **WHEN** a database-backed or patch-log session is rewritten with additional messages
-- **THEN** the daemon re-parses the session and delivers only messages whose key was not previously delivered
+- **THEN** the daemon re-parses and re-delivers the session, and only the new messages are stored (already-stored ones are deduped by message key at the hub)
 
-#### Scenario: Safety-net rescan catches a missed change
+#### Scenario: Safety-net rescan catches a change
 
-- **WHEN** a file change occurs that the watcher did not surface and the periodic rescan interval elapses
+- **WHEN** a session file changes and the periodic rescan interval elapses
 - **THEN** the rescan detects the divergence from the checkpoint and delivers the missing messages
 
 ### Requirement: Crash-safe local checkpoint
 
-The daemon SHALL persist a local checkpoint that records, per session file, at least its size/offset, message count, a content hash, and last-synced timestamp. The checkpoint MUST be durable across restarts so the daemon never re-sends already-acknowledged data unnecessarily and never loses track of un-synced data.
+The daemon SHALL persist a local checkpoint that records, per session file, at least its size, mtime, message count, and last-synced timestamp. The checkpoint MUST be durable across restarts (written atomically) so the daemon never re-sends already-acknowledged data unnecessarily and never loses track of un-synced data.
 
 #### Scenario: Checkpoint survives restart
 

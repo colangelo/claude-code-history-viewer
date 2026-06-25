@@ -35,12 +35,12 @@ Ingest SHALL be idempotent. Messages MUST be uniquely identified by `(machine_id
 
 ### Requirement: Normalized, raw-fidelity, and full-text storage
 
-The schema SHALL store, for each message, the normalized queryable columns (identifiers, ordering, timestamp, type/role/model, token counts, cost, duration, sidechain flag), the normalized `content` as JSONB, the EXACT original record as `raw` JSONB, a flattened `search_text`, and a `text_search` `tsvector` derived from `search_text` for full-text search. Projects and sessions MUST be stored with machine provenance and the aggregates needed to browse them.
+The schema SHALL store, for each message, the normalized queryable columns (identifiers, ordering, timestamp, type/role/model, token counts, cost, duration, sidechain flag), the normalized `content` as JSONB, a raw-fidelity `raw` JSONB (stored verbatim as supplied by the daemon — the normalized record in the MVP; byte-exact original-line passthrough is a planned enhancement, see the change's design.md), a flattened `search_text`, and a `text_search` `tsvector` derived from `search_text` for full-text search. Projects and sessions MUST be stored with machine provenance and the aggregates needed to browse them.
 
-#### Scenario: Original record is preserved verbatim
+#### Scenario: The raw record is stored verbatim
 
 - **WHEN** a message is ingested
-- **THEN** the stored `raw` JSONB round-trips to the original source record without loss
+- **THEN** the stored `raw` JSONB round-trips without loss to the `raw` the daemon supplied
 
 #### Scenario: Full-text vector is populated for searchability
 

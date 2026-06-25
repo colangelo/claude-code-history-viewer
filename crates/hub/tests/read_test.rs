@@ -158,6 +158,17 @@ async fn get(
 }
 
 #[tokio::test]
+async fn healthz_reports_ok_unauthenticated() {
+    let hub = spawn().await;
+    // /v1/healthz is unauthenticated and reflects database connectivity.
+    let resp = get(&hub, "/v1/healthz", &[], None).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["db"], "up");
+}
+
+#[tokio::test]
 async fn search_returns_ranked_matches_with_context() {
     let hub = spawn().await;
     let b = batch(
