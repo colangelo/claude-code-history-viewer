@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE sessions s\n            SET message_count = sub.cnt,\n                first_message_time = sub.first_ts,\n                last_message_time = sub.last_ts\n            FROM (\n                SELECT count(*) AS cnt,\n                       min(\"timestamp\") AS first_ts,\n                       max(\"timestamp\") AS last_ts\n                FROM messages WHERE session_id = $1\n            ) sub\n            WHERE s.id = $1\n            RETURNING s.project_id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "project_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a7eb7759bd070d7e83f42cc7386c58557f4aee21fce856592a2494160d93d4b6"
+}

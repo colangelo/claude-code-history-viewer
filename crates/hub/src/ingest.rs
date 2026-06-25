@@ -1,0 +1,263 @@
+//! `POST /v1/ingest` — authenticated, idempotent batch ingestion.
+//!
+//! Upserts machines/projects/sessions and inserts messages with
+//! `ON CONFLICT DO NOTHING` (dedup on `(session_id, message_key)`), then
+//! recomputes session/project aggregates from the archived rows so they reflect
+//! the cumulative archive, not just the current batch. The whole batch runs in
+//! one transaction.
+
+use std::collections::{HashMap, HashSet};
+
+use archive_protocol::{IngestBatch, IngestResponse};
+use axum::extract::State;
+use axum::Json;
+use chrono::{DateTime, Utc};
+
+use crate::auth::AuthedMachine;
+use crate::error::HubError;
+use crate::state::AppState;
+
+/// Parse an RFC 3339 timestamp leniently; `None`/invalid → `None` (stored NULL).
+fn parse_ts(s: Option<&str>) -> Option<DateTime<Utc>> {
+    s.and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+pub async fn ingest(
+    AuthedMachine(token_machine): AuthedMachine,
+    State(state): State<AppState>,
+    Json(batch): Json<IngestBatch>,
+) -> Result<Json<IngestResponse>, HubError> {
+    // A machine may only ingest under its own (token-bound) identity.
+    if batch.machine.machine_id != token_machine {
+        return Err(HubError::Unauthorized);
+    }
+
+    let mut resp = IngestResponse::default();
+    let mut tx = state.pool.begin().await?;
+
+    // -- machine -----------------------------------------------------------
+    sqlx::query!(
+        r#"
+        INSERT INTO machines (machine_id, hostname, os, first_seen, last_seen)
+        VALUES ($1, $2, $3, now(), now())
+        ON CONFLICT (machine_id)
+        DO UPDATE SET hostname = excluded.hostname, os = excluded.os, last_seen = now()
+        "#,
+        batch.machine.machine_id,
+        batch.machine.hostname,
+        batch.machine.os,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // -- projects ----------------------------------------------------------
+    // (provider, project_path) -> surrogate project id, for session linkage.
+    let mut project_ids: HashMap<(String, String), i64> = HashMap::new();
+    for p in &batch.projects {
+        let row = sqlx::query!(
+            r#"
+            INSERT INTO projects
+                (machine_id, provider, project_path, name, storage_type,
+                 session_count, message_count, last_modified, updated_at)
+            VALUES ($1, $2, $3, $4, $5,
+                    COALESCE($6, 0), COALESCE($7, 0), $8, now())
+            ON CONFLICT (machine_id, provider, project_path)
+            DO UPDATE SET name = excluded.name,
+                          storage_type = excluded.storage_type,
+                          last_modified = excluded.last_modified,
+                          updated_at = now()
+            RETURNING id, (xmax = 0) AS "inserted!: bool"
+            "#,
+            token_machine,
+            p.provider,
+            p.project_path,
+            p.name,
+            p.storage_type,
+            p.session_count,
+            p.message_count,
+            parse_ts(p.last_modified.as_deref()),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        project_ids.insert((p.provider.clone(), p.project_path.clone()), row.id);
+        if row.inserted {
+            resp.projects_inserted += 1;
+        } else {
+            resp.projects_skipped += 1;
+        }
+    }
+
+    // -- sessions ----------------------------------------------------------
+    // (provider, session_id) -> surrogate session id, for message linkage.
+    let mut session_ids: HashMap<(String, String), i64> = HashMap::new();
+    for s in &batch.sessions {
+        let project_id = s
+            .project_path
+            .as_ref()
+            .and_then(|pp| project_ids.get(&(s.provider.clone(), pp.clone())))
+            .copied();
+        let row = sqlx::query!(
+            r#"
+            INSERT INTO sessions
+                (machine_id, provider, session_id, project_id, file_path, entrypoint,
+                 summary, has_tool_use, has_errors, storage_type, last_modified, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7,
+                    COALESCE($8, false), COALESCE($9, false), $10, $11, now())
+            ON CONFLICT (machine_id, provider, session_id)
+            DO UPDATE SET project_id = COALESCE(excluded.project_id, sessions.project_id),
+                          file_path = excluded.file_path,
+                          entrypoint = excluded.entrypoint,
+                          summary = excluded.summary,
+                          has_tool_use = sessions.has_tool_use OR excluded.has_tool_use,
+                          has_errors = sessions.has_errors OR excluded.has_errors,
+                          storage_type = excluded.storage_type,
+                          last_modified = excluded.last_modified,
+                          updated_at = now()
+            RETURNING id, (xmax = 0) AS "inserted!: bool"
+            "#,
+            token_machine,
+            s.provider,
+            s.session_id,
+            project_id,
+            s.file_path,
+            s.entrypoint,
+            s.summary,
+            s.has_tool_use,
+            s.has_errors,
+            s.storage_type,
+            parse_ts(s.last_modified.as_deref()),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        session_ids.insert((s.provider.clone(), s.session_id.clone()), row.id);
+        if row.inserted {
+            resp.sessions_inserted += 1;
+        } else {
+            resp.sessions_skipped += 1;
+        }
+    }
+
+    // -- messages ----------------------------------------------------------
+    let mut touched_sessions: HashSet<i64> = HashSet::new();
+    for m in &batch.messages {
+        // Resolve the session surrogate id: from this batch first, then the DB
+        // (the message may belong to a session ingested in an earlier batch).
+        let key = (m.provider.clone(), m.session_id.clone());
+        let session_pk = if let Some(id) = session_ids.get(&key) {
+            *id
+        } else {
+            let found = sqlx::query_scalar!(
+                "SELECT id FROM sessions WHERE machine_id = $1 AND provider = $2 AND session_id = $3",
+                token_machine,
+                m.provider,
+                m.session_id,
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some(id) = found else {
+                return Err(HubError::BadRequest(format!(
+                    "message references unknown session {}/{} (no session in batch or archive)",
+                    m.provider, m.session_id
+                )));
+            };
+            session_ids.insert(key, id);
+            id
+        };
+
+        let result = sqlx::query!(
+            r#"
+            INSERT INTO messages
+                (session_id, machine_id, provider, message_key, uuid, parent_uuid, seq,
+                 "timestamp", type, role, model, stop_reason,
+                 input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                 cost_usd, duration_ms, is_sidechain, content, raw, search_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7,
+                    $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16,
+                    $17, $18, $19, $20, $21, $22)
+            ON CONFLICT (session_id, message_key) DO NOTHING
+            "#,
+            session_pk,
+            token_machine,
+            m.provider,
+            m.message_key,
+            m.uuid,
+            m.parent_uuid,
+            m.seq,
+            parse_ts(m.timestamp.as_deref()),
+            m.message_type,
+            m.role,
+            m.model,
+            m.stop_reason,
+            m.input_tokens,
+            m.output_tokens,
+            m.cache_creation_tokens,
+            m.cache_read_tokens,
+            m.cost_usd,
+            m.duration_ms,
+            m.is_sidechain,
+            m.content,
+            m.raw,
+            m.search_text,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 1 {
+            resp.messages_inserted += 1;
+            touched_sessions.insert(session_pk);
+        } else {
+            resp.messages_skipped += 1;
+        }
+    }
+
+    // -- aggregates --------------------------------------------------------
+    // Recompute from the archived rows (cumulative), for every session that
+    // gained messages, and then for their projects.
+    let mut touched_projects: HashSet<i64> = HashSet::new();
+    for session_pk in &touched_sessions {
+        let row = sqlx::query!(
+            r#"
+            UPDATE sessions s
+            SET message_count = sub.cnt,
+                first_message_time = sub.first_ts,
+                last_message_time = sub.last_ts
+            FROM (
+                SELECT count(*) AS cnt,
+                       min("timestamp") AS first_ts,
+                       max("timestamp") AS last_ts
+                FROM messages WHERE session_id = $1
+            ) sub
+            WHERE s.id = $1
+            RETURNING s.project_id
+            "#,
+            session_pk,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if let Some(pid) = row.project_id {
+            touched_projects.insert(pid);
+        }
+    }
+    for project_pk in &touched_projects {
+        sqlx::query!(
+            r#"
+            UPDATE projects p
+            SET session_count = (SELECT count(*) FROM sessions WHERE project_id = p.id),
+                message_count = (
+                    SELECT count(*) FROM messages m
+                    JOIN sessions s ON m.session_id = s.id
+                    WHERE s.project_id = p.id
+                )
+            WHERE p.id = $1
+            "#,
+            project_pk,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(Json(resp))
+}

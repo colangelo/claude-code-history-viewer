@@ -19,16 +19,16 @@
 - [x] 2.5 Write the `messages` migration: normalized columns, `content`/`raw` JSONB, `search_text`, `text_search` GENERATED `tsvector` STORED, `content_hash`, `seq`. Dedup key normalized to UNIQUE(session_id_fk, message_key) — the session FK encodes (machine_id, provider, provider_session_id), so this enforces the spec's logical (machine_id, provider, session_id, message_key) identity. Validated: FTS match + dup rejection
 - [x] 2.6 Add indexes: GIN on `text_search`, btree on (machine_id, provider), timestamp, and sessions(project_id); the session-FK lookup is served by the UNIQUE(session_id, message_key) index — validated present
 - [x] 2.7 Confirm the schema requires no `vector` extension (proven: applied on a DB without `vector` installed); future `message_embeddings(message_id, model, embedding vector(N))` documented in-file, not created
-- [ ] 2.8 Add a test that applies migrations to an empty Postgres and asserts all tables/indexes exist and migrations are re-appliable — DEFERRED to group 3: manually validated now via psql (apply → tables/indexes present → FTS works → dup rejected → no vector ext); the automated `sqlx::migrate!()` re-appliability test lands in the hub crate where sqlx is wired
+- [x] 2.8 Add a test that applies migrations to an empty Postgres and asserts all tables/indexes exist and migrations are re-appliable — DONE in the hub crate (`crates/hub/tests/migration_test.rs`): applies + re-applies `MIGRATOR` (idempotent), asserts all 4 tables + the GIN index exist. Also manually validated earlier via psql (FTS match, dup rejection, no vector ext)
 
 ## 3. Hub service: ingest (archive-ingestion)
 
-- [ ] 3.1 Scaffold `crates/hub` (axum + sqlx + tokio) with config loading (Postgres URL, bind addr, token→machine_id map) and a sqlx connection pool
-- [ ] 3.2 Implement bearer-token auth middleware (reject missing/invalid token with 401; resolve token → machine_id)
-- [ ] 3.3 Define the ingest request/response types (batch of projects/sessions/messages + machine_id; response with inserted/skipped counts) shared with the daemon
-- [ ] 3.4 Implement `POST /v1/ingest`: validate batch, compute `message_key` (provider UUID else content hash) and `content_hash`, upsert projects/sessions/messages with `ON CONFLICT DO NOTHING`, and update session/project aggregates
-- [ ] 3.5 Implement `GET /v1/healthz` (unauthenticated) reporting service + DB connectivity
-- [ ] 3.6 Add integration tests against a throwaway Postgres: valid ingest returns counts, missing/invalid token → 401, malformed batch → 400 with no partial write, double-POST creates no duplicates, raw JSONB round-trips, UUID-less provider deduplicates, aggregates update on re-ingest
+- [x] 3.1 Scaffold `crates/hub` (axum + sqlx + tokio) with TOML/env config (database_url, bind_addr, token→machine_id), a `PgPool`, and `MIGRATOR` applying `migrations/` on startup. sqlx offline metadata (`.sqlx/`) committed for hermetic CI builds (SQLX_OFFLINE) — closes the 2.1 deferral
+- [x] 3.2 Bearer-token auth via the `AuthedMachine` extractor (missing/invalid token → 401; token → machine_id); ingest also rejects a body machine_id that mismatches the token
+- [x] 3.3 Wire types in a dedicated `crates/protocol` (`archive-protocol`): `IngestBatch`/`MachineInfo`/`IngestProject`/`IngestSession`/`IngestMessage` (carries `raw` + `search_text`) and `IngestResponse` (inserted/skipped counts) — shared by hub and the future daemon, keeping history-core pure
+- [x] 3.4 `POST /v1/ingest`: validate, upsert machine/projects/sessions, insert messages `ON CONFLICT (session_id, message_key) DO NOTHING`, recompute session+project aggregates cumulatively, all in one transaction. NOTE: `message_key` is computed daemon-side (uuid else content hash) and sent on the wire; `content_hash` column reserved/NULL for now (group 4 daemon may populate it)
+- [x] 3.5 `GET /v1/healthz` (unauthenticated) — `SELECT 1` connectivity check, 200/503
+- [x] 3.6 Integration tests against local Postgres — all 8 green: valid ingest counts, missing→401, invalid→401, unknown-session→400 with full rollback (no partial write), double-POST idempotent (no dupes), raw JSONB round-trips, UUID-less dedup, cumulative aggregate update on re-ingest
 
 ## 4. Sync daemon (history-sync-daemon)
 

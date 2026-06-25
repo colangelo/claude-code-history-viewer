@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO sessions\n                (machine_id, provider, session_id, project_id, file_path, entrypoint,\n                 summary, has_tool_use, has_errors, storage_type, last_modified, updated_at)\n            VALUES ($1, $2, $3, $4, $5, $6, $7,\n                    COALESCE($8, false), COALESCE($9, false), $10, $11, now())\n            ON CONFLICT (machine_id, provider, session_id)\n            DO UPDATE SET project_id = COALESCE(excluded.project_id, sessions.project_id),\n                          file_path = excluded.file_path,\n                          entrypoint = excluded.entrypoint,\n                          summary = excluded.summary,\n                          has_tool_use = sessions.has_tool_use OR excluded.has_tool_use,\n                          has_errors = sessions.has_errors OR excluded.has_errors,\n                          storage_type = excluded.storage_type,\n                          last_modified = excluded.last_modified,\n                          updated_at = now()\n            RETURNING id, (xmax = 0) AS \"inserted!: bool\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "inserted!: bool",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "1dca6a7d641e05a62e9333643bbd2eb0921b4619af96bd7ae8e9684d4a3f03dd"
+}
