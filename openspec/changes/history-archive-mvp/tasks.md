@@ -12,14 +12,14 @@
 
 ## 2. Postgres schema + migrations (archive-ingestion)
 
-- [ ] 2.1 Add a top-level `migrations/` directory and wire `sqlx` (Postgres) with offline metadata committed for CI
-- [ ] 2.2 Write the `machines` migration (machine_id PK, hostname, os, first_seen, last_seen)
-- [ ] 2.3 Write the `projects` migration (surrogate PK, UNIQUE(machine_id, provider, project_path), name, storage_type, aggregates, timestamps)
-- [ ] 2.4 Write the `sessions` migration (surrogate PK, UNIQUE(machine_id, provider, session_id), project FK, file_path, entrypoint, summary, aggregates, flags, timestamps)
-- [ ] 2.5 Write the `messages` migration: normalized columns, `content` JSONB, `raw` JSONB, `search_text` text, `text_search tsvector GENERATED ALWAYS AS (to_tsvector('simple', search_text)) STORED`, `content_hash`, `seq`, UNIQUE(machine_id, provider, session_id, message_key)
-- [ ] 2.6 Add indexes: GIN on `text_search`, btree on (machine_id, provider), session FK, and timestamp
-- [ ] 2.7 Confirm the schema requires no `vector` extension; document the future `message_embeddings(message_id, model, embedding vector(N))` side table without creating it
-- [ ] 2.8 Add a test that applies migrations to an empty Postgres and asserts all tables/indexes exist and migrations are re-appliable
+- [x] 2.1 Add a top-level `migrations/` directory (`0001_initial_schema.sql`). NOTE: the runtime `sqlx` wiring + committed offline metadata move to group 3 (3.1) where the hub's `query!` macros first exist — offline metadata cannot be generated before there are queries
+- [x] 2.2 Write the `machines` migration (machine_id PK, hostname, os, first_seen, last_seen) — validated against PG 18
+- [x] 2.3 Write the `projects` migration (identity PK, UNIQUE(machine_id, provider, project_path), name, storage_type, aggregates, timestamps) — validated
+- [x] 2.4 Write the `sessions` migration (identity PK, UNIQUE(machine_id, provider, session_id), project FK, file_path, entrypoint, summary, aggregates, flags, timestamps) — validated
+- [x] 2.5 Write the `messages` migration: normalized columns, `content`/`raw` JSONB, `search_text`, `text_search` GENERATED `tsvector` STORED, `content_hash`, `seq`. Dedup key normalized to UNIQUE(session_id_fk, message_key) — the session FK encodes (machine_id, provider, provider_session_id), so this enforces the spec's logical (machine_id, provider, session_id, message_key) identity. Validated: FTS match + dup rejection
+- [x] 2.6 Add indexes: GIN on `text_search`, btree on (machine_id, provider), timestamp, and sessions(project_id); the session-FK lookup is served by the UNIQUE(session_id, message_key) index — validated present
+- [x] 2.7 Confirm the schema requires no `vector` extension (proven: applied on a DB without `vector` installed); future `message_embeddings(message_id, model, embedding vector(N))` documented in-file, not created
+- [ ] 2.8 Add a test that applies migrations to an empty Postgres and asserts all tables/indexes exist and migrations are re-appliable — DEFERRED to group 3: manually validated now via psql (apply → tables/indexes present → FTS works → dup rejected → no vector ext); the automated `sqlx::migrate!()` re-appliability test lands in the hub crate where sqlx is wired
 
 ## 3. Hub service: ingest (archive-ingestion)
 
