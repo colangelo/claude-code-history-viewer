@@ -1,0 +1,114 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT m.id            AS \"id!\",\n               m.message_key   AS \"message_key!\",\n               m.uuid,\n               m.parent_uuid,\n               m.seq           AS \"seq!\",\n               m.\"timestamp\",\n               m.type          AS message_type,\n               m.role,\n               m.model,\n               m.stop_reason,\n               m.input_tokens,\n               m.output_tokens,\n               m.cost_usd,\n               m.duration_ms,\n               m.is_sidechain  AS \"is_sidechain!\",\n               m.content\n        FROM messages m\n        WHERE m.session_id = $1\n        ORDER BY m.seq ASC, m.\"timestamp\" ASC NULLS LAST, m.id ASC\n        LIMIT $2 OFFSET $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "message_key!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "uuid",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "parent_uuid",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "seq!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "timestamp",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "message_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "role",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "stop_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "input_tokens",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "output_tokens",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 12,
+        "name": "cost_usd",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "duration_ms",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 14,
+        "name": "is_sidechain!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 15,
+        "name": "content",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "7fee48e0f395e10055f90579e0c0b22f40d441c827edc117cc6741737bf102fd"
+}

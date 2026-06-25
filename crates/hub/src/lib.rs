@@ -5,10 +5,13 @@
 //! are public so integration tests can drive them against a throwaway database.
 
 pub mod auth;
+pub mod browse;
 pub mod config;
 pub mod error;
 pub mod health;
 pub mod ingest;
+pub mod pagination;
+pub mod search;
 pub mod state;
 
 use axum::routing::{get, post};
@@ -28,6 +31,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/healthz", get(health::healthz))
         .route("/v1/ingest", post(ingest::ingest))
+        .route("/v1/search", get(search::search))
+        .route("/v1/projects", get(browse::list_projects))
+        .route("/v1/sessions", get(browse::list_sessions))
+        .route("/v1/sessions/{id}/messages", get(browse::session_messages))
         .with_state(state)
 }
 

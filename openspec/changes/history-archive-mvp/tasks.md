@@ -43,10 +43,10 @@
 
 ## 5. Search + browse API (archive-search-api)
 
-- [ ] 5.1 Implement `GET /v1/search` using `websearch_to_tsquery` over `text_search`, ranked, with provider/machine/project/time filters and limit/offset; return matches with session+project context
-- [ ] 5.2 Implement browse endpoints `GET /v1/projects`, `GET /v1/sessions?project=`, `GET /v1/sessions/:id/messages` mirroring the webui-server response shapes, in stable order
-- [ ] 5.3 Apply bearer auth to all read endpoints and implement bounded, stable pagination
-- [ ] 5.4 Add integration tests: ranked query results, filters narrow results, empty result set is well-formed 200, projects list carries provenance + aggregates, session messages return in order, unauthenticated read → 401, paging is stable (no drops/dupes)
+- [x] 5.1 `GET /v1/search` via `websearch_to_tsquery` over `text_search`, ranked by `ts_rank` with `ts_headline` snippets; optional provider/machine(hostname)/project(name|path)/from/to filters via the static `$n IS NULL OR …` idiom (keeps queries compile-checked); session+project+machine context joined in
+- [x] 5.2 Browse endpoints `GET /v1/projects`, `GET /v1/sessions` (machine/provider/project filters), `GET /v1/sessions/{id}/messages` (by surrogate session id, ordered by seq→timestamp→id); a new `Authenticated` extractor lets reads span all machines
+- [x] 5.3 Bearer auth on all read endpoints (401 without a valid token) + bounded pagination (`Page`: default 50, max 200) with id-tiebroken stable ordering
+- [x] 5.4 7 read integration tests, all green: ranked results w/ context, filters narrow, empty→200, projects provenance+aggregates, messages in seq order, unauthenticated→401, stable paging (no dup/drop across pages). `.sqlx` offline metadata regenerated (12 queries)
 
 ## 6. End-to-end + deployment
 
