@@ -15,7 +15,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-use crate::commands::session::NativeRenameResult;
+use crate::models::NativeRenameResult;
 
 const STATE_DB_FILENAME: &str = "state_5.sqlite";
 

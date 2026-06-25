@@ -184,6 +184,82 @@ pub struct MessagePage {
     pub next_offset: usize,
 }
 
+impl TryFrom<RawLogEntry> for ClaudeMessage {
+    type Error = String;
+
+    /// Convert a raw log entry into a normalized Claude message.
+    ///
+    /// Moved here from `src-tauri` during the history-core extraction: the
+    /// orphan rule requires this impl to live in the crate that defines both
+    /// `RawLogEntry` and `ClaudeMessage`.
+    fn try_from(log_entry: RawLogEntry) -> Result<Self, Self::Error> {
+        if log_entry.message_type == "summary" {
+            return Err("Summary entries should be handled separately".to_string());
+        }
+        if log_entry.session_id.is_none() && log_entry.timestamp.is_none() {
+            return Err("Missing session_id and timestamp".to_string());
+        }
+
+        let (role, message_id, model, stop_reason, usage) = if let Some(ref msg) = log_entry.message
+        {
+            (
+                Some(msg.role.clone()),
+                msg.id.clone(),
+                msg.model.clone(),
+                msg.stop_reason.clone(),
+                msg.usage.clone(),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
+
+        Ok(ClaudeMessage {
+            uuid: log_entry
+                .uuid
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            parent_uuid: log_entry.parent_uuid,
+            session_id: log_entry
+                .session_id
+                .unwrap_or_else(|| "unknown-session".to_string()),
+            timestamp: log_entry
+                .timestamp
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            message_type: log_entry.message_type.clone(),
+            content: log_entry.message.map(|m| m.content).or(log_entry.content),
+            project_name: None,
+            tool_use: log_entry.tool_use,
+            tool_use_result: log_entry.tool_use_result,
+            is_sidechain: log_entry.is_sidechain,
+            usage,
+            role,
+            model,
+            stop_reason,
+            cost_usd: log_entry.cost_usd,
+            duration_ms: log_entry.duration_ms,
+            // File history snapshot fields
+            message_id: message_id.or(log_entry.message_id),
+            snapshot: log_entry.snapshot,
+            is_snapshot_update: log_entry.is_snapshot_update,
+            // Progress message fields
+            data: log_entry.data,
+            tool_use_id: log_entry.tool_use_id,
+            parent_tool_use_id: log_entry.parent_tool_use_id,
+            // Queue operation fields
+            operation: log_entry.operation,
+            // System message fields
+            subtype: log_entry.subtype,
+            level: log_entry.level,
+            hook_count: log_entry.hook_count,
+            hook_infos: log_entry.hook_infos,
+            stop_reason_system: log_entry.stop_reason_system,
+            prevented_continuation: log_entry.prevented_continuation,
+            compact_metadata: log_entry.compact_metadata,
+            microcompact_metadata: log_entry.microcompact_metadata,
+            provider: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

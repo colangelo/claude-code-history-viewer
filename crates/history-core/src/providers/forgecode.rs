@@ -1,5 +1,5 @@
 use super::ProviderInfo;
-use crate::commands::session::NativeRenameResult;
+use crate::models::NativeRenameResult;
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession, TokenUsage};
 use crate::utils::{build_provider_message, search_json_value_case_insensitive};
 use chrono::{DateTime, NaiveDateTime, Utc};

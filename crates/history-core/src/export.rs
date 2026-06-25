@@ -761,7 +761,7 @@ pub fn run_export(args: &[String]) -> i32 {
                 eprintln!("Failed to write {out}: {e}");
                 return 1;
             }
-            if let Err(e) = crate::commands::fs_utils::atomic_rename(&tmp_path, out_path) {
+            if let Err(e) = crate::fs_utils::atomic_rename(&tmp_path, out_path) {
                 let _ = fs::remove_file(&tmp_path);
                 eprintln!("Failed to write {out}: {e}");
                 return 1;

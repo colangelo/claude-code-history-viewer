@@ -1,5 +1,5 @@
 use super::ProviderInfo;
-use crate::commands::antigravity::{
+use crate::antigravity::{
     antigravity_root_from_path, get_antigravity_rpc_cache_root, load_antigravity_state_impl,
     resolve_antigravity_root,
 };
@@ -454,7 +454,7 @@ fn admit_usage_jsonl(path: &Path) -> Option<PathBuf> {
 ///   is rejected without leaking probe results.
 /// - **File-level**: both candidates are admitted via
 ///   [`admit_usage_jsonl`], which rejects symlinks and non-regular files.
-pub(crate) fn resolve_usage_jsonl_path(session_path: &str) -> Option<PathBuf> {
+pub fn resolve_usage_jsonl_path(session_path: &str) -> Option<PathBuf> {
     let dir = PathBuf::from(session_path);
 
     // Prefer an in-session `usage.jsonl`. Validate the canonical form

@@ -6,6 +6,7 @@ mod antigravity;
 mod edit;
 mod message;
 mod metadata;
+mod rename;
 mod session;
 mod stats;
 
@@ -17,5 +18,6 @@ pub use antigravity::*;
 pub use edit::*;
 pub use message::*;
 pub use metadata::*;
+pub use rename::*;
 pub use session::*;
 pub use stats::*;
