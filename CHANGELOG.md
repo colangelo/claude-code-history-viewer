@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Cross-machine history archive (MVP)** — a Cargo workspace alongside the desktop app that extracts every machine's AI coding history into a central, searchable Postgres archive, directly solving Claude Code's 30-day local-history deletion. See [`docs/archive/deployment.md`](docs/archive/deployment.md).
+  - `crates/history-core` — the desktop app's tauri-free parsers/models (incl. the Claude Code loader) extracted into a shared library, reused by both the app and the daemon.
+  - `crates/hub` — an axum + sqlx service, the only component with DB credentials: bearer-authenticated `/v1/ingest` (idempotent upserts), `/v1/search` (Postgres full-text search), and browse endpoints. Migrations in `migrations/`; schema is pgvector-ready (a future `message_embeddings` side table) and stores both normalized and raw-fidelity records.
+  - `crates/sync-daemon` — a per-machine push daemon: backfill + incremental sync, crash-safe checkpoints, at-least-once delivery, stable machine identity, and **cumulative (never-delete) semantics** so a deleted local file never removes archived rows.
+  - `crates/protocol` — the daemon↔hub wire contract.
+
+### Changed
+- The repository is now a Cargo workspace; build artifacts move to the repo-root `target/`. CI (`rust-tests.yml`) and the release workflows (`server-release.yml`, `updater-release.yml`) were updated for the new target location, and a Postgres-backed `archive-tests.yml` runs the archive crates. The desktop app is behavior-neutral (its parsing now lives in `history-core`).
+
 ## [1.16.0] - 2026-06-21
 
 ### Added

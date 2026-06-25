@@ -7,7 +7,7 @@
 - [x] 1.5 Port the GUI-independent parse/flatten logic from `export.rs` plus the `contentExtractor`/`extractSearchableText` flattening into `history-core` as a `search_text` builder — DONE alongside its consumer (group 4): `history_core::search_text::search_text(&ClaudeMessage)` recursively flattens content/tool_use/tool_use_result to plaintext, skipping metadata keys; 5 unit tests; the daemon computes it per message. `export.rs` block-extraction already moved to core in group 1
 - [x] 1.6 Expose the stable headless API (`detect_providers`, `scan_projects`, `load_sessions`, `load_messages`) returning normalized models (preserved via the providers module's existing contract, now under `history_core::providers`)
 - [x] 1.7 Update `src-tauri` to depend on `history-core`; keep `#[tauri::command]` functions as thin adapters that call the library (modules re-exported under original `crate::` paths so consumers compile unchanged)
-- [ ] 1.8 Add per-provider golden tests in `history-core` using existing fixtures (parse → normalized snapshot), and a stability test (parse-twice equality) — PARTIAL: existing insta golden/snapshot + provider tests now run in `history-core` and pass (332 tests); the explicit new parse-twice stability test is a small recommended follow-up
+- [x] 1.8 Add per-provider golden tests in `history-core` using existing fixtures (parse → normalized snapshot), and a stability test (parse-twice equality) — DONE: existing insta golden/snapshot + provider tests run in `history-core` (incl. the 61 moved Claude loader tests), plus a new `tests/stability_test.rs` asserting `load_messages` is deterministic across re-parses (underpins the daemon's content-hash dedup keys)
 - [x] 1.9 Verify `cargo tree -p history-core` shows no `tauri`, `cargo build -p history-core` succeeds standalone, and the desktop suite stays green — VERIFIED: zero tauri in dep graph, standalone build ok, `clippy --workspace --all-targets --all-features -D warnings` clean, `fmt --check` clean, tests green (357 default + 399 webui-server + 332 history-core, 0 failures)
 
 ## 2. Postgres schema + migrations (archive-ingestion)
@@ -52,6 +52,6 @@
 
 ## 6. End-to-end + deployment
 
-- [ ] 6.1 Add an e2e CI job: spin Postgres + hub, run the daemon against a fixture machine dir, assert backfilled content is searchable via `/v1/search`
-- [ ] 6.2 Add deployment docs/scripts: run migrations + hub on the always-on tailnet node, and install the daemon (launchd/systemd) on a machine with a hub URL + token
-- [ ] 6.3 Update README/CHANGELOG for the new workspace layout and the archive system; confirm frontend (pnpm) and desktop validation remain unaffected
+- [x] 6.1 e2e coverage: `crates/sync-daemon/tests/e2e_test.rs` drives the WHOLE pipeline in-process (fixture `~/.claude` → real daemon sync → real hub → Postgres → `GET /v1/search` finds it), plus a new `.github/workflows/archive-tests.yml` (Postgres service) running fmt/clippy/tests for the four archive crates. The `cd src-tauri` desktop CI is unaffected
+- [x] 6.2 Deployment guide `docs/archive/deployment.md`: Postgres setup, hub build + TOML config (token→machine_id) + systemd, daemon build + config + launchd/systemd install, end-to-end verification via curl, and current MVP limitations
+- [x] 6.3 README "Cross-Machine History Archive" section + CHANGELOG `[Unreleased]` entry. Workspace target-dir moved to repo root → fixed `rust-tests.yml` cache path and the `src-tauri/target` artifact paths in `server-release.yml`/`updater-release.yml` (flagged for verification at next desktop release). Frontend (`src/`) provably unchanged (0 files touched); desktop Rust validation green
