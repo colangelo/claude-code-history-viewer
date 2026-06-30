@@ -132,6 +132,16 @@ Antigravity note: the viewer resolves the Antigravity root as `~/.gemini/antigra
 |---------|-------|
 | **Antigravity** | Loaded through the standard provider pipeline. Sessions come from the token monitor cache and participate in project/session views, token stats, analytics, and global search without a separate UI mode. |
 
+### New in v1.18.0
+
+| Feature | Description |
+|---------|-------------|
+| **Faster startup** | Provider scanners now run concurrently instead of sequentially, so a locked SQLite database from a tool running alongside the viewer no longer stalls the whole scan — eliminating multi-second "Initializing app…" hangs |
+| **Search result context** | Global search results now show which conversation each match belongs to, so matches that share the same text across sessions are easy to tell apart |
+| **Collapsible provider filter** | The sidebar provider-filter panel can collapse to reclaim vertical space for the session list; the collapsed header still surfaces the active filter summary and count |
+| **Verifiable project names** | Project identity prefers the on-disk folder name over a stale `cwd` recorded in old transcripts, so moved or subagent-recorded projects group correctly (one-time transparent re-scan) |
+| **Fixes** | Exporting a subagent session now includes its messages instead of producing an empty file; OpenCode global sessions split by directory (and empty-directory sessions load correctly); the OpenCode session cache is bounded to prevent unbounded memory growth |
+
 ### New in v1.17.0
 
 | Feature | Description |
