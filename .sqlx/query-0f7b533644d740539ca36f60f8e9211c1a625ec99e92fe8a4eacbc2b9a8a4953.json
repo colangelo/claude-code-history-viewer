@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT mac.machine_id AS \"machine_id!\",\n               mac.hostname   AS \"hostname!\",\n               mac.last_seen  AS \"last_seen!\",\n               lm.last_message_at\n        FROM machines mac\n        LEFT JOIN (\n            SELECT machine_id, MAX(created_at) AS last_message_at\n            FROM messages\n            GROUP BY machine_id\n        ) lm ON lm.machine_id = mac.machine_id\n        ORDER BY mac.machine_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "machine_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "hostname!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_seen!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_message_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "0f7b533644d740539ca36f60f8e9211c1a625ec99e92fe8a4eacbc2b9a8a4953"
+}
