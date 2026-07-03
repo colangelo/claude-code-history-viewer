@@ -23,11 +23,58 @@ fn parse_ts(s: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// Replace U+0000 with U+FFFD. Postgres can store NUL in neither `jsonb`
+/// ("unsupported Unicode escape sequence") nor `TEXT`, and real transcripts do
+/// contain it (raw terminal output), which 500-failed whole batches.
+fn strip_nul(s: &mut String) {
+    if s.contains('\0') {
+        *s = s.replace('\0', "\u{FFFD}");
+    }
+}
+
+fn strip_nul_opt(s: &mut Option<String>) {
+    if let Some(v) = s {
+        strip_nul(v);
+    }
+}
+
+fn strip_nul_value(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::String(s) => strip_nul(s),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(strip_nul_value),
+        serde_json::Value::Object(map) => {
+            let bad_keys: Vec<String> = map.keys().filter(|k| k.contains('\0')).cloned().collect();
+            for k in bad_keys {
+                if let Some(inner) = map.remove(&k) {
+                    map.insert(k.replace('\0', "\u{FFFD}"), inner);
+                }
+            }
+            map.values_mut().for_each(strip_nul_value);
+        }
+        _ => {}
+    }
+}
+
+/// Sanitize every free-text/JSON field Postgres will reject NULs in.
+fn sanitize_batch(batch: &mut IngestBatch) {
+    for s in &mut batch.sessions {
+        strip_nul_opt(&mut s.summary);
+    }
+    for m in &mut batch.messages {
+        strip_nul_value(&mut m.raw);
+        if let Some(c) = &mut m.content {
+            strip_nul_value(c);
+        }
+        strip_nul_opt(&mut m.search_text);
+    }
+}
+
 pub async fn ingest(
     AuthedMachine(token_machine): AuthedMachine,
     State(state): State<AppState>,
-    Json(batch): Json<IngestBatch>,
+    Json(mut batch): Json<IngestBatch>,
 ) -> Result<Json<IngestResponse>, HubError> {
+    sanitize_batch(&mut batch);
     // A machine may only ingest under its own (token-bound) identity.
     if batch.machine.machine_id != token_machine {
         return Err(HubError::Unauthorized);
