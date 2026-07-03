@@ -346,6 +346,25 @@ GET /health
 → { "status": "ok" }
 ```
 
+## Cross-Machine History Archive (experimental)
+
+The viewer browses one machine's history. The **archive** (a Cargo workspace
+alongside the desktop app) extracts *every* machine's history into a central,
+searchable Postgres database — so your history survives Claude Code's 30-day
+deletion and is searchable from anywhere on your network.
+
+```
+each machine:  sync-daemon ──(bearer token over Tailscale)──▶  hub ──▶ Postgres
+                  reads ~/.claude, ~/.codex, …                  /v1/ingest /v1/search …
+```
+
+- `crates/hub` — axum + sqlx service; bearer-authed ingest + full-text search/browse API (the only component with DB credentials).
+- `crates/sync-daemon` — per-machine push daemon; backfill + incremental sync, crash-safe checkpoints, cumulative (never-delete) semantics.
+- `crates/history-core` — the shared, tauri-free parser library both the desktop app and the daemon use.
+
+Setup is in **[`docs/archive/deployment.md`](docs/archive/deployment.md)**.
+pgvector semantic search and an MCP context server for agents are planned next.
+
 ## Usage
 
 1. Launch the app

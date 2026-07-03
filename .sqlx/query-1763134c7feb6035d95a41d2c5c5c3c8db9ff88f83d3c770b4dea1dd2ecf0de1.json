@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT p.id              AS \"id!\",\n               p.provider        AS \"provider!\",\n               p.project_path    AS \"project_path!\",\n               p.name,\n               p.storage_type,\n               p.session_count   AS \"session_count!\",\n               p.message_count   AS \"message_count!\",\n               p.last_modified,\n               p.machine_id      AS \"machine_id!\",\n               mac.hostname      AS \"machine_hostname!\"\n        FROM projects p\n        JOIN machines mac ON p.machine_id = mac.machine_id\n        WHERE ($1::text IS NULL OR mac.hostname = $1)\n          AND ($2::text IS NULL OR p.provider = $2)\n        ORDER BY p.last_modified DESC NULLS LAST, p.id DESC\n        LIMIT $3 OFFSET $4\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "provider!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "project_path!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "storage_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "session_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "message_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_modified",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "machine_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "machine_hostname!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "1763134c7feb6035d95a41d2c5c5c3c8db9ff88f83d3c770b4dea1dd2ecf0de1"
+}

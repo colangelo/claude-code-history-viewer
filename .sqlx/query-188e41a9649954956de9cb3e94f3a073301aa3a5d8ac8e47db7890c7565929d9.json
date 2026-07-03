@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE projects p\n            SET session_count = (SELECT count(*) FROM sessions WHERE project_id = p.id),\n                message_count = (\n                    SELECT count(*) FROM messages m\n                    JOIN sessions s ON m.session_id = s.id\n                    WHERE s.project_id = p.id\n                )\n            WHERE p.id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "188e41a9649954956de9cb3e94f3a073301aa3a5d8ac8e47db7890c7565929d9"
+}

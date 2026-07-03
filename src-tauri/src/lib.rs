@@ -1,11 +1,15 @@
 pub mod cli;
-pub mod cli_args;
 pub mod commands;
-pub mod export;
-pub mod models;
-pub mod providers;
-pub mod utils;
 pub mod wsl;
+
+// Extraction/parse modules were moved to the tauri-free `history-core` crate.
+// They are re-exported under their original `crate::` paths so the rest of the
+// desktop app (and its `#[tauri::command]` wrappers) keep compiling unchanged.
+pub use history_core::cli_args;
+pub use history_core::export;
+pub use history_core::models;
+pub use history_core::providers;
+pub use history_core::utils;
 
 #[cfg(feature = "webui-server")]
 pub mod server;

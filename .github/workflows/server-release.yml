@@ -85,7 +85,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: '. -> target'
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
@@ -99,7 +99,7 @@ jobs:
       - name: Package single binary
         run: |
           mkdir -p release
-          cp src-tauri/target/${{ matrix.target }}/release/claude-code-history-viewer release/cchv-server
+          cp target/${{ matrix.target }}/release/claude-code-history-viewer release/cchv-server
           cd release && tar czf ../${{ matrix.artifact }}.tar.gz cchv-server
 
       - name: Wait for release to be published

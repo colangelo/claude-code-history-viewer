@@ -7,7 +7,7 @@
 use chrono::{SecondsFormat, Utc};
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
@@ -23,14 +23,10 @@ lazy_static! {
     static ref FILENAME_REGEX: Regex = Regex::new(r"^[A-Za-z0-9_-]+$").unwrap();
 }
 
-/// Result structure for rename operations
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NativeRenameResult {
-    pub success: bool,
-    pub previous_title: String,
-    pub new_title: String,
-    pub file_path: String,
-}
+// `NativeRenameResult` moved to `history_core::models` (shared with providers);
+// re-exported here so `crate::commands::session::NativeRenameResult` (via the
+// `session` module's glob re-export) keeps resolving for existing consumers.
+pub use history_core::models::NativeRenameResult;
 
 /// Error types for rename operations
 #[derive(Debug, Serialize)]

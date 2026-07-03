@@ -100,7 +100,7 @@ jobs:
       - name: cache Rust dependencies
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: '. -> target'
           add-rust-environment-hash-key: 'false'
           key: ${{ hashFiles('src-tauri/Cargo.toml', 'src-tauri/.cargo/config.toml') }}
           cache-workspace-crates: 'true'
@@ -141,7 +141,7 @@ jobs:
           }
 
           # Dynamically find the main exe, excluding setup/installer/uninstall binaries
-          $candidates = @(Get-ChildItem "src-tauri/target/release/*.exe" |
+          $candidates = @(Get-ChildItem "target/release/*.exe" |
             Where-Object { $_.Name -notmatch '(?i)(setup|install|uninstall)' })
 
           if ($candidates.Count -ne 1) {
@@ -189,7 +189,7 @@ jobs:
           set -euo pipefail
 
           # Find the built AppImage
-          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -not -name '*.sig' | head -1)
+          APPIMAGE=$(find target/release/bundle/appimage -name '*.AppImage' -not -name '*.sig' | head -1)
           if [ -z "$APPIMAGE" ]; then
             echo "::error::No AppImage found in bundle output"
             exit 1
@@ -245,7 +245,7 @@ jobs:
           set -euo pipefail
 
           # Find all Linux bundle artifacts
-          BUNDLE_DIR="src-tauri/target/release/bundle"
+          BUNDLE_DIR="target/release/bundle"
           RELEASE_TAG="${GITHUB_REF_NAME}"
 
           # Upload AppImage + re-sign

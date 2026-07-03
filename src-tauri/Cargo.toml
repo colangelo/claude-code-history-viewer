@@ -22,6 +22,8 @@ webui-server = ["dep:axum", "dep:tower-http", "dep:tower", "dep:tokio", "dep:tok
 tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
+# Tauri-free extraction/parse library shared with the sync daemon.
+history-core = { path = "../crates/history-core" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
@@ -112,57 +114,8 @@ futures = "0.3"
 name = "performance"
 harness = false
 
-# Profile for faster test compilation
-[profile.dev]
-opt-level = 0
-debug = true
-
-# Optimize dependencies in dev mode (simd-json, rayon need optimization)
-[profile.dev.package."*"]
-opt-level = 2
-
-[profile.test]
-opt-level = 1  # Faster test execution
-debug = true
-
-# Profile for release builds with debug symbols (for coverage)
-[profile.coverage]
-inherits = "test"
-debug = true
-opt-level = 0
-
-# Lints configuration
-[lints.rust]
-# Changed from "forbid" to "deny" to allow selective #[allow(unsafe_code)] for mmap performance optimizations
-unsafe_code = "deny"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-# nursery lints are too unstable - enable selectively if needed
-# Allow certain lints that are too strict for this project
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-missing_docs_in_private_items = "allow"
-# These are valid patterns in this codebase
-similar_names = "allow"
-too_many_lines = "allow"
-cognitive_complexity = "allow"
-# Allow casting in numeric code (common in size/count calculations)
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_precision_loss = "allow"
-# Allow reasonable patterns
-items_after_statements = "allow"
-needless_pass_by_value = "allow"
-unreadable_literal = "allow"
-manual_let_else = "allow"
-field_reassign_with_default = "allow"
-manual_clamp = "allow"
-map_unwrap_or = "allow"
-ptr_arg = "allow"
-format_push_string = "allow"
-duplicated_attributes = "allow"
-return_self_not_must_use = "allow"
+# Profiles and lint configuration moved to the workspace root Cargo.toml
+# (cargo ignores profiles in non-root members; lints are shared via
+# `[workspace.lints]` so history-core inherits the same pedantic profile).
+[lints]
+workspace = true

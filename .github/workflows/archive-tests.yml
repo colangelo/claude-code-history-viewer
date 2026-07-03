@@ -1,0 +1,90 @@
+name: Archive Tests
+
+# Tests for the cross-machine history archive crates (history-core, protocol,
+# hub, sync-daemon). These need a Postgres service, which rust-tests.yml (the
+# desktop suite) does not provide. The desktop crate (src-tauri) is intentionally
+# NOT built here — it is covered by rust-tests.yml.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "crates/**"
+      - "migrations/**"
+      - ".sqlx/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/archive-tests.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "crates/**"
+      - "migrations/**"
+      - ".sqlx/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/archive-tests.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Compile sqlx's query! macros from the committed .sqlx metadata (no live DB
+  # needed at build time). Tests connect at runtime via TEST_DATABASE_URL.
+  SQLX_OFFLINE: "true"
+
+jobs:
+  archive:
+    name: history-core / protocol / hub / sync-daemon
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cchv_archive_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/cchv_archive_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      # tauri-build / rust-embed expect a frontend dist to exist for any build
+      # that touches the workspace root; the archive crates don't use it, but the
+      # placeholder keeps a full `cargo` resolve happy.
+      - name: Create dist placeholder
+        run: mkdir -p dist && touch dist/index.html
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (archive crates)
+        run: >-
+          cargo clippy
+          -p history-core -p archive-protocol -p hub -p sync-daemon
+          --all-targets --all-features -- -D warnings
+
+      - name: Test (archive crates, incl. ingest/search/e2e)
+        run: >-
+          cargo test
+          -p history-core -p archive-protocol -p hub -p sync-daemon
+          -- --test-threads=1

@@ -1,0 +1,70 @@
+//! Hub configuration: database URL, bind address, and the bearer-token →
+//! machine-id map. Loaded from a TOML file (path in `HUB_CONFIG`) or, as a
+//! convenience for single-machine/dev use, from environment variables.
+
+use serde::Deserialize;
+use std::collections::HashMap;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubConfig {
+    pub database_url: String,
+    #[serde(default = "default_bind_addr")]
+    pub bind_addr: String,
+    #[serde(default)]
+    pub tokens: Vec<TokenEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TokenEntry {
+    pub token: String,
+    pub machine_id: Uuid,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+fn default_bind_addr() -> String {
+    "0.0.0.0:8787".to_string()
+}
+
+impl HubConfig {
+    /// Load from the TOML file at `HUB_CONFIG`, else from environment variables
+    /// (`DATABASE_URL`, `HUB_BIND_ADDR`, and optional single-machine
+    /// `HUB_TOKEN` + `HUB_MACHINE_ID`).
+    pub fn load() -> anyhow::Result<Self> {
+        if let Ok(path) = std::env::var("HUB_CONFIG") {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("reading HUB_CONFIG {path}: {e}"))?;
+            let cfg: HubConfig = toml::from_str(&text)
+                .map_err(|e| anyhow::anyhow!("parsing HUB_CONFIG {path}: {e}"))?;
+            return Ok(cfg);
+        }
+
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|_| anyhow::anyhow!("DATABASE_URL or HUB_CONFIG must be set"))?;
+        let bind_addr = std::env::var("HUB_BIND_ADDR").unwrap_or_else(|_| default_bind_addr());
+        let mut tokens = Vec::new();
+        if let (Ok(token), Ok(machine_id)) =
+            (std::env::var("HUB_TOKEN"), std::env::var("HUB_MACHINE_ID"))
+        {
+            tokens.push(TokenEntry {
+                token,
+                machine_id: machine_id.parse()?,
+                label: None,
+            });
+        }
+        Ok(HubConfig {
+            database_url,
+            bind_addr,
+            tokens,
+        })
+    }
+
+    /// Build the token → machine-id lookup used by the auth layer.
+    pub fn token_map(&self) -> HashMap<String, Uuid> {
+        self.tokens
+            .iter()
+            .map(|t| (t.token.clone(), t.machine_id))
+            .collect()
+    }
+}
