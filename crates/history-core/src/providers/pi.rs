@@ -179,6 +179,7 @@ pub fn load_sessions(
     if !dir.is_dir() {
         return Ok(vec![]);
     }
+    validate_under_root(dir)?;
 
     let mut sessions = Vec::new();
     for file in session_files(dir) {
@@ -227,7 +228,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    validate_session_path(path)?;
+    validate_under_root(path)?;
     let data = fs::read_to_string(path).map_err(|e| format!("Failed to read session file: {e}"))?;
     Ok(parse_messages(&data))
 }
@@ -583,27 +584,35 @@ fn summarize(text: &str) -> String {
     }
 }
 
-/// Path-safety check for a session file handed to us by the caller: it must
-/// not itself be a symlink, nor live inside a symlinked directory (both are
-/// ways to escape the intended session store via directory traversal).
-///
-/// Deliberately independent of the *default* sessions root
-/// (`sessions_root()`/`$HOME`): a session path is self-describing (its parent
-/// directory IS the project directory), so validation doesn't need to compare
-/// against a freshly-recomputed home-derived root. That keeps `load_messages`
-/// working against any well-formed session store — e.g. a fixture built under
-/// a `TempDir` in tests/evals — not just the current user's real
+/// Validate that a caller-supplied path (a project directory for
+/// `load_sessions`, a session file for `load_messages`) is a real,
+/// non-symlinked path canonicalizing to somewhere under the resolved Pi
+/// sessions root. Without this, `provider:"pi"` could be used to enumerate or
+/// parse arbitrary directories/files on disk just by passing a path outside
 /// `~/.pi/agent/sessions`.
-fn validate_session_path(path: &Path) -> Result<(), String> {
+///
+/// The root is resolved via `sessions_root()` (`$HOME`-derived) at call time,
+/// so pointing `$HOME` at a fixture store -- as the acceptance evals do --
+/// makes this validate against that fixture root instead.
+fn validate_under_root(path: &Path) -> Result<(), String> {
     if is_symlink(path) {
-        return Err("Session file must not be a symlink".to_string());
+        return Err("Path must not be a symlink".to_string());
     }
-    if let Some(parent) = path.parent() {
-        if is_symlink(parent) {
-            return Err("Session directory must not be a symlink".to_string());
-        }
+    let root = sessions_root().ok_or("Pi sessions path not found")?;
+    let canon_root = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve Pi sessions root: {e}"))?;
+    let canon_path = path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path: {e}"))?;
+    if canon_path.starts_with(&canon_root) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Path is outside the Pi sessions root: {}",
+            path.display()
+        ))
     }
-    Ok(())
 }
 
 fn file_mtime_rfc3339(path: &Path) -> String {
@@ -623,6 +632,7 @@ fn file_mtime_rfc3339(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     const SESSION: &str = concat!(
         r#"{"type":"session","version":3,"id":"sess-1","timestamp":"2026-06-08T20:31:45.261Z","cwd":"/Users/ac/dev/herdr"}"#,
@@ -743,15 +753,45 @@ mod tests {
         assert_eq!(projects[0].provider.as_deref(), Some("pi"));
     }
 
-    /// `load_messages` must not depend on the *default* sessions root
-    /// (`~/.pi/agent/sessions` / `$HOME`): a literal session path under any
-    /// well-formed fixture store (e.g. a `TempDir`) must load successfully,
-    /// since `validate_session_path` checks the path itself rather than
-    /// comparing against a freshly recomputed home-derived root.
+    /// Saves/restores `HOME` around a test so `sessions_root()` resolves to a
+    /// fixture store under a fresh `TempDir` rather than the real user home.
+    /// `HOME` is process-global; combined with `#[serial]` so these tests
+    /// don't race each other (the crate's tests otherwise run
+    /// `--test-threads=1`, per RUNBOOK).
+    struct HomeGuard {
+        original: Option<String>,
+    }
+    impl HomeGuard {
+        fn set(path: &Path) -> Self {
+            let original = std::env::var("HOME").ok();
+            std::env::set_var("HOME", path);
+            Self { original }
+        }
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.original.as_ref() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    /// `load_messages` must work against a literal session path under the
+    /// fixture store that `$HOME` is pointed at (the acceptance evals'
+    /// pattern), proving the base-dir parameterization works without
+    /// requiring the real `~/.pi/agent/sessions`.
     #[test]
-    fn load_messages_succeeds_for_fixture_path_outside_home() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let dir = tmp.path().join("far-away").join("--Users-ac-dev-fixture--");
+    #[serial]
+    fn load_messages_succeeds_for_fixture_path_under_home_override() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = HomeGuard::set(home.path());
+        let dir = home
+            .path()
+            .join(".pi")
+            .join("agent")
+            .join("sessions")
+            .join("--Users-ac-dev-fixture--");
         fs::create_dir_all(&dir).expect("create fixture dir");
         let file = dir.join("2026-06-08T20-31-45-261Z_session.jsonl");
         fs::write(&file, SESSION).expect("write fixture session");
@@ -762,11 +802,18 @@ mod tests {
     }
 
     /// `load_sessions` likewise must work against a literal fixture directory
-    /// path outside the default sessions root.
+    /// path under the `$HOME`-resolved sessions root.
     #[test]
-    fn load_sessions_succeeds_for_fixture_dir_outside_home() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let dir = tmp.path().join("far-away").join("--Users-ac-dev-fixture--");
+    #[serial]
+    fn load_sessions_succeeds_for_fixture_dir_under_home_override() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = HomeGuard::set(home.path());
+        let dir = home
+            .path()
+            .join(".pi")
+            .join("agent")
+            .join("sessions")
+            .join("--Users-ac-dev-fixture--");
         fs::create_dir_all(&dir).expect("create fixture dir");
         fs::write(dir.join("2026-06-08T20-31-45-261Z_session.jsonl"), SESSION)
             .expect("write fixture session");
@@ -775,5 +822,33 @@ mod tests {
             load_sessions(&dir.to_string_lossy(), false).expect("load_sessions must not error");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].message_count, 3);
+    }
+
+    /// A path outside the `$HOME`-resolved sessions root must be rejected by
+    /// both `load_sessions` and `load_messages`, even though it's a
+    /// well-formed directory/file otherwise -- this is the actual security
+    /// property `validate_under_root` provides.
+    #[test]
+    #[serial]
+    fn load_rejects_paths_outside_sessions_root() {
+        let home = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(home.path().join(".pi").join("agent").join("sessions"))
+            .expect("create sessions root");
+        let _guard = HomeGuard::set(home.path());
+
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let dir = outside.path().join("--Users-ac-dev-fixture--");
+        fs::create_dir_all(&dir).expect("create outside dir");
+        let file = dir.join("2026-06-08T20-31-45-261Z_session.jsonl");
+        fs::write(&file, SESSION).expect("write outside session");
+
+        assert!(
+            load_sessions(&dir.to_string_lossy(), false).is_err(),
+            "load_sessions must reject a directory outside the sessions root"
+        );
+        assert!(
+            load_messages(&file.to_string_lossy()).is_err(),
+            "load_messages must reject a file outside the sessions root"
+        );
     }
 }
