@@ -9,7 +9,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 ## TL;DR
 
 - **At session start**, scan this repo's inbox for unhandled messages:
-  `grep -l 'status: new' agent-relay/inbox/*.md 2>/dev/null` — read, act, then archive them.
+  `find agent-relay/inbox -type f -name '*.md' -exec grep -l 'status: new' {} + 2>/dev/null || true` — read, act, then archive them.
 - **To message another repo's agent**, create a file in *that repo's* `agent-relay/inbox/`
   (paths in the registry below) using the filename + frontmatter conventions, then
   commit & push that repo.
@@ -25,10 +25,30 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 | `direction` | app | `/Users/ac/_sync/Carlo/Projects/direction` | `agent-relay/inbox/` | `ac/direction` |
 | `macos-setup` | dev-env | `/Users/ac/Library/Mobile Documents/com~apple~CloudDocs/_setup/macos-setup` | `agent-relay/inbox/` | `ac/macos-setup` |
 | `second-loop` | loop | `/Users/ac/_sync/dev/second-loop` | `agent-relay/inbox/` | `ac/second-loop` |
+| `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` *(pending — GitHub-only today)* |
 
 All repos are local checkouts under the same user, so a sender writes to the
 recipient's path directly. Across machines, the inbox travels via Gitea (commit + push;
 the recipient pulls).
+
+**Ownership**: the registry above and the cross-repo sync of this spec are
+**home-network's (infra)** — like the poller. Other repos propose changes via a relay
+message/issue to home-network; infra lands the canonical wording and syncs every copy.
+(Unowned "keep in sync when editing" is exactly how drift starts at 6+ participants.)
+
+## Onboarding a participant
+
+**A repo onboards BEFORE its agent sends its first relay message** — a sender without
+an inbox has no return channel (learned 2026-07-03: cchv messaged second-loop with
+nowhere to receive the reply; its scaffold had to be built after the fact).
+
+1. Scaffold `agent-relay/{inbox,archive}/` (with `.gitkeep`s) and copy this spec file
+   verbatim from any participant.
+2. Add a `/check-relay` command (copy a participant's `.claude/commands/check-relay.md`,
+   fix the repo slug) and a session-start inbox pointer in the repo's
+   `AGENTS.md`/`CLAUDE.md`.
+3. Ask **home-network (infra)** for a registry row (relay message or `agent-relay`
+   issue); infra adds it and syncs all spec copies.
 
 ## Filename
 
@@ -48,7 +68,7 @@ Get the stamp with `date '+%Y-%m-%d-%H%M'`.
 | `from_repo` | ✅ | sender repo (registry key) |
 | `from_agent` | ✅ | model + role, e.g. `Claude Opus 4.8 — infra` |
 | `to_repo` | ✅ | recipient repo (registry key) |
-| `to_agent` | ✅ | role or `any` (roles: `infra`/`ci`/`app`/`dev-env`) |
+| `to_agent` | ✅ | role or `any` (roles: `infra`/`ci`/`app`/`dev-env`/`loop`) |
 | `subject` | ✅ | one line |
 | `status` | ✅ | `new` → `read` → `done` |
 | `priority` |  | `low` / `normal` / `high` (default `normal`) |
@@ -170,4 +190,5 @@ git push <remote> <branch>     # e.g. git push gitea main
 - **Dates**: always absolute (recipients in other sessions/days can't resolve "today").
 - **Discovery**: each repo's main `CLAUDE.md`/`AGENTS.md` points here and tells agents
   to check the inbox at session start.
-- This spec is identical in every participating repo; keep them in sync when editing.
+- This spec is identical in every participating repo. **home-network (infra) owns the
+  registry and the sync** — route spec changes through it (see *Onboarding a participant*).
