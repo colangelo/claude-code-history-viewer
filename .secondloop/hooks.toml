@@ -1,0 +1,56 @@
+[meta]
+prose = ".secondloop/RUNBOOK.md"
+base_branch = "main"
+branch_prefix = "loop/"
+
+# Fresh worktree bootstrap. `just serve-build` = sync-version + tsc + vite build
+# (creates dist/, which rust-embed needs at compile time) + release cargo build of
+# the headless server. This pre-warms the cargo cache so [serve] starts fast.
+# Toolchain (node/pnpm/just/rust) is assumed present on the host (see mise.toml).
+[setup]
+commands = [
+  "pnpm install --frozen-lockfile",
+  "just serve-build",
+]
+
+# Headless WebUI server (Axum, feature "webui-server").
+# - frontend-build first so the browser sees the implemented frontend (dist/ is
+#   served via --dist, bypassing the compile-time embed, mirroring `just serve-dev`).
+# - cargo run --release reuses the [setup] build; it only relinks/rebuilds if the
+#   implementation touched Rust. It also resolves the target dir itself (the
+#   justfile `serve` recipe hardcodes src-tauri/target/release, which is fragile).
+# - --host 127.0.0.1 is REQUIRED: the server refuses non-loopback binds without
+#   auth (default host is 0.0.0.0). --no-auth is explicitly allowed on loopback
+#   and keeps the UI reachable without a token.
+[serve]
+start = "just frontend-build && cd src-tauri && cargo run --release --features webui-server -- --serve --host 127.0.0.1 --port 3727 --no-auth --dist ../dist"
+health_url = "http://127.0.0.1:3727/health"
+ready_timeout_ms = 420000
+
+# Ordered cheap -> expensive. Mirrors the repo's CI:
+# frontend-tests.yml (lint, tsc, vitest, i18n:validate) and rust-tests.yml
+# (fmt, clippy -D warnings, tests incl. --features webui-server).
+# `pnpm exec vitest run` also executes the frozen evals in src/test/evals/.
+# cargo test replaces CI's nextest (not installed host-wide); --test-threads=1
+# is required because some Rust tests mutate env vars (HOME).
+[gate]
+commands = [
+  "pnpm lint",
+  "pnpm exec tsc --build .",
+  "pnpm run i18n:validate",
+  "pnpm exec vitest run",
+  "just rust-fmt-check",
+  "just rust-lint",
+  "cd src-tauri && cargo test --features webui-server -- --test-threads=1",
+]
+
+# T1: vitest component/unit evals. The dir sits inside vitest's include glob
+# (src/**/*.test.tsx), so the gate's full `vitest run` re-executes frozen evals
+# post-implementation. No Playwright in this repo -> no T2 tier.
+[evals.t1]
+dir = "src/test/evals"
+file_template = "src/test/evals/{runId}.eval.test.tsx"
+run = "pnpm exec vitest run {file} --reporter=junit --outputFile={report}"
+
+[artifacts]
+dir = ".secondloop/runs"
