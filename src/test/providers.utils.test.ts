@@ -61,6 +61,7 @@ describe("providers utils", () => {
       "openhands",
       "openinterpreter",
       "pearai",
+      "pi",
       "qwen",
       "trae",
       "zed",
