@@ -30,10 +30,10 @@ ready_timeout_ms = 420000
 # Ordered cheap -> expensive. Mirrors the repo's CI:
 # frontend-tests.yml (lint, tsc, vitest, i18n:validate) and rust-tests.yml
 # (fmt, clippy -D warnings, tests incl. --features webui-server).
-# `pnpm exec vitest run` also executes the frozen T1 evals in src/test/evals/;
-# `cargo test -p history-core` re-executes the frozen T2 evals in
-# crates/history-core/tests/. --test-threads=1 is required because some Rust
-# tests mutate env vars (HOME).
+# `pnpm exec vitest run` re-executes frozen T1 evals (vite.config include
+# globs); `cargo test -p history-core` and `-p loop-evals` re-execute frozen
+# T2 evals (older runs live in history-core, current ones in loop-evals).
+# --test-threads=1 is required because some Rust tests mutate env vars (HOME).
 [gate]
 commands = [
   "pnpm lint",
@@ -44,32 +44,40 @@ commands = [
   "just rust-lint",
   "cd src-tauri && cargo test --features webui-server -- --test-threads=1",
   "cargo test -p history-core -- --test-threads=1",
+  "SQLX_OFFLINE=true TEST_DATABASE_URL=postgres://ac@localhost/cchv_archive_test cargo test -p loop-evals -- --test-threads=1",
 ]
 
-# Both tiers share one dir (loop requirement). Vitest picks up the .tsx eval
-# files there via an include glob in vite.config.ts; cargo auto-discovers the
-# .rs files as integration-test targets and ignores the .tsx ones.
+# Both tiers share one dir (loop requirement): crates/loop-evals/tests. The
+# loop-evals umbrella crate dev-depends on every workspace crate, so T2 evals
+# can exercise hub endpoints, history-core parsers, or protocol types alike.
+# Vitest picks up the .tsx eval files there via an include glob in
+# vite.config.ts; cargo auto-discovers the .rs files and ignores the .tsx ones.
+# (Frozen evals from earlier runs remain in crates/history-core/tests and keep
+# re-running at the gate.)
 #
 # T1: vitest component/unit evals — for FRONTEND-observable criteria. The
 # gate's full `vitest run` re-executes frozen evals post-implementation.
 [evals.t1]
-dir = "crates/history-core/tests"
-file_template = "crates/history-core/tests/{runId}.eval.test.tsx"
+dir = "crates/loop-evals/tests"
+file_template = "crates/loop-evals/tests/{runId}.eval.test.tsx"
 run = "pnpm exec vitest run {file} --reporter=junit --outputFile={report}"
 
-# T2: Rust integration-test evals — for BACKEND-observable criteria (parsers,
-# providers, models in crates/history-core). Cargo auto-discovers tests/*.rs as
-# integration test targets; nextest's "loop" profile (.config/nextest.toml)
-# emits the JUnit XML the loop requires and runs single-threaded. The gate's
-# `cargo test -p history-core` re-executes frozen T2 evals post-implementation.
+# T2: Rust integration-test evals — for BACKEND-observable criteria. Cargo
+# auto-discovers tests/*.rs as integration test targets; nextest's "loop"
+# profile (.config/nextest.toml) emits the JUnit XML the loop requires and runs
+# single-threaded. The gate's `cargo test -p loop-evals` re-executes frozen T2
+# evals post-implementation.
 # If the eval fails to BUILD (e.g. it references not-yet-implemented symbols),
 # nextest writes no junit; synthesize one errored testcase so the loop sees a
 # real (non-vacuous) failure instead of a missing report. Not-compiling ==
 # not-passing, pre- and post-implementation alike.
+# SQLX_OFFLINE builds hub from the committed .sqlx metadata; TEST_DATABASE_URL
+# points hub-driving evals at the local throwaway test db (trust auth, no
+# secret). Both are inert for evals that don't touch the hub.
 [evals.t2]
-dir = "crates/history-core/tests"
-file_template = "crates/history-core/tests/{runId}_eval.rs"
-run = "n=$(basename {file} .rs); rm -f target/nextest/loop/junit.xml; cargo nextest run -p history-core --test \"$n\" --profile loop; s=$?; if [ -f target/nextest/loop/junit.xml ]; then cp target/nextest/loop/junit.xml {report}; else printf '<?xml version=\"1.0\"?><testsuites tests=\"1\" errors=\"1\"><testsuite name=\"%s\" tests=\"1\" errors=\"1\"><testcase name=\"eval_build\" classname=\"%s\"><error message=\"eval did not compile against the current crate\"/></testcase></testsuite></testsuites>' \"$n\" \"$n\" > {report}; fi; exit $s"
+dir = "crates/loop-evals/tests"
+file_template = "crates/loop-evals/tests/{runId}_eval.rs"
+run = "n=$(basename {file} .rs); rm -f target/nextest/loop/junit.xml; SQLX_OFFLINE=true TEST_DATABASE_URL=postgres://ac@localhost/cchv_archive_test cargo nextest run -p loop-evals --test \"$n\" --profile loop; s=$?; if [ -f target/nextest/loop/junit.xml ]; then cp target/nextest/loop/junit.xml {report}; else printf '<?xml version=\"1.0\"?><testsuites tests=\"1\" errors=\"1\"><testsuite name=\"%s\" tests=\"1\" errors=\"1\"><testcase name=\"eval_build\" classname=\"%s\"><error message=\"eval did not compile against the current crate\"/></testcase></testsuite></testsuites>' \"$n\" \"$n\" > {report}; fi; exit $s"
 
 [artifacts]
 dir = ".secondloop/runs"

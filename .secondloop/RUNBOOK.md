@@ -28,15 +28,15 @@ Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4
 ## Eval file naming (BOTH tiers — hard requirement)
 
 The loop executes **only** the exact templated filenames: ALL T1 tests go in
-the single file `crates/history-core/tests/<runId>.eval.test.tsx` and ALL T2
-tests in the single file `crates/history-core/tests/<runId>_eval.rs` (one
+the single file `crates/loop-evals/tests/<runId>.eval.test.tsx` and ALL T2
+tests in the single file `crates/loop-evals/tests/<runId>_eval.rs` (one
 `#[test]`/`it()` per criterion inside). Never split evals across additional
 files or invent other names — files with any other name are silently ignored
 by the runner and the red check will report every eval as vacuous.
 
 ## T1 evals (vitest)
 
-- Live in `crates/history-core/tests/` (shared with the T2 tier — the loop
+- Live in `crates/loop-evals/tests/` (shared with the T2 tier — the loop
   requires one evals dir), named `<runId>.eval.test.tsx`, picked up via a
   dedicated include glob in `vite.config.ts`. Vitest 4, `jsdom` environment,
   `globals: true`, setup file `src/test/setup.ts` (pre-mocks
@@ -58,14 +58,26 @@ by the runner and the red check will report every eval as vacuous.
 
 ## T2 evals (Rust integration tests)
 
-- Live in `crates/history-core/tests/`, named `<runId>_eval.rs`. Cargo
-  auto-discovers each file as an integration-test target; the loop runs it via
-  `cargo nextest --profile loop` (JUnit output, single-threaded — configured in
-  `.config/nextest.toml`).
-- **Use T2 for backend-observable acceptance criteria** (provider detection,
-  scanning, session/message parsing, `ProviderId` behavior) and T1 for
-  frontend-observable ones. Every criterion needs an executable eval in one of
-  the two tiers — there is no manual/rubric tier.
+- Live in `crates/loop-evals/tests/`, named `<runId>_eval.rs`. The
+  **`loop-evals` umbrella crate** dev-depends on every workspace crate (`hub`,
+  `history-core`, `archive-protocol`) plus `axum`/`tokio`/`reqwest`/`sqlx`/
+  `serde_json`/`uuid`/`tempfile`, so evals can exercise hub HTTP endpoints and
+  parsers alike. Cargo auto-discovers each file as an integration-test target;
+  the loop runs it via `cargo nextest --profile loop` (JUnit output,
+  single-threaded — configured in `.config/nextest.toml`).
+- **Use T2 for backend-observable acceptance criteria** (hub endpoints,
+  provider detection, scanning, session/message parsing, `ProviderId`
+  behavior) and T1 for frontend-observable ones. Every criterion needs an
+  executable eval in one of the two tiers — there is no manual/rubric tier.
+- **Hub-endpoint evals**: spawn an in-process hub exactly like
+  `crates/hub/tests/ingest_test.rs::spawn()` does — connect a `PgPool` to
+  `TEST_DATABASE_URL` (set by the tier's run command), run `hub::MIGRATOR`,
+  build `hub::AppState` with a random `machine_id`/token, serve `hub::router`
+  on `127.0.0.1:0`, then drive it with `reqwest`. Seed data through
+  `POST /v1/ingest` (the public surface), not raw SQL. A request to a
+  **route that doesn't exist yet fails at runtime with 404/405** — that is the
+  correct pre-implementation failure shape for new-endpoint criteria and
+  compiles fine against the unmodified crate.
 - **Evals must COMPILE against the unmodified crate** — this is the Rust
   equivalent of "must fail on the unmodified app". Never reference symbols the
   feature will introduce (a new enum variant, a new module): that is a compile

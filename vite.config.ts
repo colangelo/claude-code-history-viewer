@@ -175,8 +175,10 @@ export default defineConfig(async () => {
       "src/**/*.test.tsx",
       "src-tauri/tests/**/*.test.ts",
       // second-loop T1 evals share the T2 dir (the loop requires one evals
-      // dir); cargo ignores .tsx there, vitest ignores .rs here.
+      // dir); cargo ignores .tsx there, vitest ignores .rs here. history-core
+      // holds frozen evals from earlier runs; loop-evals is the current home.
       "crates/history-core/tests/**/*.test.tsx",
+      "crates/loop-evals/tests/**/*.test.tsx",
     ],
     environmentMatchGlobs: [
       // Node environment for file system tests
