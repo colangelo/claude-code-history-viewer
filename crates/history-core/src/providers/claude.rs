@@ -158,17 +158,25 @@ pub fn scan_projects(claude_path: &str) -> Result<Vec<ClaudeProject>, String> {
             continue;
         }
 
-        // Prefer the exact cwd Claude wrote into JSONL. Claude's storage
-        // directory names are lossy (`_` and path separators can both become
-        // `-`), so decoding the folder name can produce a non-existent cwd.
-        // Project-level identity should come from top-level session files.
-        // Subagent JSONL files can run in narrower cwd values (for example
-        // `/home/cym/paseo`) while the parent Claude project directory remains
-        // `/home/cym`; using nested files here would rename the whole project
-        // based on whichever subagent was modified most recently.
-        let actual_path = direct_cwd_candidate
-            .or(nested_cwd_candidate)
-            .map(|(_, cwd)| cwd)
+        // Resolve the project's real path, in priority order:
+        // 1. The folder name, when it verifiably resolves to an existing
+        //    directory. This is authoritative even when a session's embedded
+        //    `cwd` is stale (e.g. JSONL files moved between project folders).
+        // 2. The exact cwd Claude wrote into the JSONL. Claude's storage
+        //    directory names are lossy (`_` and path separators can both become
+        //    `-`), so when (1) fails the decoded folder name may be a
+        //    non-existent path and the real `cwd` is the better signal (#369).
+        //    Project-level identity should come from top-level session files;
+        //    subagent JSONL files can run in narrower cwd values (for example
+        //    `/home/cym/paseo`) while the parent project remains `/home/cym`,
+        //    so nested files are only a secondary fallback here.
+        // 3. A lossy heuristic decode of the folder name, as a last resort.
+        let actual_path = crate::utils::decode_project_path_verified(&project_path)
+            .or_else(|| {
+                direct_cwd_candidate
+                    .or(nested_cwd_candidate)
+                    .map(|(_, cwd)| cwd)
+            })
             .unwrap_or_else(|| decode_project_path(&project_path));
         let project_name = project_display_name_from_path(&actual_path)
             .unwrap_or_else(|| extract_project_name(&raw_project_name));
@@ -289,7 +297,10 @@ struct SessionMetadataCache {
 // Bumped 9 -> 10: rename_name is now also extracted from `/branch` custom-title
 // events (not just `/rename`), AND Claude project names are derived from the
 // JSONL `cwd` when available; stale caches must be invalidated to pick both up.
-const CACHE_VERSION: u32 = 10;
+// Bumped 10 -> 11: a verifiable folder name now takes priority over the JSONL
+// `cwd` for the project name (handles sessions moved between project folders);
+// stale caches must be invalidated to recompute project_name.
+const CACHE_VERSION: u32 = 11;
 
 /// Get the cache file path for a project
 fn get_cache_path(project_path: &str) -> PathBuf {
@@ -819,9 +830,21 @@ fn extract_session_metadata_internal(
         .unwrap_or("Unknown")
         .to_string();
 
-    let project_name = session_cwd
+    // A verifiable folder name is authoritative (handles sessions moved between
+    // project folders, whose embedded `cwd` is stale); otherwise fall back to
+    // the JSONL `cwd`, then the cached value, then a lossy folder-name decode.
+    let verified_project_name = file_path
+        .parent()
+        .and_then(|p| p.to_str())
+        .and_then(crate::utils::decode_project_path_verified)
         .as_deref()
-        .and_then(project_display_name_from_path)
+        .and_then(project_display_name_from_path);
+    let project_name = verified_project_name
+        .or_else(|| {
+            session_cwd
+                .as_deref()
+                .and_then(project_display_name_from_path)
+        })
         .or(incremental_project_name)
         .unwrap_or_else(|| extract_project_name(&raw_project_name));
     // Rename name takes highest priority, then existing summary fallback chain
@@ -2327,6 +2350,36 @@ mod tests {
     }
 
     #[test]
+    fn test_load_project_sessions_prefers_verified_folder_over_stale_cwd() {
+        let temp_dir = TempDir::new().unwrap();
+        // Folder name decodes to an existing directory (/usr/lib); the
+        // `.claude/projects/` marker must be present for verified decoding.
+        let project_dir = temp_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("-usr-lib");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        // Stale embedded cwd simulates a session moved into this folder by hand.
+        let content = concat!(
+            r#"{"uuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:00Z","#,
+            r#""type":"user","cwd":"/some/stale/Dev","#,
+            r#""message":{"role":"user","content":"Hello world"}}"#,
+            "\n"
+        );
+        let file_path = project_dir.join("test.jsonl");
+        let mut file = File::create(&file_path).unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+
+        let result = load_sessions(&project_dir.to_string_lossy(), None).unwrap();
+
+        assert_eq!(result.len(), 1);
+        // Verified folder name wins over the stale cwd.
+        assert_eq!(result[0].project_name, "lib");
+    }
+
+    #[test]
     fn test_load_project_sessions_with_summary() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -3293,6 +3346,38 @@ mod tests {
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].actual_path, actual_cwd);
         assert_eq!(projects[0].name, "claude_prompt_design");
+    }
+
+    #[test]
+    fn test_scan_projects_prefers_verified_folder_over_stale_cwd() {
+        let temp_dir = TempDir::new().unwrap();
+        let claude_dir = temp_dir.path().join(".claude");
+        let projects_dir = claude_dir.join("projects");
+        // Folder name decodes to an existing directory (/usr/lib).
+        let project_dir = projects_dir.join("-usr-lib");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        // The session's embedded cwd is stale (points elsewhere), simulating a
+        // JSONL file moved into this folder by hand.
+        create_project_jsonl_file(
+            &project_dir,
+            "session.jsonl",
+            &jsonl_lines(vec![serde_json::json!({
+                "uuid": "uuid-1",
+                "sessionId": "session-1",
+                "timestamp": "2025-06-26T10:00:00Z",
+                "type": "user",
+                "cwd": "/some/stale/Dev",
+                "message": { "role": "user", "content": "Hello" },
+            })]),
+        );
+
+        let projects = scan_projects(&claude_dir.to_string_lossy()).unwrap();
+
+        assert_eq!(projects.len(), 1);
+        // Verified folder name wins over the stale cwd.
+        assert_eq!(projects[0].actual_path, "/usr/lib");
+        assert_eq!(projects[0].name, "lib");
     }
 
     #[test]

@@ -1,82 +1,139 @@
 use serde::{Deserialize, Serialize};
 
 pub mod aider;
+pub mod amazon_q;
 pub mod antigravity;
 pub mod claude;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
+pub mod continue_dev;
 pub mod copilot;
 pub mod copilot_cli;
+pub mod crush;
 pub mod cursor;
 pub mod cursor_agent;
 pub mod forgecode;
 pub mod gemini;
+pub mod goose;
 pub mod kimi;
 pub mod kiro;
+pub mod llm;
 pub mod opencode;
+pub mod openhands;
+pub mod openinterpreter;
+pub mod pearai;
+/// Shared `ConversationState` parsing for the Amazon Q CLI lineage (amazon_q + kiro).
+pub mod q_conversation;
+pub mod qwen;
+pub mod trae;
 pub mod vscode;
+pub mod zed;
 
 /// Provider identifier
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     Aider,
+    /// Amazon Q Developer CLI (`amazon-q/data.sqlite3`).
+    AmazonQ,
     Claude,
     Cline,
     Codebuddy,
     Codex,
+    /// Continue.dev (VS Code / `JetBrains` extension + CLI). Reads
+    /// `~/.continue/sessions/*.json`.
+    Continue,
+    /// `PearAI` — a Continue fork that rebrands the store to `~/.pearai`.
+    PearAI,
     /// Unified GitHub Copilot provider covering CLI, Desktop, and the VS Code
     /// Copilot Chat extension. Per-session disambiguation lives in the
     /// `entrypoint` field (`copilot-cli` / `copilot-desktop` / `copilot-vscode`).
     Copilot,
+    /// Charmbracelet Crush (per-project `.crush/crush.db`).
+    Crush,
     Cursor,
     #[serde(rename = "cursor-agent")]
     CursorAgent,
     Gemini,
+    Goose,
     Kimi,
     ForgeCode,
     Kiro,
+    /// Simon Willison's `llm` CLI (`~/.../io.datasette.llm/logs.db`).
+    Llm,
     OpenCode,
+    /// Open Interpreter (Rust v1.0) — Codex-format rollouts under `~/.openinterpreter`.
+    OpenInterpreter,
+    /// `OpenHands` (classic 0.x) — `~/.openhands/sessions/<id>/events/*.json`.
+    OpenHands,
+    /// Qwen Code (Gemini-CLI fork) — JSONL transcripts under `~/.qwen/projects`.
+    Qwen,
     Antigravity,
+    /// Zed Agent Panel threads (`SQLite` + Zstd JSON at `…/Zed/threads/threads.db`).
+    Zed,
+    /// Trae IDE chat (reverse-engineered icube JSON in per-workspace `state.vscdb`).
+    Trae,
 }
 
 impl ProviderId {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Aider => "aider",
+            Self::AmazonQ => "amazonq",
             Self::Claude => "claude",
             Self::Cline => "cline",
             Self::Codebuddy => "codebuddy",
             Self::Codex => "codex",
+            Self::Continue => "continue",
+            Self::PearAI => "pearai",
             Self::Copilot => "copilot",
+            Self::Crush => "crush",
             Self::Cursor => "cursor",
             Self::CursorAgent => "cursor-agent",
             Self::Gemini => "gemini",
+            Self::Goose => "goose",
             Self::Kimi => "kimi",
             Self::ForgeCode => "forgecode",
             Self::Kiro => "kiro",
+            Self::Llm => "llm",
             Self::OpenCode => "opencode",
+            Self::OpenInterpreter => "openinterpreter",
+            Self::OpenHands => "openhands",
+            Self::Qwen => "qwen",
             Self::Antigravity => "antigravity",
+            Self::Zed => "zed",
+            Self::Trae => "trae",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "aider" => Some(Self::Aider),
+            "amazonq" => Some(Self::AmazonQ),
             "claude" => Some(Self::Claude),
             "cline" => Some(Self::Cline),
             "codebuddy" => Some(Self::Codebuddy),
             "codex" => Some(Self::Codex),
+            "continue" => Some(Self::Continue),
+            "pearai" => Some(Self::PearAI),
             "copilot" => Some(Self::Copilot),
+            "crush" => Some(Self::Crush),
             "cursor" => Some(Self::Cursor),
             "cursor-agent" => Some(Self::CursorAgent),
             "gemini" => Some(Self::Gemini),
+            "goose" => Some(Self::Goose),
             "kimi" => Some(Self::Kimi),
             "forgecode" => Some(Self::ForgeCode),
             "kiro" => Some(Self::Kiro),
+            "llm" => Some(Self::Llm),
             "opencode" => Some(Self::OpenCode),
+            "openinterpreter" => Some(Self::OpenInterpreter),
+            "openhands" => Some(Self::OpenHands),
+            "qwen" => Some(Self::Qwen),
             "antigravity" => Some(Self::Antigravity),
+            "zed" => Some(Self::Zed),
+            "trae" => Some(Self::Trae),
             _ => None,
         }
     }
@@ -84,19 +141,30 @@ impl ProviderId {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Aider => "Aider",
+            Self::AmazonQ => "Amazon Q CLI",
             Self::Claude => "Claude Code",
             Self::Cline => "Cline",
             Self::Codebuddy => "CodeBuddy Code",
             Self::Codex => "Codex CLI",
+            Self::Continue => "Continue",
+            Self::PearAI => "PearAI",
             Self::Copilot => "Copilot",
+            Self::Crush => "Crush",
             Self::Cursor => "Cursor",
             Self::CursorAgent => "Cursor Agent",
             Self::Gemini => "Gemini CLI",
+            Self::Goose => "Goose",
             Self::Kimi => "Kimi CLI",
             Self::ForgeCode => "ForgeCode",
             Self::Kiro => "Kiro CLI",
+            Self::Llm => "llm",
             Self::OpenCode => "OpenCode",
+            Self::OpenInterpreter => "Open Interpreter",
+            Self::OpenHands => "OpenHands",
+            Self::Qwen => "Qwen Code",
             Self::Antigravity => "Antigravity",
+            Self::Zed => "Zed",
+            Self::Trae => "Trae",
         }
     }
 }
@@ -120,7 +188,16 @@ pub fn detect_providers() -> Vec<ProviderInfo> {
     if let Some(info) = codex::detect() {
         providers.push(info);
     }
+    if let Some(info) = continue_dev::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = pearai::detect() {
+        providers.push(info);
+    }
     if let Some(info) = gemini::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = goose::detect() {
         providers.push(info);
     }
     if let Some(info) = kimi::detect() {
@@ -132,6 +209,21 @@ pub fn detect_providers() -> Vec<ProviderInfo> {
     if let Some(info) = opencode::detect() {
         providers.push(info);
     }
+    if let Some(info) = openinterpreter::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = openhands::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = qwen::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = zed::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = trae::detect() {
+        providers.push(info);
+    }
     if let Some(info) = cline::detect() {
         providers.push(info);
     }
@@ -141,7 +233,13 @@ pub fn detect_providers() -> Vec<ProviderInfo> {
     if let Some(info) = cursor_agent::detect() {
         providers.push(info);
     }
+    if let Some(info) = crush::detect() {
+        providers.push(info);
+    }
     if let Some(info) = aider::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = amazon_q::detect() {
         providers.push(info);
     }
     if let Some(info) = antigravity::detect() {
@@ -151,6 +249,9 @@ pub fn detect_providers() -> Vec<ProviderInfo> {
         providers.push(info);
     }
     if let Some(info) = kiro::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = llm::detect() {
         providers.push(info);
     }
     if let Some(info) = copilot::detect() {
@@ -201,11 +302,28 @@ pub fn scan_all_projects() -> Vec<ClaudeProject> {
         tag_projects(&mut out, claude::scan_projects(&base), ProviderId::Claude);
     }
     tag_projects(&mut out, codex::scan_projects(), ProviderId::Codex);
+    tag_projects(
+        &mut out,
+        continue_dev::scan_projects(),
+        ProviderId::Continue,
+    );
+    tag_projects(&mut out, pearai::scan_projects(), ProviderId::PearAI);
     tag_projects(&mut out, copilot::scan_projects(), ProviderId::Copilot);
+    tag_projects(&mut out, crush::scan_projects(), ProviderId::Crush);
     tag_projects(&mut out, gemini::scan_projects(), ProviderId::Gemini);
+    tag_projects(&mut out, goose::scan_projects(), ProviderId::Goose);
     tag_projects(&mut out, kimi::scan_projects(), ProviderId::Kimi);
     tag_projects(&mut out, forgecode::scan_projects(), ProviderId::ForgeCode);
     tag_projects(&mut out, opencode::scan_projects(), ProviderId::OpenCode);
+    tag_projects(
+        &mut out,
+        openinterpreter::scan_projects(),
+        ProviderId::OpenInterpreter,
+    );
+    tag_projects(&mut out, openhands::scan_projects(), ProviderId::OpenHands);
+    tag_projects(&mut out, qwen::scan_projects(), ProviderId::Qwen);
+    tag_projects(&mut out, zed::scan_projects(), ProviderId::Zed);
+    tag_projects(&mut out, trae::scan_projects(), ProviderId::Trae);
     tag_projects(&mut out, cline::scan_projects(), ProviderId::Cline);
     tag_projects(&mut out, cursor::scan_projects(), ProviderId::Cursor);
     tag_projects(
@@ -214,6 +332,7 @@ pub fn scan_all_projects() -> Vec<ClaudeProject> {
         ProviderId::CursorAgent,
     );
     tag_projects(&mut out, aider::scan_projects(), ProviderId::Aider);
+    tag_projects(&mut out, amazon_q::scan_projects(), ProviderId::AmazonQ);
     tag_projects(
         &mut out,
         antigravity::scan_projects(),
@@ -221,6 +340,7 @@ pub fn scan_all_projects() -> Vec<ClaudeProject> {
     );
     tag_projects(&mut out, codebuddy::scan_projects(), ProviderId::Codebuddy);
     tag_projects(&mut out, kiro::scan_projects(), ProviderId::Kiro);
+    tag_projects(&mut out, llm::scan_projects(), ProviderId::Llm);
     out
 }
 
@@ -242,9 +362,22 @@ pub fn load_sessions(
         ProviderId::Cursor => cursor::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::CursorAgent => cursor_agent::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Aider => aider::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::AmazonQ => amazon_q::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Antigravity => antigravity::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Codebuddy => codebuddy::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Continue => continue_dev::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::PearAI => pearai::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Crush => crush::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Goose => goose::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Kiro => kiro::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Llm => llm::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::OpenInterpreter => {
+            openinterpreter::load_sessions(project_path, exclude_sidechain)?
+        }
+        ProviderId::OpenHands => openhands::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Qwen => qwen::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Zed => zed::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Trae => trae::load_sessions(project_path, exclude_sidechain)?,
     };
     for s in &mut sessions {
         if s.provider.is_none() {
@@ -271,9 +404,20 @@ pub fn load_messages(
         ProviderId::Cursor => cursor::load_messages(session_path)?,
         ProviderId::CursorAgent => cursor_agent::load_messages(session_path)?,
         ProviderId::Aider => aider::load_messages(session_path)?,
+        ProviderId::AmazonQ => amazon_q::load_messages(session_path)?,
         ProviderId::Antigravity => antigravity::load_messages(session_path)?,
         ProviderId::Codebuddy => codebuddy::load_messages(session_path)?,
+        ProviderId::Continue => continue_dev::load_messages(session_path)?,
+        ProviderId::PearAI => pearai::load_messages(session_path)?,
+        ProviderId::Crush => crush::load_messages(session_path)?,
+        ProviderId::Goose => goose::load_messages(session_path)?,
         ProviderId::Kiro => kiro::load_messages(session_path)?,
+        ProviderId::Llm => llm::load_messages(session_path)?,
+        ProviderId::OpenInterpreter => openinterpreter::load_messages(session_path)?,
+        ProviderId::OpenHands => openhands::load_messages(session_path)?,
+        ProviderId::Qwen => qwen::load_messages(session_path)?,
+        ProviderId::Zed => zed::load_messages(session_path)?,
+        ProviderId::Trae => trae::load_messages(session_path)?,
     };
     for m in &mut messages {
         if m.provider.is_none() {

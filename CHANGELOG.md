@@ -17,6 +17,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The repository is now a Cargo workspace; build artifacts move to the repo-root `target/`. CI (`rust-tests.yml`) and the release workflows (`server-release.yml`, `updater-release.yml`) were updated for the new target location, and a Postgres-backed `archive-tests.yml` runs the archive crates. The desktop app is behavior-neutral (its parsing now lives in `history-core`).
 
+## [1.18.0] - 2026-06-30
+
+Feature and fix release: search/sidebar usability improvements plus a significant startup-performance fix.
+
+### Added
+- **Global search results now show which conversation each match belongs to**, so you can tell apart matches that share the same text across sessions. (#426)
+- **Collapsible provider-filter panel in the sidebar**, reclaiming vertical space for the session list on narrow sidebars; the collapsed header still surfaces the active filter summary and count. (#431)
+
+### Changed
+- **Project identity prefers the verifiable on-disk folder name over a stale `cwd`** embedded in old transcripts, so projects that moved or were recorded by a subagent group correctly. Existing projects may show a corrected display name after the first scan. (#419)
+
+### Performance
+- **Startup no longer stalls for tens of seconds.** Provider scanners now run concurrently instead of sequentially, so a locked SQLite database (from a tool running alongside the viewer) no longer stacks its timeout against the others — the worst case drops from a sum of timeouts to a single overlapped wait. (#436, #434)
+
+### Fixed
+- **Exporting a subagent session now includes its messages** instead of producing an empty file. The sidechain filter is only applied to parent-session exports now. (#435, #433)
+- **OpenCode global sessions are split by directory** into separate virtual projects, and sessions with an empty `directory` value now load correctly (scan and load hash the same raw value). (#432)
+- **OpenCode session cache is bounded** (LRU, 10k entries) to prevent unbounded memory growth from the file watcher. (#428)
+- **Cline-family truncation is char-safe** and Roo/Kilo summary labels render correctly. (#425)
+
+## [1.17.1] - 2026-06-23
+
+Patch release fixing conversation loading for several assistants added in 1.17.0.
+
+### Fixed
+- **Kilo Code conversations now load.** The task index is read from VS Code's `globalState` (the global `state.vscdb`, keyed by extension id) where Kilo actually stores it — previously only the on-disk index files (`state/taskHistory.json` / `tasks/_index.json`) that Kilo never writes were checked, so Kilo always showed zero sessions. (#422)
+- **Roo Code projects now group by workspace.** Roo (and Kilo) name the working-directory field `workspace`, not Cline's `cwdOnTaskInitialization`, so every conversation previously collapsed into a single "unknown" project. (#422)
+- **Zed tool results render as readable text** instead of raw tagged JSON. Zed stores a tool result's content as `Vec<LanguageModelToolResultContent>` (e.g. `[{"Text":"…"}]`); it is now unwrapped to its text (images become an `[image]` placeholder) rather than shown verbatim. (#423)
+- **Zed is now detected on Linux and Windows.** The threads database is read from Zed's real per-OS location — lowercase `~/.local/share/zed` on Linux and `%LOCALAPPDATA%\Zed` on Windows (it was looking under `Zed` / `%APPDATA%`). macOS was already correct. (#424)
+- **Zed no longer errors on older thread databases.** Project/session queries adapt to the columns actually present (`folder_paths` / `created_at` are absent on older schemas), so threads from older Zed versions load instead of failing the whole provider. (#424)
+
+## [1.17.0] - 2026-06-22
+
+### Added
+- **Eleven new read-only providers**, expanding coverage from 14 to ~25 AI coding assistants:
+  - **Continue.dev** (`~/.continue/sessions/*.json`, grouped by `workspaceDirectory`; honors `CONTINUE_GLOBAL_DIR`) and its fork **PearAI** (`~/.pearai/sessions`), sharing a parameterized Continue-family core. (#416)
+  - **Kilo Code** — folded into the Cline-family reader (`kilocode.kilo-code` globalStorage; per-task files byte-identical to Cline/Roo). (#416)
+  - **Goose** (`<data-dir>/goose/sessions/sessions.db`, SQLite), **Crush** (per-project `./.crush/crush.db`, discovered by scanning common code roots), and **llm** (Simon Willison's `io.datasette.llm/logs.db`, with token counts). (#416)
+  - **Amazon Q Developer CLI** (`amazon-q/data.sqlite3` `conversations`), sharing `ConversationState` parsing with the Kiro CLI provider. (#417)
+  - **Open Interpreter** (`~/.openinterpreter/sessions/**` — Codex-format rollouts, reusing the Codex parser; `INTERPRETER_HOME` override). (#418)
+  - **Qwen Code** (`~/.qwen/projects/<cwd>/chats/*.jsonl`). (#418)
+  - **Zed** (Agent Panel threads in `…/Zed/threads/threads.db` — SQLite + Zstd-compressed JSON). (#418)
+  - **OpenHands** (classic `~/.openhands/sessions/<id>/events/*.json`). (#418)
+  - **Trae** (per-workspace `state.vscdb` icube chat — reverse-engineered, provisional). (#418)
+
+### Fixed
+- Kiro CLI database path on Windows now resolves via `data_local_dir()` (`%LOCALAPPDATA%`) instead of the incorrect `AppData\Roaming`. (#417)
+
 ## [1.16.0] - 2026-06-21
 
 ### Added

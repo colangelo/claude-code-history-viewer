@@ -33,18 +33,29 @@ pub async fn scan_all_projects(
         vec![
             "claude".to_string(),
             "codex".to_string(),
+            "continue".to_string(),
+            "pearai".to_string(),
             "copilot".to_string(),
             "gemini".to_string(),
+            "goose".to_string(),
             "kimi".to_string(),
             "forgecode".to_string(),
             "opencode".to_string(),
+            "openinterpreter".to_string(),
+            "qwen".to_string(),
             "cline".to_string(),
+            "crush".to_string(),
             "cursor".to_string(),
             "cursor-agent".to_string(),
             "aider".to_string(),
+            "amazonq".to_string(),
             "antigravity".to_string(),
             "codebuddy".to_string(),
             "kiro".to_string(),
+            "llm".to_string(),
+            "zed".to_string(),
+            "openhands".to_string(),
+            "trae".to_string(),
         ]
     });
 
@@ -95,132 +106,61 @@ pub async fn scan_all_projects(
         }
     }
 
-    // Codex
-    if providers_to_scan.iter().any(|p| p == "codex") {
-        match providers::codex::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Codex scan failed: {e}");
-            }
-        }
-    }
+    // Synchronous, self-contained provider scanners — all share the signature
+    // `fn() -> Result<Vec<ClaudeProject>, String>` and read independent data
+    // sources. They previously ran sequentially, which made startup scale with
+    // the (now ~25) provider count: several open SQLite databases with a 5s
+    // busy_timeout, so a single locked DB (its tool running concurrently) stalled
+    // the whole scan, and multiple locked DBs stacked into tens of seconds (#434).
+    // Running them concurrently on the blocking pool turns that worst case from a
+    // sum into a single overlapped wait. The `("name", fn)` label here is the
+    // provider id matched against `providers_to_scan`, not the display name.
+    type SyncScanner = fn() -> Result<Vec<ClaudeProject>, String>;
+    let sync_scanners: &[(&str, SyncScanner)] = &[
+        ("codex", providers::codex::scan_projects),
+        ("continue", providers::continue_dev::scan_projects),
+        ("pearai", providers::pearai::scan_projects),
+        ("gemini", providers::gemini::scan_projects),
+        ("goose", providers::goose::scan_projects),
+        ("kimi", providers::kimi::scan_projects),
+        ("forgecode", providers::forgecode::scan_projects),
+        ("opencode", providers::opencode::scan_projects),
+        ("openinterpreter", providers::openinterpreter::scan_projects),
+        ("qwen", providers::qwen::scan_projects),
+        ("zed", providers::zed::scan_projects),
+        ("openhands", providers::openhands::scan_projects),
+        ("trae", providers::trae::scan_projects),
+        ("cline", providers::cline::scan_projects),
+        ("cursor", providers::cursor::scan_projects),
+        ("crush", providers::crush::scan_projects),
+        ("cursor-agent", providers::cursor_agent::scan_projects),
+        ("aider", providers::aider::scan_projects),
+        ("amazonq", providers::amazon_q::scan_projects),
+        ("antigravity", providers::antigravity::scan_projects),
+        ("codebuddy", providers::codebuddy::scan_projects),
+        ("kiro", providers::kiro::scan_projects),
+        ("llm", providers::llm::scan_projects),
+        ("copilot", providers::copilot::scan_projects),
+    ];
 
-    // Gemini
-    if providers_to_scan.iter().any(|p| p == "gemini") {
-        match providers::gemini::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Gemini scan failed: {e}");
-            }
-        }
-    }
+    // Spawn every enabled scanner up front so they run concurrently on the
+    // blocking pool; awaiting the handles afterwards collects them in spawn
+    // order without serializing the work.
+    let scan_handles: Vec<_> = sync_scanners
+        .iter()
+        .filter(|(name, _)| providers_to_scan.iter().any(|p| p == name))
+        .map(|(name, scan)| {
+            let name = *name;
+            let scan = *scan;
+            tauri::async_runtime::spawn_blocking(move || (name, scan()))
+        })
+        .collect();
 
-    // Kimi
-    if providers_to_scan.iter().any(|p| p == "kimi") {
-        match providers::kimi::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Kimi scan failed: {e}");
-            }
-        }
-    }
-
-    // ForgeCode
-    if providers_to_scan.iter().any(|p| p == "forgecode") {
-        match providers::forgecode::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("ForgeCode scan failed: {e}");
-            }
-        }
-    }
-
-    // OpenCode
-    if providers_to_scan.iter().any(|p| p == "opencode") {
-        match providers::opencode::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("OpenCode scan failed: {e}");
-            }
-        }
-    }
-
-    // Cline
-    if providers_to_scan.iter().any(|p| p == "cline") {
-        match providers::cline::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Cline scan failed: {e}");
-            }
-        }
-    }
-
-    // Cursor
-    if providers_to_scan.iter().any(|p| p == "cursor") {
-        match providers::cursor::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Cursor scan failed: {e}");
-            }
-        }
-    }
-
-    // Cursor Agent (CLI transcripts under ~/.cursor/projects/*/agent-transcripts)
-    if providers_to_scan.iter().any(|p| p == "cursor-agent") {
-        match providers::cursor_agent::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Cursor Agent scan failed: {e}");
-            }
-        }
-    }
-
-    // Aider
-    if providers_to_scan.iter().any(|p| p == "aider") {
-        match providers::aider::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Aider scan failed: {e}");
-            }
-        }
-    }
-
-    // Antigravity
-    if providers_to_scan.iter().any(|p| p == "antigravity") {
-        match providers::antigravity::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Antigravity scan failed: {e}");
-            }
-        }
-    }
-
-    // CodeBuddy
-    if providers_to_scan.iter().any(|p| p == "codebuddy") {
-        match providers::codebuddy::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("CodeBuddy scan failed: {e}");
-            }
-        }
-    }
-    // Kiro
-    if providers_to_scan.iter().any(|p| p == "kiro") {
-        match providers::kiro::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Kiro scan failed: {e}");
-            }
-        }
-    }
-
-    // Unified GitHub Copilot provider (CLI + Desktop + VS Code Copilot Chat).
-    if providers_to_scan.iter().any(|p| p == "copilot") {
-        match providers::copilot::scan_projects() {
-            Ok(projects) => all_projects.extend(projects),
-            Err(e) => {
-                log::warn!("Copilot scan failed: {e}");
-            }
+    for handle in scan_handles {
+        match handle.await {
+            Ok((_, Ok(projects))) => all_projects.extend(projects),
+            Ok((name, Err(e))) => log::warn!("{name} scan failed: {e}"),
+            Err(join_err) => log::warn!("Provider scan task failed to join: {join_err}"),
         }
     }
 
@@ -368,18 +308,29 @@ pub async fn load_provider_sessions(
             Ok(sessions)
         }
         "codex" => providers::codex::load_sessions(&project_path, exclude),
+        "continue" => providers::continue_dev::load_sessions(&project_path, exclude),
+        "pearai" => providers::pearai::load_sessions(&project_path, exclude),
         "copilot" => providers::copilot::load_sessions(&project_path, exclude),
         "gemini" => providers::gemini::load_sessions(&project_path, exclude),
+        "goose" => providers::goose::load_sessions(&project_path, exclude),
         "kimi" => providers::kimi::load_sessions(&project_path, exclude),
         "forgecode" => providers::forgecode::load_sessions(&project_path, exclude),
         "opencode" => providers::opencode::load_sessions(&project_path, exclude),
+        "openinterpreter" => providers::openinterpreter::load_sessions(&project_path, exclude),
+        "qwen" => providers::qwen::load_sessions(&project_path, exclude),
         "cline" => providers::cline::load_sessions(&project_path, exclude),
+        "crush" => providers::crush::load_sessions(&project_path, exclude),
         "cursor" => providers::cursor::load_sessions(&project_path, exclude),
         "cursor-agent" => providers::cursor_agent::load_sessions(&project_path, exclude),
         "aider" => providers::aider::load_sessions(&project_path, exclude),
+        "amazonq" => providers::amazon_q::load_sessions(&project_path, exclude),
         "antigravity" => providers::antigravity::load_sessions(&project_path, exclude),
         "codebuddy" => providers::codebuddy::load_sessions(&project_path, exclude),
         "kiro" => providers::kiro::load_sessions(&project_path, exclude),
+        "llm" => providers::llm::load_sessions(&project_path, exclude),
+        "zed" => providers::zed::load_sessions(&project_path, exclude),
+        "openhands" => providers::openhands::load_sessions(&project_path, exclude),
+        "trae" => providers::trae::load_sessions(&project_path, exclude),
         _ => Err(format!("Unknown provider: {provider}")),
     }
 }
@@ -402,18 +353,29 @@ pub async fn load_provider_messages(
             messages
         }
         "codex" => providers::codex::load_messages(&session_path)?,
+        "continue" => providers::continue_dev::load_messages(&session_path)?,
+        "pearai" => providers::pearai::load_messages(&session_path)?,
         "copilot" => providers::copilot::load_messages(&session_path)?,
         "gemini" => providers::gemini::load_messages(&session_path)?,
+        "goose" => providers::goose::load_messages(&session_path)?,
         "kimi" => providers::kimi::load_messages(&session_path)?,
         "forgecode" => providers::forgecode::load_messages(&session_path)?,
         "opencode" => providers::opencode::load_messages(&session_path)?,
+        "openinterpreter" => providers::openinterpreter::load_messages(&session_path)?,
+        "qwen" => providers::qwen::load_messages(&session_path)?,
         "cline" => providers::cline::load_messages(&session_path)?,
+        "crush" => providers::crush::load_messages(&session_path)?,
         "cursor" => providers::cursor::load_messages(&session_path)?,
         "cursor-agent" => providers::cursor_agent::load_messages(&session_path)?,
         "aider" => providers::aider::load_messages(&session_path)?,
+        "amazonq" => providers::amazon_q::load_messages(&session_path)?,
         "antigravity" => providers::antigravity::load_messages(&session_path)?,
         "codebuddy" => providers::codebuddy::load_messages(&session_path)?,
         "kiro" => providers::kiro::load_messages(&session_path)?,
+        "llm" => providers::llm::load_messages(&session_path)?,
+        "zed" => providers::zed::load_messages(&session_path)?,
+        "openhands" => providers::openhands::load_messages(&session_path)?,
+        "trae" => providers::trae::load_messages(&session_path)?,
         _ => return Err(format!("Unknown provider: {provider}")),
     };
 
@@ -442,18 +404,29 @@ pub async fn search_all_providers(
         vec![
             "claude".to_string(),
             "codex".to_string(),
+            "continue".to_string(),
+            "pearai".to_string(),
             "copilot".to_string(),
             "gemini".to_string(),
+            "goose".to_string(),
             "kimi".to_string(),
             "forgecode".to_string(),
             "opencode".to_string(),
+            "openinterpreter".to_string(),
+            "qwen".to_string(),
             "cline".to_string(),
+            "crush".to_string(),
             "cursor".to_string(),
             "cursor-agent".to_string(),
             "aider".to_string(),
+            "amazonq".to_string(),
             "antigravity".to_string(),
             "codebuddy".to_string(),
             "kiro".to_string(),
+            "llm".to_string(),
+            "zed".to_string(),
+            "openhands".to_string(),
+            "trae".to_string(),
         ]
     });
 
@@ -526,12 +499,42 @@ pub async fn search_all_providers(
         }
     }
 
+    // Continue.dev
+    if providers_to_search.iter().any(|p| p == "continue") {
+        match providers::continue_dev::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Continue search failed: {e}");
+            }
+        }
+    }
+
+    // PearAI
+    if providers_to_search.iter().any(|p| p == "pearai") {
+        match providers::pearai::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("PearAI search failed: {e}");
+            }
+        }
+    }
+
     // Gemini
     if providers_to_search.iter().any(|p| p == "gemini") {
         match providers::gemini::search(&query, max_results) {
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Gemini search failed: {e}");
+            }
+        }
+    }
+
+    // Goose
+    if providers_to_search.iter().any(|p| p == "goose") {
+        match providers::goose::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Goose search failed: {e}");
             }
         }
     }
@@ -566,12 +569,42 @@ pub async fn search_all_providers(
         }
     }
 
+    // Open Interpreter
+    if providers_to_search.iter().any(|p| p == "openinterpreter") {
+        match providers::openinterpreter::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Open Interpreter search failed: {e}");
+            }
+        }
+    }
+
+    // Qwen Code
+    if providers_to_search.iter().any(|p| p == "qwen") {
+        match providers::qwen::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Qwen search failed: {e}");
+            }
+        }
+    }
+
     // Cline
     if providers_to_search.iter().any(|p| p == "cline") {
         match providers::cline::search(&query, max_results) {
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Cline search failed: {e}");
+            }
+        }
+    }
+
+    // Crush
+    if providers_to_search.iter().any(|p| p == "crush") {
+        match providers::crush::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Crush search failed: {e}");
             }
         }
     }
@@ -606,6 +639,16 @@ pub async fn search_all_providers(
         }
     }
 
+    // Amazon Q Developer CLI
+    if providers_to_search.iter().any(|p| p == "amazonq") {
+        match providers::amazon_q::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Amazon Q search failed: {e}");
+            }
+        }
+    }
+
     // Antigravity
     if providers_to_search.iter().any(|p| p == "antigravity") {
         match providers::antigravity::search(&query, max_results) {
@@ -631,6 +674,46 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("Kiro search failed: {e}");
+            }
+        }
+    }
+
+    // llm (Simon Willison)
+    if providers_to_search.iter().any(|p| p == "llm") {
+        match providers::llm::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("llm search failed: {e}");
+            }
+        }
+    }
+
+    // Zed
+    if providers_to_search.iter().any(|p| p == "zed") {
+        match providers::zed::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Zed search failed: {e}");
+            }
+        }
+    }
+
+    // OpenHands
+    if providers_to_search.iter().any(|p| p == "openhands") {
+        match providers::openhands::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("OpenHands search failed: {e}");
+            }
+        }
+    }
+
+    // Trae IDE
+    if providers_to_search.iter().any(|p| p == "trae") {
+        match providers::trae::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Trae search failed: {e}");
             }
         }
     }

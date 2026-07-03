@@ -40,19 +40,30 @@ describe("providers utils", () => {
   it("keeps provider id list stable for all known providers", () => {
     expect(PROVIDER_IDS).toEqual([
       "aider",
+      "amazonq",
       "antigravity",
       "claude",
       "cline",
       "codebuddy",
       "codex",
+      "continue",
       "copilot",
+      "crush",
       "cursor",
       "cursor-agent",
       "forgecode",
       "gemini",
+      "goose",
       "kimi",
       "kiro",
+      "llm",
       "opencode",
+      "openhands",
+      "openinterpreter",
+      "pearai",
+      "qwen",
+      "trae",
+      "zed",
     ]);
   });
 

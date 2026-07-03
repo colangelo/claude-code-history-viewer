@@ -20,6 +20,7 @@ memmap2 = "0.9"
 simd-json = "0.14"
 memchr = "2.7"
 rusqlite = { version = "0.32", features = ["bundled"] }
+zstd = "0.13"
 dirs = "5.0"
 base64 = "0.22"
 comrak = { version = "0.49.0", default-features = false }

@@ -54,6 +54,39 @@ pub(crate) fn is_safe_session_path(path: &std::path::Path) -> Result<(), String>
     if let Some(kimi_base) = crate::providers::kimi::get_base_path() {
         allowed.push(PathBuf::from(kimi_base).join("sessions"));
     }
+    // Continue stores sessions under ~/.continue/sessions (CONTINUE_GLOBAL_DIR
+    // overridable); get_base_path() already resolves to that directory.
+    if let Some(continue_base) = crate::providers::continue_dev::get_base_path() {
+        allowed.push(PathBuf::from(continue_base));
+    }
+    if let Some(pearai_base) = crate::providers::pearai::get_base_path() {
+        allowed.push(PathBuf::from(pearai_base));
+    }
+    if let Some(goose_base) = crate::providers::goose::get_base_path() {
+        allowed.push(PathBuf::from(goose_base));
+    }
+    if let Some(llm_base) = crate::providers::llm::get_base_path() {
+        allowed.push(PathBuf::from(llm_base));
+    }
+    if let Some(amazon_q_base) = crate::providers::amazon_q::get_base_path() {
+        allowed.push(PathBuf::from(amazon_q_base));
+    }
+    if let Some(oi_base) = crate::providers::openinterpreter::get_base_path() {
+        allowed.push(PathBuf::from(&oi_base).join("sessions"));
+        allowed.push(PathBuf::from(&oi_base).join("archived_sessions"));
+    }
+    if let Some(qwen_base) = crate::providers::qwen::get_base_path() {
+        allowed.push(PathBuf::from(qwen_base));
+    }
+    if let Some(zed_base) = crate::providers::zed::get_base_path() {
+        allowed.push(PathBuf::from(zed_base));
+    }
+    if let Some(oh_base) = crate::providers::openhands::get_base_path() {
+        allowed.push(PathBuf::from(oh_base));
+    }
+    if let Some(trae_base) = crate::providers::trae::get_base_path() {
+        allowed.push(PathBuf::from(trae_base));
+    }
 
     // Canonicalize each allowlist entry so the comparison below is like-for-like
     // with the canonicalized candidate. Without this, a symlinked provider root
