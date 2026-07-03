@@ -71,28 +71,9 @@ read the live home directory).
 
 ## Acceptance Criteria
 
-1. Scanning a Pi session store (fixture directory in the store's layout) yields
-   one project per session subdirectory, and each project's real path is taken
-   from the session header's `cwd` field — not decoded from the escaped
-   directory name.
-2. Listing a Pi project's sessions yields, per JSONL file: a summary derived
-   from the first user text message, a message count that counts only
-   `type:"message"` records (header/`model_change`/`thinking_level_change`
-   records excluded), and session timestamps.
-3. Loading a Pi session's messages maps user text and assistant text to
-   normalized message content; assistant thinking items become thinking
-   content; and assistant `model` + `usage`
-   (input/output/cacheRead/cacheWrite) are mapped into the normalized message
-   metadata and token-usage fields.
-4. A session whose assistant turn has `stopReason:"error"` and an
-   `errorMessage` loads without a parse failure: the session and its other
-   messages are returned, and the failed turn carries an error indication.
-5. `history_core::providers::ProviderId::parse("pi")` returns the Pi variant,
-   round-trips through `as_str()` to `"pi"`, has display name `"Pi"`, and the
-   provider participates in the `providers/mod.rs` dispatch
-   (`load_sessions`/`load_messages` route `"pi"` to the Pi module).
-6. The frontend registers `"pi"` as a first-class provider: the provider id
-   lookup used by the UI recognizes `"pi"`, its display label resolves through
-   the `common.provider.pi` i18n key (present in all 5 locales), and a project
-   tagged `provider:"pi"` renders with the Pi label — not the default
-   provider's.
+- (T2) Scanning a Pi session store (fixture directory in the store's layout) yields one project per session subdirectory, and each project's real path is taken from the session header's `cwd` field — not decoded from the escaped directory name.
+- (T2) Listing a Pi project's sessions yields, per JSONL file: a summary derived from the first user text message, a message count that counts only `type:"message"` records (header/`model_change`/`thinking_level_change` records excluded), and session timestamps.
+- (T2) Loading a Pi session's messages maps user text and assistant text to normalized message content; assistant thinking items become thinking content; and assistant `model` + `usage` (input/output/cacheRead/cacheWrite) are mapped into the normalized message metadata and token-usage fields.
+- (T2) A session whose assistant turn has `stopReason:"error"` and an `errorMessage` loads without a parse failure: the session and its other messages are returned, and the failed turn carries an error indication.
+- (T2) `history_core::providers::ProviderId::parse("pi")` returns the Pi variant, round-trips through `as_str()` to `"pi"`, has display name `"Pi"`, and `providers/mod.rs` dispatch routes `"pi"` through `load_sessions`/`load_messages` to the Pi module.
+- (T1) The frontend registers `"pi"` as a first-class provider: the provider id lookup used by the UI recognizes `"pi"`, its display label resolves through the `common.provider.pi` i18n key (present in all 5 locales), and a project tagged `provider:"pi"` renders with the Pi label — not the default provider's.
