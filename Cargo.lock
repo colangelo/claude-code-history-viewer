@@ -3370,6 +3370,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "loop-evals"
+version = "0.1.0"
+dependencies = [
+ "archive-protocol",
+ "axum",
+ "chrono",
+ "history-core",
+ "hub",
+ "reqwest 0.12.20",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "lru"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
