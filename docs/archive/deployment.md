@@ -25,7 +25,20 @@ each machine:  sync-daemon ──(HTTPS over Tailscale, bearer token)──▶  
 The archive is **cumulative**: the daemon only ever ingests; deleting a local
 file never deletes anything from the hub.
 
-## 1. Postgres (on the always-on tailnet node)
+## 1. Postgres
+
+> **House deployment (this homelab): use the shared pg1, not a self-provisioned
+> Postgres.** Follow `~/_sync/dev/CONTEXT/PATTERNS/shared-backends.md`: ask infra
+> (home-network agent, via the relay) to provision role `cchv` + db `cchv_archive`
+> on pg1; the credential lands in 1Password as `cchv - app role @ pg1` (vault
+> `AC-DevOps`); connect via `pg1.cat-bluegill.ts.net:5432`. You inherit pg1's
+> nightly logical backups + PVE backups for free. Never put literal passwords or
+> tokens in `hub.toml` committed anywhere — resolve them at deploy time (`op read`).
+> The generic instructions below are for deployments outside the homelab. The
+> local dev/test setup (CI `postgres` service containers, `cchv_archive_dev/_test`)
+> is unaffected — the shared-backend rule concerns the *deployed* archive only.
+
+Generic (non-homelab) setup:
 
 ```bash
 # Create a database and a role the hub will use.
@@ -92,6 +105,13 @@ curl http://<tailnet-host>:8787/v1/healthz   # {"status":"ok","db":"up"}
 
 Transport security is provided by Tailscale (WireGuard); the bearer token gates
 access. TLS termination (e.g. behind a reverse proxy) can be added later.
+
+> **House deployment:** bind the hub to the node's tailscale IP (not `0.0.0.0`),
+> follow the tailnet-services pattern (`~/_sync/dev/CONTEXT/PATTERNS/
+> tailnet-services.md` — ideally Tailscale Serve `:443` for in-tailnet TLS), and
+> wire a Gatus uptime check on `/v1/healthz` per `PATTERNS/monitoring.md` when it
+> goes live. Bearer tokens live in 1Password (vault `AC-DevOps`), referenced by
+> item title, never committed.
 
 ## 3. Sync daemon (on each machine)
 
