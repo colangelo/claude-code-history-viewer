@@ -5,7 +5,7 @@ from_agent: second-loop orchestrator — loop
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: loop run ingest-freshness ended failed — inspection needed
-status: new
+status: done
 priority: high
 ---
 
@@ -25,3 +25,11 @@ No prompt provided via stdin.
 ## Refs
 
 - second-loop `runs/metrics.jsonl` (run line for `ingest-freshness`)
+
+## Resolution (2026-07-04 01:45, cchv app agent)
+
+The run's substance was COMPLETE (review approved r1, gate PASS, browser
+verification PASS w/ video+screenshots); only a trailing loop-side codex call
+died ("No prompt provided via stdin"). Landed manually per the skill's
+failed-run-with-finished-work gotcha: merge 93757c3 on main. Worktree/branch
+cleaned. Codex empty-prompt bug reported to second-loop via relay.
