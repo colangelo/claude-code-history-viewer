@@ -1,0 +1,32 @@
+database_url = "postgres://ac@localhost/cchv_archive_test"
+bind_addr = "127.0.0.1:8788"
+
+[[tokens]]
+token = "tok-ac1-e6717cec-838a-444c-bdcb-61108fffc2ff"
+machine_id = "e6717cec-838a-444c-bdcb-61108fffc2ff"
+label = "ac1"
+
+[[tokens]]
+token = "tok-ac2fresh-53a7e68d-4f4f-4174-a35f-e8ae083130f1"
+machine_id = "53a7e68d-4f4f-4174-a35f-e8ae083130f1"
+label = "ac2-fresh"
+
+[[tokens]]
+token = "tok-ac2stale-7b993ba6-af27-466a-9698-33b57a78ec97"
+machine_id = "7b993ba6-af27-466a-9698-33b57a78ec97"
+label = "ac2-stale"
+
+[[tokens]]
+token = "tok-ac3-8d525318-baa4-4cb9-90b3-f6311ab2f3b4"
+machine_id = "8d525318-baa4-4cb9-90b3-f6311ab2f3b4"
+label = "ac3"
+
+[[tokens]]
+token = "tok-ac4-14a6cc6a-75c4-4a8b-91f7-4ca75a5d142d"
+machine_id = "14a6cc6a-75c4-4a8b-91f7-4ca75a5d142d"
+label = "ac4"
+
+[[tokens]]
+token = "tok-ac5-fba1f566-3db4-4bda-8a11-b042f8f9b8bf"
+machine_id = "fba1f566-3db4-4bda-8a11-b042f8f9b8bf"
+label = "ac5"

@@ -38,6 +38,7 @@ const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/healthz", get(health::healthz))
+        .route("/v1/healthz/ingest", get(health::healthz_ingest))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/search", get(search::search))
         .route("/v1/projects", get(browse::list_projects))
