@@ -308,51 +308,54 @@ fn tag_projects(
 /// and skipped (a missing/unreadable provider never fails the whole scan).
 #[must_use]
 pub fn scan_all_projects() -> Vec<ClaudeProject> {
+    scan_all_projects_except(&[])
+}
+
+/// Like [`scan_all_projects`] but skipping the listed providers entirely
+/// (their discovery is never invoked). Headless consumers use this to exclude
+/// providers whose discovery is expensive or hazardous on a given machine —
+/// e.g. the Crush/Aider home-directory walks stalling on cloud-backed dirs.
+#[must_use]
+pub fn scan_all_projects_except(exclude: &[ProviderId]) -> Vec<ClaudeProject> {
     let mut out: Vec<ClaudeProject> = Vec::new();
-    if let Some(base) = claude::get_base_path() {
-        tag_projects(&mut out, claude::scan_projects(&base), ProviderId::Claude);
+    let skip = |id: ProviderId| exclude.contains(&id);
+    if !skip(ProviderId::Claude) {
+        if let Some(base) = claude::get_base_path() {
+            tag_projects(&mut out, claude::scan_projects(&base), ProviderId::Claude);
+        }
     }
-    tag_projects(&mut out, codex::scan_projects(), ProviderId::Codex);
-    tag_projects(
-        &mut out,
-        continue_dev::scan_projects(),
-        ProviderId::Continue,
-    );
-    tag_projects(&mut out, pearai::scan_projects(), ProviderId::PearAI);
-    tag_projects(&mut out, copilot::scan_projects(), ProviderId::Copilot);
-    tag_projects(&mut out, crush::scan_projects(), ProviderId::Crush);
-    tag_projects(&mut out, gemini::scan_projects(), ProviderId::Gemini);
-    tag_projects(&mut out, goose::scan_projects(), ProviderId::Goose);
-    tag_projects(&mut out, kimi::scan_projects(), ProviderId::Kimi);
-    tag_projects(&mut out, forgecode::scan_projects(), ProviderId::ForgeCode);
-    tag_projects(&mut out, opencode::scan_projects(), ProviderId::OpenCode);
-    tag_projects(
-        &mut out,
-        openinterpreter::scan_projects(),
-        ProviderId::OpenInterpreter,
-    );
-    tag_projects(&mut out, openhands::scan_projects(), ProviderId::OpenHands);
-    tag_projects(&mut out, pi::scan_projects(), ProviderId::Pi);
-    tag_projects(&mut out, qwen::scan_projects(), ProviderId::Qwen);
-    tag_projects(&mut out, zed::scan_projects(), ProviderId::Zed);
-    tag_projects(&mut out, trae::scan_projects(), ProviderId::Trae);
-    tag_projects(&mut out, cline::scan_projects(), ProviderId::Cline);
-    tag_projects(&mut out, cursor::scan_projects(), ProviderId::Cursor);
-    tag_projects(
-        &mut out,
-        cursor_agent::scan_projects(),
-        ProviderId::CursorAgent,
-    );
-    tag_projects(&mut out, aider::scan_projects(), ProviderId::Aider);
-    tag_projects(&mut out, amazon_q::scan_projects(), ProviderId::AmazonQ);
-    tag_projects(
-        &mut out,
-        antigravity::scan_projects(),
-        ProviderId::Antigravity,
-    );
-    tag_projects(&mut out, codebuddy::scan_projects(), ProviderId::Codebuddy);
-    tag_projects(&mut out, kiro::scan_projects(), ProviderId::Kiro);
-    tag_projects(&mut out, llm::scan_projects(), ProviderId::Llm);
+    macro_rules! scan {
+        ($module:ident, $id:expr) => {
+            if !skip($id) {
+                tag_projects(&mut out, $module::scan_projects(), $id);
+            }
+        };
+    }
+    scan!(codex, ProviderId::Codex);
+    scan!(continue_dev, ProviderId::Continue);
+    scan!(pearai, ProviderId::PearAI);
+    scan!(copilot, ProviderId::Copilot);
+    scan!(crush, ProviderId::Crush);
+    scan!(gemini, ProviderId::Gemini);
+    scan!(goose, ProviderId::Goose);
+    scan!(kimi, ProviderId::Kimi);
+    scan!(forgecode, ProviderId::ForgeCode);
+    scan!(opencode, ProviderId::OpenCode);
+    scan!(openinterpreter, ProviderId::OpenInterpreter);
+    scan!(openhands, ProviderId::OpenHands);
+    scan!(pi, ProviderId::Pi);
+    scan!(qwen, ProviderId::Qwen);
+    scan!(zed, ProviderId::Zed);
+    scan!(trae, ProviderId::Trae);
+    scan!(cline, ProviderId::Cline);
+    scan!(cursor, ProviderId::Cursor);
+    scan!(cursor_agent, ProviderId::CursorAgent);
+    scan!(aider, ProviderId::Aider);
+    scan!(amazon_q, ProviderId::AmazonQ);
+    scan!(antigravity, ProviderId::Antigravity);
+    scan!(codebuddy, ProviderId::Codebuddy);
+    scan!(kiro, ProviderId::Kiro);
+    scan!(llm, ProviderId::Llm);
     out
 }
 

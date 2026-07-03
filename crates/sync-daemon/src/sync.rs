@@ -49,12 +49,15 @@ fn file_meta(path: &str) -> Option<(u64, u64)> {
     Some((md.len(), mtime))
 }
 
-/// Run one full sync pass and return what happened.
+/// Run one full sync pass and return what happened. `exclude` lists providers
+/// whose discovery is skipped entirely on this machine (see
+/// `DaemonConfig::providers_exclude`).
 pub async fn run_once<C: HubClient>(
     client: &C,
     identity: &Identity,
     checkpoint: &mut Checkpoint,
     batch_max: usize,
+    exclude: &[ProviderId],
 ) -> SyncStats {
     let mut stats = SyncStats::default();
     let machine = MachineInfo {
@@ -63,7 +66,7 @@ pub async fn run_once<C: HubClient>(
         os: Some(std::env::consts::OS.to_string()),
     };
 
-    for project in providers::scan_all_projects() {
+    for project in providers::scan_all_projects_except(exclude) {
         let Some(provider_str) = project.provider.clone() else {
             continue;
         };

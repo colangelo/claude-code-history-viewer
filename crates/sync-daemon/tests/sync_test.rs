@@ -156,7 +156,7 @@ async fn cold_start_delivers_everything_once() {
     let hub = MockHub::default();
     let mut cp = Checkpoint::load(&fx.state_dir);
 
-    let stats = sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    let stats = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
 
     assert!(stats.sessions_synced >= 1, "synced a session");
     assert_eq!(hub.total_messages(), 2, "both messages delivered");
@@ -171,13 +171,13 @@ async fn checkpoint_survives_restart_no_redundant_delivery() {
 
     let hub1 = MockHub::default();
     let mut cp = Checkpoint::load(&fx.state_dir);
-    sync::run_once(&hub1, &fx.identity, &mut cp, 500).await;
+    sync::run_once(&hub1, &fx.identity, &mut cp, 500, &[]).await;
     assert_eq!(hub1.total_messages(), 2);
 
     // Simulate a restart: reload the checkpoint from disk, fresh hub.
     let hub2 = MockHub::default();
     let mut cp2 = Checkpoint::load(&fx.state_dir);
-    let stats = sync::run_once(&hub2, &fx.identity, &mut cp2, 500).await;
+    let stats = sync::run_once(&hub2, &fx.identity, &mut cp2, 500, &[]).await;
     assert_eq!(
         hub2.total_messages(),
         0,
@@ -194,7 +194,7 @@ async fn appended_messages_sync_on_next_pass() {
 
     let hub = MockHub::default();
     let mut cp = Checkpoint::load(&fx.state_dir);
-    sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
     let before = hub.message_keys();
     assert_eq!(before.len(), 2);
 
@@ -212,7 +212,7 @@ async fn appended_messages_sync_on_next_pass() {
     ));
     std::fs::write(&file, content).unwrap();
 
-    sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
     let after = hub.message_keys();
     assert_eq!(after.len(), 3, "the appended message's key is new");
     assert!(before.is_subset(&after));
@@ -228,7 +228,7 @@ async fn failed_delivery_is_not_checkpointed_and_resends() {
     hub.fail_next(1); // first ingest call fails
     let mut cp = Checkpoint::load(&fx.state_dir);
 
-    let stats1 = sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    let stats1 = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
     assert_eq!(
         hub.total_messages(),
         0,
@@ -238,7 +238,7 @@ async fn failed_delivery_is_not_checkpointed_and_resends() {
     assert!(cp.files.is_empty(), "checkpoint not advanced on failure");
 
     // Next pass (safety-net rescan) succeeds — at-least-once delivery.
-    let stats2 = sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    let stats2 = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
     assert_eq!(hub.total_messages(), 2, "redelivered on the next pass");
     assert!(stats2.sessions_synced >= 1);
 }
@@ -261,12 +261,12 @@ async fn deleted_source_leaves_archive_intact() {
 
     let hub = MockHub::default();
     let mut cp = Checkpoint::load(&fx.state_dir);
-    sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
     assert_eq!(hub.total_messages(), 2);
 
     // Delete the local source: the daemon must NOT issue any delete.
     std::fs::remove_file(&file).unwrap();
-    sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
     assert_eq!(
         hub.total_messages(),
         2,
@@ -281,7 +281,7 @@ async fn search_text_is_computed_and_delivered() {
     two_message_session(&fx.home);
     let hub = MockHub::default();
     let mut cp = Checkpoint::load(&fx.state_dir);
-    sync::run_once(&hub, &fx.identity, &mut cp, 500).await;
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
 
     let texts = hub.search_texts();
     assert!(

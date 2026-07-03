@@ -19,6 +19,11 @@ pub struct DaemonConfig {
     /// State directory (machine id + checkpoint). Defaults to `~/.claude-history-sync`.
     #[serde(default)]
     pub state_dir: Option<PathBuf>,
+    /// Provider ids to skip entirely (e.g. `["crush", "aider"]` on machines
+    /// where their home-directory discovery walk is expensive). Unknown ids
+    /// are logged and ignored at startup.
+    #[serde(default)]
+    pub providers_exclude: Vec<String>,
 }
 
 fn default_scan_interval() -> u64 {
@@ -50,6 +55,7 @@ impl DaemonConfig {
                 .unwrap_or_else(default_scan_interval),
             batch_max_messages: default_batch_size(),
             state_dir: None,
+            providers_exclude: Vec::new(),
         })
     }
 
