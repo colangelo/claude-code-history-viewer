@@ -29,7 +29,10 @@ Add **`GET /v1/healthz/ingest`** to the hub (`crates/hub`):
   HTTP **503** with `{"status":"stale", ...}` when at least one is. Body always
   includes `stale_after_secs` (the effective threshold) and the `machines`
   array. An **empty archive (no machines) → 200 "ok"** with an empty array
-  (bootstrap must not alarm). Gatus will use `[STATUS] == 200`.
+  (bootstrap must not alarm) — implement this path, but it is verified by
+  review rather than an eval: the shared integration-test database is never
+  empty (it accumulates machines from other suites), so no deterministic eval
+  exists for it. Gatus will use `[STATUS] == 200`.
 
 Implementation shape: follow the existing hub module conventions —
 `crates/hub/src/health.rs` (or a sibling module) + route in `lib.rs::router`,
@@ -50,4 +53,4 @@ isolation pattern).
 - (T2) With two machines where one has `last_seen` backdated beyond the threshold, the endpoint returns 503 with `status:"stale"`, the backdated machine `stale:true`, and the fresh machine `stale:false`.
 - (T2) `stale_after_secs` is honored: a machine backdated 3 hours is stale at the default (7200s) but not stale with `?stale_after_secs=14400`; a non-numeric or non-positive `stale_after_secs` returns 400.
 - (T2) Staleness ignores message recency: a machine whose `last_seen` is fresh but which has zero messages reports `last_message_at:null`, `stale:false`, and the endpoint returns 200.
-- (T2) The endpoint answers without any `Authorization` header (same policy as `/v1/healthz`), and with no machines in the archive it returns 200 with `status:"ok"` and an empty machines array.
+- (T2) The endpoint answers without any `Authorization` header — no 401/403 — matching the `/v1/healthz` policy.

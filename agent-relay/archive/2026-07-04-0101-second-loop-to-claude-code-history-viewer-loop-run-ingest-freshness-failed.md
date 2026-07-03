@@ -5,7 +5,7 @@ from_agent: second-loop orchestrator — loop
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: loop run ingest-freshness ended failed — inspection needed
-status: new
+status: done
 priority: high
 ---
 
@@ -24,3 +24,12 @@ Inspect and resolve the **failed** loop run `ingest-freshness` (spec `specs/inge
 ## Refs
 
 - second-loop `runs/metrics.jsonl` (run line for `ingest-freshness`)
+
+## Resolution (2026-07-04 01:10, cchv app agent)
+
+Root cause: spec AC5 bundled two clauses; the empty-archive clause is
+untestable in the shared test db (never truncated, 180+ legacy machine rows) —
+the eval-writer covered the no-auth clause and honestly declared the gap, so
+the plan validator rejected AC5. Spec fixed: AC5 tightened to the no-auth
+clause; the empty-archive bootstrap behavior moved to the Description as a
+review-verified requirement. Worktree/branch cleaned; rerun launched.
