@@ -62,10 +62,14 @@ run = "pnpm exec vitest run {file} --reporter=junit --outputFile={report}"
 # integration test targets; nextest's "loop" profile (.config/nextest.toml)
 # emits the JUnit XML the loop requires and runs single-threaded. The gate's
 # `cargo test -p history-core` re-executes frozen T2 evals post-implementation.
+# If the eval fails to BUILD (e.g. it references not-yet-implemented symbols),
+# nextest writes no junit; synthesize one errored testcase so the loop sees a
+# real (non-vacuous) failure instead of a missing report. Not-compiling ==
+# not-passing, pre- and post-implementation alike.
 [evals.t2]
 dir = "crates/history-core/tests"
 file_template = "crates/history-core/tests/{runId}_eval.rs"
-run = "n=$(basename {file} .rs); cargo nextest run -p history-core --test \"$n\" --profile loop; s=$?; cp target/nextest/loop/junit.xml {report}; exit $s"
+run = "n=$(basename {file} .rs); rm -f target/nextest/loop/junit.xml; cargo nextest run -p history-core --test \"$n\" --profile loop; s=$?; if [ -f target/nextest/loop/junit.xml ]; then cp target/nextest/loop/junit.xml {report}; else printf '<?xml version=\"1.0\"?><testsuites tests=\"1\" errors=\"1\"><testsuite name=\"%s\" tests=\"1\" errors=\"1\"><testcase name=\"eval_build\" classname=\"%s\"><error message=\"eval did not compile against the current crate\"/></testcase></testsuite></testsuites>' \"$n\" \"$n\" > {report}; fi; exit $s"
 
 [artifacts]
 dir = ".secondloop/runs"

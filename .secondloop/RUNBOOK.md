@@ -57,6 +57,20 @@ Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4
   scanning, session/message parsing, `ProviderId` behavior) and T1 for
   frontend-observable ones. Every criterion needs an executable eval in one of
   the two tiers — there is no manual/rubric tier.
+- **Evals must COMPILE against the unmodified crate** — this is the Rust
+  equivalent of "must fail on the unmodified app". Never reference symbols the
+  feature will introduce (a new enum variant, a new module): that is a compile
+  error, which the tier reports as one coarse `eval_build` error instead of
+  per-criterion failures. Drive new functionality through the *dynamic* surface
+  that exists today and assert runtime outcomes:
+  - `ProviderId::parse("<id>")` returning `Some`, round-tripping via
+    `.as_str()`/`.display_name()` (never `matches!(… ::NewVariant)`).
+  - the registry dispatch `providers::load_sessions(id, path, …)` /
+    `providers::load_messages(id, path)` with the parsed id.
+  - `providers::scan_all_projects()` with `std::env::set_var("HOME", …)`
+    pointed at a fixture store in a `TempDir` (established repo pattern; the
+    loop profile is single-threaded so this is safe), then filter the result
+    by `project.provider`.
 - Test against the public API (`history_core::providers::...`). Build fixture
   session stores in a `tempfile::TempDir` inside the test (create the provider's
   directory layout and write fixture files), never against the host's real home
