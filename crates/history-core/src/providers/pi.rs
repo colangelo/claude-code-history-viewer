@@ -35,7 +35,9 @@
 
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession, TokenUsage};
 use crate::providers::ProviderInfo;
-use crate::utils::{build_provider_message, is_symlink, search_json_value_case_insensitive};
+use crate::utils::{
+    build_provider_message, is_symlink, ms_to_iso, search_json_value_case_insensitive,
+};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use std::fs;
@@ -97,18 +99,25 @@ fn session_files(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Scan Pi projects — one per session subdirectory, real path from the
-/// header `cwd` of its session files (never the escaped directory name).
+/// Scan Pi projects at the default store root (`~/.pi/agent/sessions`).
 pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     let Some(root) = sessions_root() else {
         return Ok(vec![]);
     };
+    scan_projects_in(&root)
+}
+
+/// [`scan_projects`] parameterized by the sessions root, so tests/evals can
+/// point it at a fixture store (mirrors `continue_dev::scan_projects_in`).
+/// One project per session subdirectory, real path from the header `cwd` of
+/// its session files (never the escaped directory name).
+pub fn scan_projects_in(root: &Path) -> Result<Vec<ClaudeProject>, String> {
     if !root.is_dir() {
         return Ok(vec![]);
     }
 
     let mut projects = Vec::new();
-    for dir in project_dirs(&root) {
+    for dir in project_dirs(root) {
         let mut session_count = 0usize;
         let mut message_count = 0usize;
         let mut last_modified = String::new();
@@ -218,10 +227,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     if !path.exists() {
         return Err(format!("Session file not found: {session_path}"));
     }
-    validate_under_base(path)?;
-    if is_symlink(path) {
-        return Err("Session file must not be a symlink".to_string());
-    }
+    validate_session_path(path)?;
     let data = fs::read_to_string(path).map_err(|e| format!("Failed to read session file: {e}"))?;
     Ok(parse_messages(&data))
 }
@@ -417,11 +423,18 @@ fn convert_record(rec: &Value, session_id: &str) -> Option<ClaudeMessage> {
         .get("parentId")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let timestamp = rec
+    // The authoritative per-message time is the epoch-millis `message.timestamp`;
+    // fall back to the envelope record's ISO `timestamp` when it's absent.
+    let timestamp = msg
         .get("timestamp")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+        .and_then(Value::as_u64)
+        .map(ms_to_iso)
+        .unwrap_or_else(|| {
+            rec.get("timestamp")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        });
     let role = msg.get("role").and_then(Value::as_str).unwrap_or("user");
 
     let (message_type, out_role, blocks) = match role {
@@ -570,22 +583,27 @@ fn summarize(text: &str) -> String {
     }
 }
 
-fn validate_under_base(path: &Path) -> Result<(), String> {
-    let base = sessions_root().ok_or("Pi sessions path not found")?;
-    let canon_base = base
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve Pi sessions base: {e}"))?;
-    let canon_path = path
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve session path: {e}"))?;
-    if canon_path.starts_with(&canon_base) {
-        Ok(())
-    } else {
-        Err(format!(
-            "Path is outside the Pi sessions root: {}",
-            path.display()
-        ))
+/// Path-safety check for a session file handed to us by the caller: it must
+/// not itself be a symlink, nor live inside a symlinked directory (both are
+/// ways to escape the intended session store via directory traversal).
+///
+/// Deliberately independent of the *default* sessions root
+/// (`sessions_root()`/`$HOME`): a session path is self-describing (its parent
+/// directory IS the project directory), so validation doesn't need to compare
+/// against a freshly-recomputed home-derived root. That keeps `load_messages`
+/// working against any well-formed session store — e.g. a fixture built under
+/// a `TempDir` in tests/evals — not just the current user's real
+/// `~/.pi/agent/sessions`.
+fn validate_session_path(path: &Path) -> Result<(), String> {
+    if is_symlink(path) {
+        return Err("Session file must not be a symlink".to_string());
     }
+    if let Some(parent) = path.parent() {
+        if is_symlink(parent) {
+            return Err("Session directory must not be a symlink".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn file_mtime_rfc3339(path: &Path) -> String {
@@ -644,11 +662,15 @@ mod tests {
         assert_eq!(msgs[0].role.as_deref(), Some("user"));
         assert_eq!(msgs[0].uuid, "u1");
         assert_eq!(msgs[0].provider.as_deref(), Some("pi"));
+        // Timestamp comes from the nested `message.timestamp` epoch millis
+        // (1749412310000), not the envelope record's ISO `timestamp`.
+        assert_eq!(msgs[0].timestamp, ms_to_iso(1_749_412_310_000));
 
         let a = &msgs[1];
         assert_eq!(a.role.as_deref(), Some("assistant"));
         assert_eq!(a.parent_uuid.as_deref(), Some("u1"));
         assert_eq!(a.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(a.timestamp, ms_to_iso(1_749_412_330_000));
         assert_eq!(a.usage.as_ref().unwrap().input_tokens, Some(12));
         assert_eq!(a.usage.as_ref().unwrap().output_tokens, Some(34));
         assert_eq!(a.usage.as_ref().unwrap().cache_read_input_tokens, Some(5));
@@ -700,5 +722,58 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["text"], "boom");
         assert_eq!(blocks[0]["is_error"], true);
+    }
+
+    /// `scan_projects_in` must work against an arbitrary fixture root, not
+    /// just the default `~/.pi/agent/sessions` -- this is the base-dir
+    /// parameterization the spec calls for so tests/evals can target a
+    /// fixture store directly (mirrors `continue_dev::scan_projects_in`).
+    #[test]
+    fn scan_projects_in_reads_arbitrary_fixture_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("not-home").join("sessions");
+        let dir = root.join("--Users-ac-dev-fixture--");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        fs::write(dir.join("2026-06-08T20-31-45-261Z_session.jsonl"), SESSION)
+            .expect("write fixture session");
+
+        let projects = scan_projects_in(&root).expect("scan_projects_in must not error");
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].actual_path, "/Users/ac/dev/herdr");
+        assert_eq!(projects[0].provider.as_deref(), Some("pi"));
+    }
+
+    /// `load_messages` must not depend on the *default* sessions root
+    /// (`~/.pi/agent/sessions` / `$HOME`): a literal session path under any
+    /// well-formed fixture store (e.g. a `TempDir`) must load successfully,
+    /// since `validate_session_path` checks the path itself rather than
+    /// comparing against a freshly recomputed home-derived root.
+    #[test]
+    fn load_messages_succeeds_for_fixture_path_outside_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("far-away").join("--Users-ac-dev-fixture--");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        let file = dir.join("2026-06-08T20-31-45-261Z_session.jsonl");
+        fs::write(&file, SESSION).expect("write fixture session");
+
+        let messages =
+            load_messages(&file.to_string_lossy()).expect("load_messages must not error");
+        assert_eq!(messages.len(), 3);
+    }
+
+    /// `load_sessions` likewise must work against a literal fixture directory
+    /// path outside the default sessions root.
+    #[test]
+    fn load_sessions_succeeds_for_fixture_dir_outside_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("far-away").join("--Users-ac-dev-fixture--");
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        fs::write(dir.join("2026-06-08T20-31-45-261Z_session.jsonl"), SESSION)
+            .expect("write fixture session");
+
+        let sessions =
+            load_sessions(&dir.to_string_lossy(), false).expect("load_sessions must not error");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].message_count, 3);
     }
 }
