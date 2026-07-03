@@ -25,6 +25,15 @@ Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4
   verification steps that assume pre-existing history data, and make sure new UI
   handles the empty state gracefully (browser verification may see an empty app).
 
+## Eval file naming (BOTH tiers — hard requirement)
+
+The loop executes **only** the exact templated filenames: ALL T1 tests go in
+the single file `crates/history-core/tests/<runId>.eval.test.tsx` and ALL T2
+tests in the single file `crates/history-core/tests/<runId>_eval.rs` (one
+`#[test]`/`it()` per criterion inside). Never split evals across additional
+files or invent other names — files with any other name are silently ignored
+by the runner and the red check will report every eval as vacuous.
+
 ## T1 evals (vitest)
 
 - Live in `crates/history-core/tests/` (shared with the T2 tier — the loop
