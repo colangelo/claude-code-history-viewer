@@ -355,3 +355,44 @@ async fn aggregates_update_on_reingest() {
         "last_message_time advanced to the newer message"
     );
 }
+
+#[tokio::test]
+async fn ingest_sanitizes_nul_characters() {
+    let hub = spawn().await;
+    // Postgres rejects U+0000 in jsonb and TEXT; real transcripts contain it
+    // (raw terminal output). The hub must sanitize instead of 500-ing.
+    let text = "terminal output\0with a NUL\0byte";
+    let batch = sample_batch(
+        hub.machine_id,
+        "sess-nul",
+        vec![msg(
+            "sess-nul",
+            "k-nul",
+            Some("u-nul"),
+            "2026-07-03T12:00:00Z",
+            text,
+        )],
+    );
+
+    let resp = post_ingest(&hub, Some(&hub.token), &batch).await;
+    assert_eq!(resp.status(), 200);
+    let body: IngestResponse = resp.json().await.expect("parse response");
+    assert_eq!(body.messages_inserted, 1);
+
+    let (search_text, raw): (String, serde_json::Value) = sqlx::query_as(
+        "SELECT search_text, raw FROM messages WHERE machine_id = $1 AND message_key = 'k-nul'",
+    )
+    .bind(hub.machine_id)
+    .fetch_one(&hub.pool)
+    .await
+    .expect("stored row");
+
+    assert!(!search_text.contains('\0'), "NUL must not reach TEXT");
+    assert!(
+        search_text.contains('\u{FFFD}'),
+        "NUL replaced, not dropped"
+    );
+    let raw_str = raw.to_string();
+    assert!(!raw_str.contains('\0'), "NUL must not reach jsonb");
+    assert!(raw_str.contains('\u{FFFD}'), "raw preserves a marker");
+}
