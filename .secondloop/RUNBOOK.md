@@ -27,10 +27,13 @@ Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4
 
 ## T1 evals (vitest)
 
-- Live in `src/test/evals/`, named `<runId>.eval.test.tsx`. Vitest 4, `jsdom`
-  environment, `globals: true`, setup file `src/test/setup.ts` (pre-mocks
+- Live in `crates/history-core/tests/` (shared with the T2 tier — the loop
+  requires one evals dir), named `<runId>.eval.test.tsx`, picked up via a
+  dedicated include glob in `vite.config.ts`. Vitest 4, `jsdom` environment,
+  `globals: true`, setup file `src/test/setup.ts` (pre-mocks
   `window.__TAURI__`, `localStorage`, `matchMedia`, `IntersectionObserver`,
-  `ResizeObserver` — don't re-mock those).
+  `ResizeObserver` — don't re-mock those). Import app code via the `@/` alias
+  (files here sit outside `src/`, so relative imports won't reach it).
 - Match the conventions of the existing tests in `src/test/*.test.tsx`:
   `@testing-library/react` (`render`/`screen`/`fireEvent`), `@testing-library/jest-dom`
   matchers, `vi.mock(...)` for service modules / Tauri invoke. Good models:
@@ -40,9 +43,29 @@ Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4
   fetch `http://127.0.0.1:3727`, never spawn the app or the binary. Test components,
   store slices, and utils directly with mocked backends, the way existing tests do.
 - Never use `.skip` / `.todo` / `.fails` — a skipped eval counts as vacuous.
-- Evals are linted by the gate (`pnpm lint` runs eslint over `src/`, typescript-eslint
-  recommended + react-hooks rules) — keep them lint-clean. `tsc --build` excludes
-  `src/test/**`, but write type-correct code anyway; vitest transpiles without checking.
+- `pnpm lint` and `tsc --build` do **not** cover the evals dir (eslint runs over
+  `src/` only) — write lint-clean, type-correct code anyway; vitest transpiles
+  without type-checking.
+
+## T2 evals (Rust integration tests)
+
+- Live in `crates/history-core/tests/`, named `<runId>_eval.rs`. Cargo
+  auto-discovers each file as an integration-test target; the loop runs it via
+  `cargo nextest --profile loop` (JUnit output, single-threaded — configured in
+  `.config/nextest.toml`).
+- **Use T2 for backend-observable acceptance criteria** (provider detection,
+  scanning, session/message parsing, `ProviderId` behavior) and T1 for
+  frontend-observable ones. Every criterion needs an executable eval in one of
+  the two tiers — there is no manual/rubric tier.
+- Test against the public API (`history_core::providers::...`). Build fixture
+  session stores in a `tempfile::TempDir` inside the test (create the provider's
+  directory layout and write fixture files), never against the host's real home
+  directory. Model fixtures on the provider unit tests inside
+  `crates/history-core/src/providers/*.rs` (e.g. `claude.rs`, `opencode.rs`).
+- Providers whose default store location is the user's home should expose (or
+  gain) a base-dir-parameterized scan function (see
+  `continue_dev::scan_projects_in`) so evals can point them at fixtures.
+- Same lint bar as all Rust code: clippy pedantic `-D warnings` + rustfmt.
 
 ## Gate expectations
 

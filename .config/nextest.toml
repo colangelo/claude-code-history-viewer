@@ -1,0 +1,10 @@
+# nextest profiles. The "loop" profile is used by the second-loop T2 eval tier
+# (.secondloop/hooks.toml): it emits JUnit XML that the loop parses to prove
+# evals fail pre-implementation and pass post-implementation.
+[profile.loop.junit]
+path = "junit.xml"
+
+# Some history-core tests mutate process-wide state (env vars like HOME), same
+# reason CI runs cargo test with --test-threads=1.
+[profile.loop]
+test-threads = 1

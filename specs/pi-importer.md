@@ -11,6 +11,11 @@ self-contained**: one new provider module + the standard registry touch-points,
 following the conventions of the most similar existing providers (`qwen.rs` for
 per-cwd JSONL stores; `codex.rs` for rollout-style event logs).
 
+Criteria 1–5 are backend-observable → **T2 (Rust integration-test) evals**;
+criterion 6 is frontend-observable → **T1 (vitest) eval**. All repo gates
+(lint, tsc, i18n:validate, vitest, cargo fmt/clippy/test) must stay green —
+that is enforced by the gate, not restated as a criterion.
+
 ### On-disk format (verified against real local data, `"version":3`)
 
 Store root: `~/.pi/agent/sessions/`. One subdirectory per working directory,
@@ -32,17 +37,18 @@ Records (one JSON object per line), all sharing `id`, `parentId`, `timestamp`
   - `role`: `"user"` or `"assistant"`.
   - `content`: array of items — `{"type":"text","text":…}`,
     `{"type":"thinking","thinking":…,"thinkingSignature":…}`, and tool-call /
-    tool-result item types (inspect the larger real sessions or write fixtures
-    from them; handle unknown item types gracefully rather than erroring).
+    tool-result item types (inspect the larger real sessions under
+    `~/.pi/agent/sessions/` or derive fixtures from them; handle unknown item
+    types gracefully rather than erroring).
   - assistant-only: `"api"`, `"provider"`, `"model"`, `"stopReason"`,
     optional `"errorMessage"`, and
     `"usage": {"input","output","cacheRead","cacheWrite","totalTokens","cost":{…}}`.
   - `timestamp` (epoch millis, inside `message`).
 
 Real sample data exists on this machine under `~/.pi/agent/sessions/` (5
-project dirs, sessions from ~200 B to ~450 KB) — use it to *derive* committed
-test fixtures, but tests must run against fixtures in the repo (mirroring how
-other providers' tests do it), never against the live home directory.
+project dirs, sessions from ~200 B to ~450 KB) — use it to *derive* fixtures,
+but evals/tests must build their fixture store in a `tempfile::TempDir` (never
+read the live home directory).
 
 ### Touch-points (mirror any recently added provider, e.g. `qwen`)
 
@@ -51,35 +57,42 @@ other providers' tests do it), never against the live home directory.
   `load_messages(path)`, `search(query, limit)`; normalize into
   `ClaudeProject`/`ClaudeSession`/`ClaudeMessage` (map Pi usage → `TokenUsage`,
   thinking items → thinking content, preserve model/stopReason metadata).
+  Expose a base-dir-parameterized scan (like `continue_dev::scan_projects_in`)
+  so tests/evals can point it at a fixture store.
 - `crates/history-core/src/providers/mod.rs` — `pub mod pi;`,
   `ProviderId::Pi` (`"pi"`, display name `"Pi"`), `parse`/`as_str`/
   `display_name`, `detect_providers()`, `scan_all_projects()`,
   `load_sessions()`/`load_messages()` dispatch. (The sync daemon and WebUI
   server pick the provider up from this registry automatically.)
-- Frontend: whatever the established per-provider registration is (provider
-  icon/label metadata, `common.provider.pi` i18n key in **all 5 locales** —
-  en, ko, ja, zh-CN, zh-TW; run `pnpm run generate:i18n-types` and
-  `pnpm run i18n:validate`).
+- Frontend: the established per-provider registration (provider id/label/badge
+  metadata used by the project tree and provider filter) plus the
+  `common.provider.pi` i18n key in **all 5 locales** (en, ko, ja, zh-CN,
+  zh-TW; run `pnpm run generate:i18n-types` and `pnpm run i18n:validate`).
 
 ## Acceptance Criteria
 
-- With a Pi session store present (fixtures or `~/.pi/agent/sessions`), the
-  app's provider list includes **Pi**, and scanning shows one project per Pi
-  session directory whose path is the real `cwd` from the session header (not
-  the escaped directory name).
-- A Pi project's session list shows each JSONL session with a human-usable
-  summary (derived from the first user text message), a correct message count
-  (only `type:"message"` records — `session`/`model_change`/
-  `thinking_level_change` records are not counted as messages), and timestamps.
-- Opening a Pi session renders user text and assistant text; assistant
-  thinking blocks appear as thinking content; assistant messages expose model
-  name and token usage (input/output/cache mapped into the normalized usage
-  fields).
-- A session whose assistant turn has `stopReason:"error"` and an
-  `errorMessage` still loads without breaking the session (the error is
-  surfaced or skipped gracefully, not a parse failure).
-- `history_core::providers::ProviderId::parse("pi")` round-trips
-  (`as_str() == "pi"`), and `scan_all_projects()` includes Pi projects — with
-  Rust unit tests over committed fixtures proving scan/load/messages behavior.
-- All existing repo gates stay green (lint, tsc, i18n:validate, vitest,
-  cargo fmt/clippy/test) — no regression to the other providers.
+1. Scanning a Pi session store (fixture directory in the store's layout) yields
+   one project per session subdirectory, and each project's real path is taken
+   from the session header's `cwd` field — not decoded from the escaped
+   directory name.
+2. Listing a Pi project's sessions yields, per JSONL file: a summary derived
+   from the first user text message, a message count that counts only
+   `type:"message"` records (header/`model_change`/`thinking_level_change`
+   records excluded), and session timestamps.
+3. Loading a Pi session's messages maps user text and assistant text to
+   normalized message content; assistant thinking items become thinking
+   content; and assistant `model` + `usage`
+   (input/output/cacheRead/cacheWrite) are mapped into the normalized message
+   metadata and token-usage fields.
+4. A session whose assistant turn has `stopReason:"error"` and an
+   `errorMessage` loads without a parse failure: the session and its other
+   messages are returned, and the failed turn carries an error indication.
+5. `history_core::providers::ProviderId::parse("pi")` returns the Pi variant,
+   round-trips through `as_str()` to `"pi"`, has display name `"Pi"`, and the
+   provider participates in the `providers/mod.rs` dispatch
+   (`load_sessions`/`load_messages` route `"pi"` to the Pi module).
+6. The frontend registers `"pi"` as a first-class provider: the provider id
+   lookup used by the UI recognizes `"pi"`, its display label resolves through
+   the `common.provider.pi` i18n key (present in all 5 locales), and a project
+   tagged `provider:"pi"` renders with the Pi label — not the default
+   provider's.

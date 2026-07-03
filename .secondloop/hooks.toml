@@ -30,9 +30,10 @@ ready_timeout_ms = 420000
 # Ordered cheap -> expensive. Mirrors the repo's CI:
 # frontend-tests.yml (lint, tsc, vitest, i18n:validate) and rust-tests.yml
 # (fmt, clippy -D warnings, tests incl. --features webui-server).
-# `pnpm exec vitest run` also executes the frozen evals in src/test/evals/.
-# cargo test replaces CI's nextest (not installed host-wide); --test-threads=1
-# is required because some Rust tests mutate env vars (HOME).
+# `pnpm exec vitest run` also executes the frozen T1 evals in src/test/evals/;
+# `cargo test -p history-core` re-executes the frozen T2 evals in
+# crates/history-core/tests/. --test-threads=1 is required because some Rust
+# tests mutate env vars (HOME).
 [gate]
 commands = [
   "pnpm lint",
@@ -42,15 +43,29 @@ commands = [
   "just rust-fmt-check",
   "just rust-lint",
   "cd src-tauri && cargo test --features webui-server -- --test-threads=1",
+  "cargo test -p history-core -- --test-threads=1",
 ]
 
-# T1: vitest component/unit evals. The dir sits inside vitest's include glob
-# (src/**/*.test.tsx), so the gate's full `vitest run` re-executes frozen evals
-# post-implementation. No Playwright in this repo -> no T2 tier.
+# Both tiers share one dir (loop requirement). Vitest picks up the .tsx eval
+# files there via an include glob in vite.config.ts; cargo auto-discovers the
+# .rs files as integration-test targets and ignores the .tsx ones.
+#
+# T1: vitest component/unit evals — for FRONTEND-observable criteria. The
+# gate's full `vitest run` re-executes frozen evals post-implementation.
 [evals.t1]
-dir = "src/test/evals"
-file_template = "src/test/evals/{runId}.eval.test.tsx"
+dir = "crates/history-core/tests"
+file_template = "crates/history-core/tests/{runId}.eval.test.tsx"
 run = "pnpm exec vitest run {file} --reporter=junit --outputFile={report}"
+
+# T2: Rust integration-test evals — for BACKEND-observable criteria (parsers,
+# providers, models in crates/history-core). Cargo auto-discovers tests/*.rs as
+# integration test targets; nextest's "loop" profile (.config/nextest.toml)
+# emits the JUnit XML the loop requires and runs single-threaded. The gate's
+# `cargo test -p history-core` re-executes frozen T2 evals post-implementation.
+[evals.t2]
+dir = "crates/history-core/tests"
+file_template = "crates/history-core/tests/{runId}_eval.rs"
+run = "n=$(basename {file} .rs); cargo nextest run -p history-core --test \"$n\" --profile loop; s=$?; cp target/nextest/loop/junit.xml {report}; exit $s"
 
 [artifacts]
 dir = ".secondloop/runs"
