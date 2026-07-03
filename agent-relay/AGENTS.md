@@ -26,6 +26,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 | `macos-setup` | dev-env | `/Users/ac/Library/Mobile Documents/com~apple~CloudDocs/_setup/macos-setup` | `agent-relay/inbox/` | `ac/macos-setup` |
 | `second-loop` | loop | `/Users/ac/_sync/dev/second-loop` | `agent-relay/inbox/` | `ac/second-loop` |
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
+| `sergente` | agent | `/Users/ac/_sync/dev/sergente` | `agent-relay/inbox/` | `ac/sergente` |
 
 All repos are local checkouts under the same user, so a sender writes to the
 recipient's path directly. Across machines, the inbox travels via Gitea (commit + push;
@@ -68,7 +69,7 @@ Get the stamp with `date '+%Y-%m-%d-%H%M'`.
 | `from_repo` | ✅ | sender repo (registry key) |
 | `from_agent` | ✅ | model + role, e.g. `Claude Opus 4.8 — infra` |
 | `to_repo` | ✅ | recipient repo (registry key) |
-| `to_agent` | ✅ | role or `any` (roles: `infra`/`ci`/`app`/`dev-env`/`loop`) |
+| `to_agent` | ✅ | role or `any` (roles: `infra`/`ci`/`app`/`dev-env`/`loop`/`agent`) |
 | `subject` | ✅ | one line |
 | `status` | ✅ | `new` → `read` → `done` |
 | `priority` |  | `low` / `normal` / `high` (default `normal`) |
