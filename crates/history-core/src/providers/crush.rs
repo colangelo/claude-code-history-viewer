@@ -324,11 +324,21 @@ fn find_crush_db(dir: &Path, results: &mut Vec<PathBuf>, max: usize, depth: usiz
             continue;
         }
         let name = path.file_name().unwrap_or_default().to_string_lossy();
+        // Media/system dirs can be cloud-backed (iCloud, Music library);
+        // read_dir/stat on their dataless items can block indefinitely and
+        // wedge the whole scan — and they never contain code checkouts.
         if name.starts_with('.')
             || name == "node_modules"
             || name == "target"
             || name == "dist"
             || name == "build"
+            || name == "Library"
+            || name == "Music"
+            || name == "Movies"
+            || name == "Pictures"
+            || name == "Photos"
+            || name == "Applications"
+            || name == "Public"
         {
             continue;
         }

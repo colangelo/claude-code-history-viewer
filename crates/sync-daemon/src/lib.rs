@@ -31,12 +31,26 @@ pub async fn run() -> anyhow::Result<()> {
     let client = ReqwestHubClient::new(&config.hub_url, &config.hub_token);
     let mut checkpoint = Checkpoint::load(&state_dir);
 
+    let mut exclude = Vec::new();
+    for id in &config.providers_exclude {
+        match history_core::providers::ProviderId::parse(id) {
+            Some(p) => exclude.push(p),
+            None => {
+                tracing::warn!(provider = %id, "providers_exclude: unknown provider id, ignoring");
+            }
+        }
+    }
+    if !exclude.is_empty() {
+        tracing::info!(?exclude, "provider scan exclusions active");
+    }
+
     loop {
         let stats = sync::run_once(
             &client,
             &identity,
             &mut checkpoint,
             config.batch_max_messages,
+            &exclude,
         )
         .await;
         tracing::info!(?stats, "sync pass complete");

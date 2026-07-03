@@ -75,7 +75,7 @@ async fn daemon_to_hub_to_search() {
     // --- run the daemon against the real hub -----------------------------
     let client = ReqwestHubClient::new(&base, &token);
     let mut cp = Checkpoint::load(&state_dir);
-    let stats = sync::run_once(&client, &identity, &mut cp, 500).await;
+    let stats = sync::run_once(&client, &identity, &mut cp, 500, &[]).await;
     assert!(
         stats.sessions_synced >= 1,
         "daemon synced the fixture session"

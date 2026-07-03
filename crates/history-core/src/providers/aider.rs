@@ -286,13 +286,23 @@ fn find_history_recursive(
             let path = entry.path();
             if path.is_dir() && !is_symlink(&path) {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                // Skip hidden dirs, node_modules, target, etc.
+                // Skip hidden dirs, node_modules, target, etc. Media/system
+                // dirs can be cloud-backed (iCloud, Music library) — stat on
+                // their dataless items can block indefinitely and wedge the
+                // whole scan — and they never contain code checkouts.
                 if !name.starts_with('.')
                     && name != "node_modules"
                     && name != "target"
                     && name != "dist"
                     && name != "build"
                     && name != ".git"
+                    && name != "Library"
+                    && name != "Music"
+                    && name != "Movies"
+                    && name != "Pictures"
+                    && name != "Photos"
+                    && name != "Applications"
+                    && name != "Public"
                 {
                     find_history_recursive(&path, results, max, depth + 1, max_depth);
                 }
