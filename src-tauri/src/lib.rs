@@ -1108,6 +1108,13 @@ fn collect_watch_paths() -> Vec<std::path::PathBuf> {
         }
     }
 
+    if let Some(pi_base) = providers::pi::get_base_path() {
+        let pi_sessions = PathBuf::from(pi_base);
+        if pi_sessions.is_dir() {
+            paths.push(pi_sessions);
+        }
+    }
+
     if let Some(qwen_base) = providers::qwen::get_base_path() {
         let qwen_projects = PathBuf::from(qwen_base);
         if qwen_projects.is_dir() {

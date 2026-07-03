@@ -23,6 +23,9 @@ pub mod opencode;
 pub mod openhands;
 pub mod openinterpreter;
 pub mod pearai;
+/// Pi coding agent (badlogic's `pi` / Pi SDK agent) — JSONL transcripts under
+/// `~/.pi/agent/sessions`.
+pub mod pi;
 /// Shared `ConversationState` parsing for the Amazon Q CLI lineage (amazon_q + kiro).
 pub mod q_conversation;
 pub mod qwen;
@@ -67,6 +70,8 @@ pub enum ProviderId {
     OpenInterpreter,
     /// `OpenHands` (classic 0.x) — `~/.openhands/sessions/<id>/events/*.json`.
     OpenHands,
+    /// Pi coding agent — JSONL transcripts under `~/.pi/agent/sessions`.
+    Pi,
     /// Qwen Code (Gemini-CLI fork) — JSONL transcripts under `~/.qwen/projects`.
     Qwen,
     Antigravity,
@@ -100,6 +105,7 @@ impl ProviderId {
             Self::OpenCode => "opencode",
             Self::OpenInterpreter => "openinterpreter",
             Self::OpenHands => "openhands",
+            Self::Pi => "pi",
             Self::Qwen => "qwen",
             Self::Antigravity => "antigravity",
             Self::Zed => "zed",
@@ -130,6 +136,7 @@ impl ProviderId {
             "opencode" => Some(Self::OpenCode),
             "openinterpreter" => Some(Self::OpenInterpreter),
             "openhands" => Some(Self::OpenHands),
+            "pi" => Some(Self::Pi),
             "qwen" => Some(Self::Qwen),
             "antigravity" => Some(Self::Antigravity),
             "zed" => Some(Self::Zed),
@@ -161,6 +168,7 @@ impl ProviderId {
             Self::OpenCode => "OpenCode",
             Self::OpenInterpreter => "Open Interpreter",
             Self::OpenHands => "OpenHands",
+            Self::Pi => "Pi",
             Self::Qwen => "Qwen Code",
             Self::Antigravity => "Antigravity",
             Self::Zed => "Zed",
@@ -213,6 +221,9 @@ pub fn detect_providers() -> Vec<ProviderInfo> {
         providers.push(info);
     }
     if let Some(info) = openhands::detect() {
+        providers.push(info);
+    }
+    if let Some(info) = pi::detect() {
         providers.push(info);
     }
     if let Some(info) = qwen::detect() {
@@ -321,6 +332,7 @@ pub fn scan_all_projects() -> Vec<ClaudeProject> {
         ProviderId::OpenInterpreter,
     );
     tag_projects(&mut out, openhands::scan_projects(), ProviderId::OpenHands);
+    tag_projects(&mut out, pi::scan_projects(), ProviderId::Pi);
     tag_projects(&mut out, qwen::scan_projects(), ProviderId::Qwen);
     tag_projects(&mut out, zed::scan_projects(), ProviderId::Zed);
     tag_projects(&mut out, trae::scan_projects(), ProviderId::Trae);
@@ -375,6 +387,7 @@ pub fn load_sessions(
             openinterpreter::load_sessions(project_path, exclude_sidechain)?
         }
         ProviderId::OpenHands => openhands::load_sessions(project_path, exclude_sidechain)?,
+        ProviderId::Pi => pi::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Qwen => qwen::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Zed => zed::load_sessions(project_path, exclude_sidechain)?,
         ProviderId::Trae => trae::load_sessions(project_path, exclude_sidechain)?,
@@ -415,6 +428,7 @@ pub fn load_messages(
         ProviderId::Llm => llm::load_messages(session_path)?,
         ProviderId::OpenInterpreter => openinterpreter::load_messages(session_path)?,
         ProviderId::OpenHands => openhands::load_messages(session_path)?,
+        ProviderId::Pi => pi::load_messages(session_path)?,
         ProviderId::Qwen => qwen::load_messages(session_path)?,
         ProviderId::Zed => zed::load_messages(session_path)?,
         ProviderId::Trae => trae::load_messages(session_path)?,
