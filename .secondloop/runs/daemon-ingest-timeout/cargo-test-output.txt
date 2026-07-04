@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.47s
+     Running tests/daemon-ingest-timeout_eval.rs (target/debug/deps/daemon_ingest_timeout_eval-c2f185b515a9b73d)
+
+running 4 tests
+test ac1_timed_out_request_returns_err_instead_of_hanging_forever ... ok
+test ac2_timed_out_requests_go_through_the_existing_retry_loop ... ok
+test ac3_deadline_aborts_hanging_ingest_and_counts_an_error ... ok
+test ac4_aborted_batch_is_not_checkpointed_and_redelivers_next_pass ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.91s
+
