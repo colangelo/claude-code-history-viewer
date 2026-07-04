@@ -11,6 +11,22 @@ pub trait HubClient {
     async fn ingest(&self, batch: &IngestBatch) -> anyhow::Result<IngestResponse>;
 }
 
+/// Default per-request timeout applied to the underlying `reqwest::Client`
+/// (overridable via `CCHV_INGEST_TIMEOUT_SECS`) — without this, a request
+/// straddling e.g. a laptop sleep cycle can block `send()` forever.
+const DEFAULT_INGEST_TIMEOUT_SECS: u64 = 30;
+
+/// Read a positive-integer-seconds env var, falling back to `default_secs`
+/// when unset or invalid.
+fn env_duration_secs(var: &str, default_secs: u64) -> Duration {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(default_secs))
+}
+
 pub struct ReqwestHubClient {
     client: reqwest::Client,
     endpoint: String,
@@ -20,8 +36,12 @@ pub struct ReqwestHubClient {
 
 impl ReqwestHubClient {
     pub fn new(hub_url: &str, token: &str) -> Self {
+        let timeout = env_duration_secs("CCHV_INGEST_TIMEOUT_SECS", DEFAULT_INGEST_TIMEOUT_SECS);
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(timeout)
+                .build()
+                .expect("building reqwest client with a timeout must not fail"),
             endpoint: format!("{}/v1/ingest", hub_url.trim_end_matches('/')),
             token: token.to_string(),
             max_retries: 5,
