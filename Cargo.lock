@@ -6360,6 +6360,8 @@ dependencies = [
  "gethostname 0.5.0",
  "history-core",
  "hub",
+ "notify",
+ "notify-debouncer-mini",
  "reqwest 0.12.20",
  "serde",
  "serde_json",

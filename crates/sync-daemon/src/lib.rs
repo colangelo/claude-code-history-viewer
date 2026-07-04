@@ -14,15 +14,19 @@ pub mod identity;
 pub mod sync;
 pub mod watcher;
 
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::checkpoint::Checkpoint;
 use crate::client::ReqwestHubClient;
 use crate::config::DaemonConfig;
 use crate::identity::Identity;
+use crate::watcher::PassThrottle;
 
 /// Run the daemon until Ctrl-C: one immediate sync pass, then a pass every
-/// `scan_interval_secs` (the safety-net rescan).
+/// `scan_interval_secs` (the safety-net rescan), plus early passes triggered
+/// by the debounced file watcher (a latency optimization only — the rescan
+/// keeps firing on its own schedule regardless of watcher activity).
 pub async fn run() -> anyhow::Result<()> {
     let config = DaemonConfig::load()?;
     let state_dir = config.resolve_state_dir()?;
@@ -45,6 +49,35 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!(?exclude, "provider scan exclusions active");
     }
 
+    let watch_roots: Vec<PathBuf> = history_core::providers::detect_providers()
+        .into_iter()
+        .filter(|info| info.is_available)
+        .filter_map(|info| {
+            let provider = history_core::providers::ProviderId::parse(&info.id)?;
+            (!exclude.contains(&provider)).then(|| PathBuf::from(info.base_path))
+        })
+        .collect();
+
+    let mut watcher_guard = None;
+    let mut watcher_rx = None;
+    match watcher::spawn(
+        &watch_roots,
+        Duration::from_secs(config.watch_debounce_secs),
+    ) {
+        Ok((guard, rx)) => {
+            watcher_guard = Some(guard);
+            watcher_rx = Some(rx);
+        }
+        Err(error) => {
+            tracing::warn!(%error, "file watcher unavailable, continuing rescan-only");
+        }
+    }
+    // Held only to keep the watcher alive for the daemon's lifetime; dropping
+    // it would stop watching.
+    let _watcher_guard = watcher_guard;
+
+    let mut throttle = PassThrottle::new(Duration::from_secs(config.watch_min_pass_gap_secs));
+
     loop {
         let stats = sync::run_once(
             &client,
@@ -55,14 +88,34 @@ pub async fn run() -> anyhow::Result<()> {
         )
         .await;
         tracing::info!(?stats, "sync pass complete");
+        throttle.note_pass(Instant::now());
 
-        tokio::select! {
-            () = tokio::time::sleep(Duration::from_secs(config.scan_interval_secs)) => {}
-            _ = tokio::signal::ctrl_c() => {
-                tracing::info!("received Ctrl-C, shutting down");
-                break;
+        // Rescan on its own schedule regardless of watcher activity; a
+        // throttled watcher trigger cuts this wait short for an early pass.
+        let rescan_deadline =
+            tokio::time::Instant::now() + Duration::from_secs(config.scan_interval_secs);
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep_until(rescan_deadline) => break,
+                Some(()) = recv_watch_signal(&mut watcher_rx), if watcher_rx.is_some() => {
+                    throttle.note_trigger(Instant::now());
+                    if throttle.pass_due(Instant::now()) {
+                        break;
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("received Ctrl-C, shutting down");
+                    return Ok(());
+                }
             }
         }
     }
-    Ok(())
+}
+
+/// Awaits the next watcher signal, or never resolves if no watcher is active.
+async fn recv_watch_signal(rx: &mut Option<tokio::sync::mpsc::Receiver<()>>) -> Option<()> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
 }
