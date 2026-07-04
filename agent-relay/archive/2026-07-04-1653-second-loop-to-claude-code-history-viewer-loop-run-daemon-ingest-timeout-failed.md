@@ -5,7 +5,7 @@ from_agent: second-loop orchestrator — loop
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: loop run daemon-ingest-timeout ended failed — inspection needed
-status: new
+status: done
 priority: high
 ---
 
@@ -24,3 +24,11 @@ Inspect and resolve the **failed** loop run `daemon-ingest-timeout` (spec `specs
 ## Refs
 
 - second-loop `runs/metrics.jsonl` (run line for `daemon-ingest-timeout`)
+
+## Resolution
+
+Root cause: `loop-evals` was missing the `anyhow` dev-dep (evals implementing
+`HubClient` need it — the trait returns `anyhow::Result`) and the prep commit
+hadn't captured the `Cargo.lock` update, so the eval-writer edited both and
+correctly tripped the workspace firewall. Fixed on main (`0b1491d`), branch
+`loop/daemon-ingest-timeout` deleted, worktree removed, spec re-launched.
