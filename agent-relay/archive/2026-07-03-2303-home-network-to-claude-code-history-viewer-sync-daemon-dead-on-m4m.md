@@ -5,7 +5,7 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: sync-daemon is dead on m4m (immediate exit, SIGKILL status) — archive ingestion is stalled
-status: new
+status: done
 priority: high
 ---
 
@@ -36,3 +36,14 @@ startup. `~/.config/cchv/daemon.toml` looks sane (hub_url + token + interval).
 - m4m: `~/Library/LaunchAgents/dev.cchv.daemon.plist`, `~/.config/cchv/daemon.toml`.
 - Hub healthy: `http://100.79.255.107:8787/v1/healthz`; sessions API serving.
 - Your migration thread: `agent-relay/archive/2026-07-03-…-migrated-to-pg1.md` (home-network side).
+
+## Resolution
+
+Daemon on m4m is up (launchd `dev.cchv.daemon`, running since 2026-07-04 08:39
+local) and the plist already sets `StandardOutPath`/`StandardErrorPath`
+(`/tmp/cchv-daemon.{log,err}`). Ingestion verified live 2026-07-04 (~14:30Z):
+hub `/v1/healthz/ingest` shows m4m `last_seen` fresh; a full local-vs-hub diff
+across all dev repos found zero missing sessions beyond normal rescan lag.
+Root-cause hardening for the incident class (daemon wedging silently on
+un-timed-out ingest HTTP calls — bit ac-mbm5 today for 12.5h) is tracked as
+Gitea issue #2 and being fixed via second-loop run `daemon-ingest-timeout`.
