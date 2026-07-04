@@ -24,6 +24,14 @@ pub struct DaemonConfig {
     /// are logged and ignored at startup.
     #[serde(default)]
     pub providers_exclude: Vec<String>,
+    /// Debounce window for the file watcher, in seconds.
+    /// STUB default (0) — the watcher feature will set the real default.
+    #[serde(default)]
+    pub watch_debounce_secs: u64,
+    /// Minimum gap between watcher-triggered sync passes, in seconds.
+    /// STUB default (0) — the watcher feature will set the real default.
+    #[serde(default)]
+    pub watch_min_pass_gap_secs: u64,
 }
 
 fn default_scan_interval() -> u64 {
@@ -56,6 +64,8 @@ impl DaemonConfig {
             batch_max_messages: default_batch_size(),
             state_dir: None,
             providers_exclude: Vec::new(),
+            watch_debounce_secs: 0,
+            watch_min_pass_gap_secs: 0,
         })
     }
 

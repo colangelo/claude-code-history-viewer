@@ -12,6 +12,7 @@ pub mod convert;
 pub mod fs_atomic;
 pub mod identity;
 pub mod sync;
+pub mod watcher;
 
 use std::time::Duration;
 
