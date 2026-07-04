@@ -78,6 +78,12 @@ pub async fn run() -> anyhow::Result<()> {
 
     let mut throttle = PassThrottle::new(Duration::from_secs(config.watch_min_pass_gap_secs));
 
+    // The safety-net rescan runs on its own fixed schedule; only firing this
+    // arm advances the deadline, so watcher-triggered early passes never
+    // postpone it.
+    let mut rescan_deadline =
+        tokio::time::Instant::now() + Duration::from_secs(config.scan_interval_secs);
+
     loop {
         let stats = sync::run_once(
             &client,
@@ -90,13 +96,24 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!(?stats, "sync pass complete");
         throttle.note_pass(Instant::now());
 
-        // Rescan on its own schedule regardless of watcher activity; a
-        // throttled watcher trigger cuts this wait short for an early pass.
-        let rescan_deadline =
-            tokio::time::Instant::now() + Duration::from_secs(config.scan_interval_secs);
         loop {
+            // A pending trigger recorded mid-gap must be rechecked once
+            // `min_gap` elapses even if no further filesystem activity
+            // arrives to prompt it — otherwise it silently waits for the
+            // next hourly rescan instead of producing the early pass.
+            let pending_deadline = throttle
+                .pending_due_at()
+                .map(tokio::time::Instant::from_std);
             tokio::select! {
-                () = tokio::time::sleep_until(rescan_deadline) => break,
+                () = tokio::time::sleep_until(rescan_deadline) => {
+                    rescan_deadline = tokio::time::Instant::now() + Duration::from_secs(config.scan_interval_secs);
+                    break;
+                }
+                () = sleep_until_opt(pending_deadline), if pending_deadline.is_some() => {
+                    if throttle.pass_due(Instant::now()) {
+                        break;
+                    }
+                }
                 Some(()) = recv_watch_signal(&mut watcher_rx), if watcher_rx.is_some() => {
                     throttle.note_trigger(Instant::now());
                     if throttle.pass_due(Instant::now()) {
@@ -116,6 +133,14 @@ pub async fn run() -> anyhow::Result<()> {
 async fn recv_watch_signal(rx: &mut Option<tokio::sync::mpsc::Receiver<()>>) -> Option<()> {
     match rx {
         Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Sleeps until `deadline`, or never resolves if there is no deadline to wait on.
+async fn sleep_until_opt(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d).await,
         None => std::future::pending().await,
     }
 }
