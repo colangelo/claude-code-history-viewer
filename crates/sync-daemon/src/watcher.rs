@@ -108,4 +108,19 @@ impl PassThrottle {
         }
         due
     }
+
+    /// The instant at which a currently pending trigger becomes due, or
+    /// `None` if there is no pending trigger. Lets a caller schedule a
+    /// wakeup so a trigger recorded mid-gap is rechecked once `min_gap`
+    /// elapses, even without another `note_trigger` call to prompt it.
+    #[must_use]
+    pub fn pending_due_at(&self) -> Option<Instant> {
+        if !self.pending {
+            return None;
+        }
+        Some(
+            self.last_pass
+                .map_or_else(Instant::now, |last| last + self.min_gap),
+        )
+    }
 }
