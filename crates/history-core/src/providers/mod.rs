@@ -186,90 +186,54 @@ pub struct ProviderInfo {
     pub is_available: bool,
 }
 
+/// Every provider's `detect` entry point, keyed by id, so callers can skip
+/// providers whose detection must not run (e.g. the sync daemon's
+/// `providers_exclude`: crush/aider detection walks the home directory, which
+/// can block indefinitely on cloud-backed dirs).
+type DetectFn = fn() -> Option<ProviderInfo>;
+const DETECTORS: &[(ProviderId, DetectFn)] = &[
+    (ProviderId::Claude, claude::detect),
+    (ProviderId::Codex, codex::detect),
+    (ProviderId::Continue, continue_dev::detect),
+    (ProviderId::PearAI, pearai::detect),
+    (ProviderId::Gemini, gemini::detect),
+    (ProviderId::Goose, goose::detect),
+    (ProviderId::Kimi, kimi::detect),
+    (ProviderId::ForgeCode, forgecode::detect),
+    (ProviderId::OpenCode, opencode::detect),
+    (ProviderId::OpenInterpreter, openinterpreter::detect),
+    (ProviderId::OpenHands, openhands::detect),
+    (ProviderId::Pi, pi::detect),
+    (ProviderId::Qwen, qwen::detect),
+    (ProviderId::Zed, zed::detect),
+    (ProviderId::Trae, trae::detect),
+    (ProviderId::Cline, cline::detect),
+    (ProviderId::Cursor, cursor::detect),
+    (ProviderId::CursorAgent, cursor_agent::detect),
+    (ProviderId::Crush, crush::detect),
+    (ProviderId::Aider, aider::detect),
+    (ProviderId::AmazonQ, amazon_q::detect),
+    (ProviderId::Antigravity, antigravity::detect),
+    (ProviderId::Codebuddy, codebuddy::detect),
+    (ProviderId::Kiro, kiro::detect),
+    (ProviderId::Llm, llm::detect),
+    (ProviderId::Copilot, copilot::detect),
+];
+
 /// Detect all available providers on the system
 pub fn detect_providers() -> Vec<ProviderInfo> {
-    let mut providers = Vec::new();
+    detect_providers_except(&[])
+}
 
-    if let Some(info) = claude::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = codex::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = continue_dev::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = pearai::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = gemini::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = goose::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = kimi::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = forgecode::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = opencode::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = openinterpreter::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = openhands::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = pi::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = qwen::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = zed::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = trae::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = cline::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = cursor::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = cursor_agent::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = crush::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = aider::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = amazon_q::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = antigravity::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = codebuddy::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = kiro::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = llm::detect() {
-        providers.push(info);
-    }
-    if let Some(info) = copilot::detect() {
-        providers.push(info);
-    }
-
-    providers
+/// Detect available providers, never running detection for the excluded ids
+/// (exclusion must happen before `detect()`, not by filtering results —
+/// an excluded provider's detection may be the very thing that hangs).
+pub fn detect_providers_except(exclude: &[ProviderId]) -> Vec<ProviderInfo> {
+    DETECTORS
+        .iter()
+        .filter(|(id, _)| !exclude.contains(id))
+        .filter_map(|(_, detect)| detect())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
