@@ -6,18 +6,17 @@
 //! the periodic rescan plus the hub's idempotent ingest (see the
 //! `history-sync-daemon` spec). A missed event is therefore never a bug, and
 //! failures here must degrade to rescan-only behavior, never crash the daemon.
-//!
-//! STUB: public surface committed ahead of implementation so acceptance evals
-//! compile against it; `spawn` currently registers nothing and never signals.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use notify::RecursiveMode;
+use notify_debouncer_mini::{new_debouncer, DebouncedEvent, Debouncer};
 use tokio::sync::mpsc;
 
 /// Keeps the underlying filesystem watcher alive; dropping it stops watching.
 pub struct WatcherGuard {
-    _private: (),
+    _debouncer: Debouncer<notify::RecommendedWatcher>,
 }
 
 /// Start watching `roots` (recursively) with the given debounce window.
@@ -30,9 +29,37 @@ pub fn spawn(
     roots: &[PathBuf],
     debounce: Duration,
 ) -> anyhow::Result<(WatcherGuard, mpsc::Receiver<()>)> {
-    let _ = (roots, debounce);
-    let (_tx, rx) = mpsc::channel(1);
-    Ok((WatcherGuard { _private: () }, rx))
+    let (tx, rx) = mpsc::channel(1);
+
+    let mut debouncer = new_debouncer(
+        debounce,
+        move |result: Result<Vec<DebouncedEvent>, notify::Error>| match result {
+            Ok(events) => {
+                if !events.is_empty() {
+                    // Bounded channel: a dropped send just means a signal is
+                    // already pending, which already means "pass soon".
+                    let _ = tx.try_send(());
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "file watcher error");
+            }
+        },
+    )
+    .map_err(|e| anyhow::anyhow!("failed to create file watcher: {e}"))?;
+
+    for root in roots {
+        if let Err(error) = debouncer.watcher().watch(root, RecursiveMode::Recursive) {
+            tracing::warn!(root = %root.display(), %error, "failed to watch root, skipping");
+        }
+    }
+
+    Ok((
+        WatcherGuard {
+            _debouncer: debouncer,
+        },
+        rx,
+    ))
 }
 
 /// Coalesces watcher signals into bounded-rate sync passes: at most one pass
@@ -40,29 +67,60 @@ pub fn spawn(
 /// burst always ends with a pass.
 pub struct PassThrottle {
     min_gap: Duration,
+    last_pass: Option<Instant>,
+    pending: bool,
 }
 
 impl PassThrottle {
     #[must_use]
     pub fn new(min_gap: Duration) -> Self {
-        Self { min_gap }
+        Self {
+            min_gap,
+            last_pass: None,
+            pending: false,
+        }
     }
 
     /// Record that a watcher signal arrived at `now`.
     pub fn note_trigger(&mut self, now: Instant) {
         let _ = now;
+        self.pending = true;
     }
 
     /// Record that a sync pass completed at `now`.
     pub fn note_pass(&mut self, now: Instant) {
-        let _ = now;
+        self.last_pass = Some(now);
     }
 
     /// Whether a pass should run at `now`: true iff a trigger is pending and
     /// at least `min_gap` has elapsed since the last pass. Consumes the
     /// pending trigger when it returns true.
     pub fn pass_due(&mut self, now: Instant) -> bool {
-        let _ = (now, self.min_gap);
-        false
+        if !self.pending {
+            return false;
+        }
+        let due = match self.last_pass {
+            None => true,
+            Some(last) => now.saturating_duration_since(last) >= self.min_gap,
+        };
+        if due {
+            self.pending = false;
+        }
+        due
+    }
+
+    /// The instant at which a currently pending trigger becomes due, or
+    /// `None` if there is no pending trigger. Lets a caller schedule a
+    /// wakeup so a trigger recorded mid-gap is rechecked once `min_gap`
+    /// elapses, even without another `note_trigger` call to prompt it.
+    #[must_use]
+    pub fn pending_due_at(&self) -> Option<Instant> {
+        if !self.pending {
+            return None;
+        }
+        Some(
+            self.last_pass
+                .map_or_else(Instant::now, |last| last + self.min_gap),
+        )
     }
 }
