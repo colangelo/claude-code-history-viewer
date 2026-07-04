@@ -49,14 +49,35 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!(?exclude, "provider scan exclusions active");
     }
 
-    let watch_roots: Vec<PathBuf> = history_core::providers::detect_providers()
-        .into_iter()
-        .filter(|info| info.is_available)
-        .filter_map(|info| {
-            let provider = history_core::providers::ProviderId::parse(&info.id)?;
-            (!exclude.contains(&provider)).then(|| PathBuf::from(info.base_path))
-        })
-        .collect();
+    // Watch-root discovery runs provider detection, which walks the
+    // filesystem and can block indefinitely on cloud-backed dirs (observed
+    // live: crush::detect wedged in an uncancellable opendir at startup, so
+    // exclusion must happen before detect() runs, and the whole discovery
+    // gets a deadline). On timeout the daemon stays rescan-only — watching
+    // is a latency optimization, never worth a hang.
+    let detect_exclude = exclude.clone();
+    let watch_roots: Vec<PathBuf> = match tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio::task::spawn_blocking(move || {
+            history_core::providers::detect_providers_except(&detect_exclude)
+        }),
+    )
+    .await
+    {
+        Ok(Ok(infos)) => infos
+            .into_iter()
+            .filter(|info| info.is_available)
+            .map(|info| PathBuf::from(info.base_path))
+            .collect(),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "provider detection for watch roots failed; continuing rescan-only");
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::warn!("provider detection for watch roots timed out; continuing rescan-only");
+            Vec::new()
+        }
+    };
 
     let mut watcher_guard = None;
     let mut watcher_rx = None;
