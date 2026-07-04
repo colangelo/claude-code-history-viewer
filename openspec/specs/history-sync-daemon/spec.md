@@ -25,7 +25,12 @@ On first run against an empty checkpoint, the daemon SHALL enumerate every suppo
 
 ### Requirement: Incremental synchronization
 
-After backfill the daemon SHALL keep the archive current incrementally. It MUST detect a changed session file (by comparing the file's size and mtime against the checkpoint), re-parse the changed session, and re-deliver its records; the hub's idempotent ingest drops already-stored messages, so re-delivery never produces duplicates. The daemon MUST run a periodic safety-net full rescan so that no change is missed. (Byte-offset "parse only the appended bytes" and file-watch-triggered syncing are future optimizations, not required for correctness given hub-side dedup; see the change's design.md.)
+After backfill the daemon SHALL keep the archive current incrementally. It MUST detect a changed session file (by comparing the file's size and mtime against the checkpoint), re-parse the changed session, and re-deliver its records; the hub's idempotent ingest drops already-stored messages, so re-delivery never produces duplicates. The daemon MUST run a periodic safety-net full rescan so that no change is missed. The daemon SHALL additionally watch the provider roots (recursive debounced file-watching, excluding providers in `providers_exclude`) and trigger an early sync pass on activity, throttled to at most one watcher-triggered pass per configured minimum gap; the watcher is a latency optimization only — it MUST degrade to rescan-only behavior on failure, and the rescan schedule MUST be independent of watcher-triggered passes. (Byte-offset "parse only the appended bytes" remains a future optimization, not required for correctness given hub-side dedup; see the change's design.md.)
+
+#### Scenario: Filesystem activity triggers an early pass
+
+- **WHEN** a watched session file changes while the daemon is idle between rescans
+- **THEN** a sync pass runs after the debounce window (subject to the minimum pass gap) instead of waiting for the next periodic rescan
 
 #### Scenario: Appended messages sync on the next pass
 
