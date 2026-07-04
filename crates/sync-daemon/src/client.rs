@@ -41,7 +41,7 @@ impl ReqwestHubClient {
             client: reqwest::Client::builder()
                 .timeout(timeout)
                 .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+                .expect("building reqwest client with a timeout must not fail"),
             endpoint: format!("{}/v1/ingest", hub_url.trim_end_matches('/')),
             token: token.to_string(),
             max_retries: 5,
