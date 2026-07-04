@@ -10,15 +10,48 @@
 //! NOTE: byte-offset "parse only appended lines" is a future perf optimization;
 //! today a changed JSONL file is re-parsed in full and re-sent (hub dedups).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use archive_protocol::{IngestBatch, MachineInfo};
+use archive_protocol::{IngestBatch, IngestResponse, MachineInfo};
 use history_core::providers::{self, ProviderId};
 
 use crate::checkpoint::{Checkpoint, FileState};
 use crate::client::HubClient;
 use crate::convert::{to_ingest_message, to_ingest_project, to_ingest_session};
 use crate::identity::Identity;
+
+/// Default hard deadline for a single `client.ingest()` call, independent of
+/// whatever the `HubClient` implementation does internally — defense in depth
+/// against a `HubClient` that hangs for any reason. Overridable via
+/// `CCHV_INGEST_DEADLINE_SECS`.
+const DEFAULT_INGEST_DEADLINE_SECS: u64 = 600;
+
+/// Read a positive-integer-seconds env var, falling back to `default_secs`
+/// when unset or invalid.
+fn env_duration_secs(var: &str, default_secs: u64) -> Duration {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(default_secs))
+}
+
+/// Run `client.ingest(batch)` under a hard deadline. A `HubClient` that never
+/// resolves (for any reason) must never wedge the sync loop — this is what
+/// bounds it regardless of the client implementation.
+async fn ingest_with_deadline<C: HubClient>(
+    client: &C,
+    batch: &IngestBatch,
+    deadline: Duration,
+) -> anyhow::Result<IngestResponse> {
+    if let Ok(result) = tokio::time::timeout(deadline, client.ingest(batch)).await {
+        result
+    } else {
+        tracing::warn!(?deadline, "ingest exceeded per-batch deadline");
+        anyhow::bail!("ingest exceeded per-batch deadline of {deadline:?}")
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct SyncStats {
@@ -172,6 +205,7 @@ async fn deliver_session<C: HubClient>(
     batch_max: usize,
     stats: &mut SyncStats,
 ) -> bool {
+    let deadline = env_duration_secs("CCHV_INGEST_DEADLINE_SECS", DEFAULT_INGEST_DEADLINE_SECS);
     if messages.is_empty() {
         let batch = IngestBatch {
             machine: machine.clone(),
@@ -179,7 +213,7 @@ async fn deliver_session<C: HubClient>(
             sessions: vec![session.clone()],
             messages: vec![],
         };
-        return match client.ingest(&batch).await {
+        return match ingest_with_deadline(client, &batch, deadline).await {
             Ok(_) => true,
             Err(e) => {
                 tracing::error!(error = %e, "ingest failed");
@@ -194,7 +228,7 @@ async fn deliver_session<C: HubClient>(
             sessions: vec![session.clone()],
             messages: chunk.to_vec(),
         };
-        match client.ingest(&batch).await {
+        match ingest_with_deadline(client, &batch, deadline).await {
             Ok(_) => stats.messages_delivered += chunk.len(),
             Err(e) => {
                 tracing::error!(error = %e, "ingest failed");
