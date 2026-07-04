@@ -3373,6 +3373,7 @@ dependencies = [
 name = "loop-evals"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "archive-protocol",
  "axum",
  "chrono",
@@ -3380,7 +3381,9 @@ dependencies = [
  "hub",
  "reqwest 0.12.20",
  "serde_json",
+ "serial_test",
  "sqlx",
+ "sync-daemon",
  "tempfile",
  "tokio",
  "uuid",
