@@ -23,7 +23,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 | `home-network` | infra | `/Users/ac/_sync/ac-devops/_projects/Infra/home-network` | `agent-relay/inbox/` | `ac/home-network` |
 | `siai` | ci | `/Users/ac/_sync/ac-devops/_projects/AI/siai` | `agent-relay/inbox/` | `ac/siai` |
 | `direction` | app | `/Users/ac/_sync/Carlo/Projects/direction` | `agent-relay/inbox/` | `ac/direction` |
-| `macos-setup` | dev-env | `/Users/ac/Library/Mobile Documents/com~apple~CloudDocs/_setup/macos-setup` | `agent-relay/inbox/` | `ac/macos-setup` |
+| `macos-setup` | dev-env | `/Users/ac/_sync/dev/macos-setup` | `agent-relay/inbox/` | `ac/macos-setup` |
 | `second-loop` | loop | `/Users/ac/_sync/dev/second-loop` | `agent-relay/inbox/` | `ac/second-loop` |
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
 | `sergente` | agent | `/Users/ac/_sync/dev/sergente` | `agent-relay/inbox/` | `ac/sergente` |
