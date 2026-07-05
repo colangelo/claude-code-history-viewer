@@ -9,7 +9,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 ## TL;DR
 
 - **At session start**, scan this repo's inbox for unhandled messages:
-  `find agent-relay/inbox -type f -name '*.md' -exec grep -l 'status: new' {} + 2>/dev/null || true` — read, act, then archive them.
+  `find agent-relay/inbox -type f -name '*.md' -exec grep -l 'status: new' {} + 2>/dev/null || true` — read, **claim** (set `status: in-progress`, commit & push), act, then archive.
 - **To message another repo's agent**, create a file in *that repo's* `agent-relay/inbox/`
   (paths in the registry below) using the filename + frontmatter conventions, then
   commit & push that repo.
@@ -71,7 +71,9 @@ Get the stamp with `date '+%Y-%m-%d-%H%M'`.
 | `to_repo` | ✅ | recipient repo (registry key) |
 | `to_agent` | ✅ | role or `any` (roles: `infra`/`ci`/`app`/`dev-env`/`loop`/`agent`) |
 | `subject` | ✅ | one line |
-| `status` | ✅ | `new` → `read` → `done` |
+| `status` | ✅ | `new` → `in-progress` → `done` |
+| `claimed_by` | ⏳ | required once `in-progress`: who is handling it, `<role>@<host>` (e.g. `infra-poller@m4m`, `interactive@ac-mbm5`) |
+| `claimed_at` | ⏳ | required once `in-progress`: claim time, ISO 8601 absolute (`date -Iseconds`) |
 | `priority` |  | `low` / `normal` / `high` (default `normal`) |
 | `thread` |  | filename of the message this replies to (omit if new topic) |
 
@@ -108,9 +110,29 @@ your conversation context.
 ## Lifecycle
 
 1. **Deliver** — sender writes the file to the recipient inbox with `status: new`, commits & pushes.
-2. **Receive** — recipient, at session start, finds `status: new` messages, reads them, sets `status: read` (optional) while working.
-3. **Handle** — when done, the recipient **moves the file to `archive/`**, sets `status: done`, and may append a `## Resolution` section (what was done + commit refs).
+2. **Claim — MANDATORY, before doing any work.** Set `status: in-progress`, add
+   `claimed_by: <role>@<host>` and `claimed_at: $(date -Iseconds)`, then **commit & push
+   immediately** (before starting the actual work). This is the lock: all scans filter on
+   `status: new`, so a claimed message is invisible to other handlers — instantly for
+   sessions on the same machine (poller vs interactive share the checkout), after the
+   next pull elsewhere. **Never start work on a message someone else has claimed** (see
+   *Stale claims* below for the one exception).
+3. **Handle** — when done, the **same party that claimed it** moves the file to
+   `archive/`, sets `status: done`, and appends a `## Resolution` section (what was done
+   + commit refs). Never leave handled work unarchived — a dangling `new` re-triggers the
+   poller every tick; a dangling `in-progress` goes stale and gets re-handled.
 4. **Reply** — write a *new* message back to the sender's inbox with `thread:` set to the original filename. (A reply is just another message.)
+
+**Stale claims.** A claim is a lease, not ownership: if `claimed_at` is older than
+**2 hours**, any handler may take over — update `claimed_by`/`claimed_at` (commit & push,
+same as a fresh claim) and note the takeover in the eventual `## Resolution`. This keeps a
+crashed session from deadlocking a message.
+
+**Cross-machine caveat.** The file-channel lock propagates via git, so two handlers on
+*different machines* still race for up to one pull cycle (~one poller tick). Same-machine
+races — the common case (poller + interactive session on one workstation) — close in
+seconds. For asks where duplicate handling is expensive, prefer the issues channel below:
+its label-swap claim is near-atomic (Gitea is a single source of truth, no sync lag).
 
 ## Issues channel (Gitea) — for trackable cross-agent asks
 
@@ -132,15 +154,24 @@ curl -s -H "Authorization: token $GITEA_TOKEN" \
   "https://gitea.cat-bluegill.ts.net/api/v1/repos/ac/<repo>/issues?state=open&labels=agent-relay"
 ```
 
+**Claim — MANDATORY, before doing any work.** Swap the label `agent-relay` →
+**`agent-working`** (and optionally comment `claimed by <role>@<host>`). Both the poller
+gate and session-start scans filter on `agent-relay` only, so the swap is the lock — and
+unlike the file channel it is near-atomic (the Gitea API is the single source of truth,
+no git-sync lag). **Never start work on an issue labelled `agent-working`** unless the
+claim is stale: no activity (comments/commits referencing it) for **2 hours** → any
+handler may take over (comment the takeover first).
+
 **Handle — never act silently.** Whatever you do, you MUST post a comment reporting
 the **conclusion *or* inconclusion** of your work (what you did + commit refs, or why
 you couldn't and what's still needed), then:
 
-- **Resolved** → remove the `agent-relay` label and **close** the issue.
-- **Inconclusive / blocked** → remove `agent-relay`, add **`agent-blocked`**, and leave
+- **Resolved** → remove `agent-working` (final label set: none of the relay labels) and
+  **close** the issue.
+- **Inconclusive / blocked** → swap `agent-working` → **`agent-blocked`**, and leave
   the issue **open** so it stays findable and isn't silently dropped.
 
-Removing `agent-relay` once processed is what stops a recurring poller from
+Removing `agent-relay` at claim time is what stops a recurring poller from
 reprocessing the same message every cycle. `agent-blocked` is the "looked at it,
 couldn't finish" flag a human or another agent can pick up.
 
@@ -158,12 +189,12 @@ n=$(curl -s -H "Authorization: token $GITEA_TOKEN" \
 local launchd/cron job on an always-on tailnet host. Standing this up is **infra's**
 (`home-network`) job. Each repo provides a `/check-relay` command for the handler.
 
-**Labels:** `agent-relay` = unprocessed inbound message; `agent-blocked` = processed
-but unresolved, needs attention.
+**Labels:** `agent-relay` = unprocessed inbound message; `agent-working` = claimed, in
+flight (the lock); `agent-blocked` = processed but unresolved, needs attention.
 
 ### Not the backlog tracker — keep relay labels separate
 
-The `agent-relay` / `agent-blocked` labels are **only** this relay channel. They are
+The `agent-relay` / `agent-working` / `agent-blocked` labels are **only** this relay channel. They are
 distinct from a repo's **backlog** issues, which use the schema-governed *scoped* labels
 (`type/ status/ horizon/ area/ needs/`) declared in that repo's `backlog-schema.toml`
 (the `gitea-backlog-tracking` taxonomy; home-network is the first live implementation).

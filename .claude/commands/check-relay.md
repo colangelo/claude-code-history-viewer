@@ -18,7 +18,11 @@ Get the token: `GITEA_TOKEN=$(printf 'protocol=https\nhost=gitea.cat-bluegill.ts
 find agent-relay/inbox -type f -name '*.md' -exec grep -l 'status: new' {} + 2>/dev/null || true
 ```
 
-For each: read it, do the work, then **archive it** — `git mv` to `agent-relay/archive/`,
+For each: read it, then **claim it BEFORE doing any work** — set `status: in-progress`,
+add `claimed_by: <role>@<host>` and `claimed_at: $(date -Iseconds)`, commit + push
+immediately. Skip messages already `in-progress` unless `claimed_at` is older than
+2 hours (stale claim — take over, update the claim fields, note it in the Resolution).
+Then do the work, and **archive it** — `git mv` to `agent-relay/archive/`,
 set `status: done`, append a `## Resolution` section (what you did + commit refs). Reply
 to the sender's inbox if a response is warranted. Commit + push to **`internal`**
 (never to the public GitHub remotes — relay content stays off GitHub).
@@ -30,7 +34,12 @@ curl -s -H "Authorization: token $GITEA_TOKEN" \
   "https://gitea.cat-bluegill.ts.net/api/v1/repos/ac/claude-code-history-viewer/issues?state=open&labels=agent-relay"
 ```
 
-For each open issue: read it (+ its comments), then do the work it asks.
+For each open issue: read it (+ its comments), then **claim it BEFORE doing any work** —
+swap the label `agent-relay` → `agent-working` (resolve label IDs via
+`GET .../repos/ac/claude-code-history-viewer/labels`, then `PUT .../issues/<N>/labels {"labels":[<agent-working id>]}`),
+optionally commenting `claimed by <role>@<host>`. Skip issues already labelled
+`agent-working` unless the claim is stale (no activity for 2+ hours — comment the
+takeover first). Then do the work it asks.
 
 **Then — ALWAYS report back. Never act silently** (an unreported issue is a lost one):
 
@@ -46,12 +55,12 @@ For each open issue: read it (+ its comments), then do the work it asks.
 2. **Update labels + state** (resolve label IDs first via
    `GET .../repos/ac/claude-code-history-viewer/labels`; use
    `PUT .../issues/<N>/labels {"labels":[<ids>]}` to set the final label set):
-   - **Resolved** → set labels to `[]` (drops `agent-relay`) and **close**:
+   - **Resolved** → set labels to `[]` (drops `agent-working`) and **close**:
      `PATCH .../issues/<N> {"state":"closed"}`.
    - **Inconclusive / blocked** → set labels to `[<agent-blocked id>]` (drops
-     `agent-relay`, adds `agent-blocked`) and leave it **open**.
+     `agent-working`, adds `agent-blocked`) and leave it **open**.
 
-Dropping `agent-relay` once processed is what stops the poller from reprocessing the
+Dropping `agent-relay` at claim time is what stops the poller from reprocessing the
 same issue forever; `agent-blocked` keeps an unresolved one findable.
 
 ## 3. Report
