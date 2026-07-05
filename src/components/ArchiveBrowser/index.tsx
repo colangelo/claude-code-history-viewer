@@ -6,12 +6,12 @@
  * the local provider tree, with provenance (machine hostname) visible.
  */
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
 import { MessageContentDisplay } from "@/components/messageRenderer";
-import { extractClaudeMessageContent } from "@/utils/messageUtils";
+import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
 import {
   hubApi,
   hubMessageToClaudeMessage,
@@ -33,6 +33,27 @@ const PAGE_SIZE = 200;
 interface OpenSession {
   ref: number | string;
   label: string;
+}
+
+/** Renders one archived message via the existing content renderers, keeping
+ * structured content (tool use/results/thinking, etc.) intact rather than
+ * collapsing it to a text preview. */
+function ArchivedMessage({ row, sessionId }: { row: HubMessage; sessionId: string }) {
+  const claudeMessage = hubMessageToClaudeMessage(row, sessionId);
+  const content = claudeMessage.content;
+
+  return (
+    <ExpandKeyProvider value={claudeMessage.uuid}>
+      {Array.isArray(content) ? (
+        <ClaudeContentArrayRenderer content={content} />
+      ) : (
+        <MessageContentDisplay
+          content={typeof content === "string" ? content : null}
+          messageType={claudeMessage.type}
+        />
+      )}
+    </ExpandKeyProvider>
+  );
 }
 
 export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
@@ -58,6 +79,13 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
+  // Monotonic request generations so a slow, stale response from a
+  // superseded project/session/search selection can never clobber the state
+  // of whatever the user has since selected.
+  const sessionsGenerationRef = useRef(0);
+  const messagesGenerationRef = useRef(0);
+  const searchGenerationRef = useRef(0);
+
   useEffect(() => {
     let cancelled = false;
     setIsLoadingProjects(true);
@@ -80,6 +108,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
 
   const openSessionRef = useCallback(
     (ref: number | string, label: string) => {
+      const generation = ++messagesGenerationRef.current;
       setOpenSession({ ref, label });
       setMessages([]);
       setTotalCount(null);
@@ -88,17 +117,28 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
       hubApi
         .sessionMessages(config, ref, { limit: PAGE_SIZE, offset: 0 })
         .then((page) => {
+          if (messagesGenerationRef.current !== generation) return;
           setMessages(page.messages);
           setTotalCount(page.totalCount);
         })
-        .catch((err) => setMessagesError(String(err)))
-        .finally(() => setIsLoadingMessages(false));
+        .catch((err) => {
+          if (messagesGenerationRef.current !== generation) return;
+          setMessagesError(String(err));
+        })
+        .finally(() => {
+          if (messagesGenerationRef.current !== generation) return;
+          setIsLoadingMessages(false);
+        });
     },
     [config]
   );
 
   const handleSelectProject = useCallback(
     (project: HubProject) => {
+      const generation = ++sessionsGenerationRef.current;
+      // Invalidate any in-flight message fetch for the previously open
+      // session — it belongs to a project we're navigating away from.
+      ++messagesGenerationRef.current;
       setSelectedProject(project);
       setOpenSession(null);
       setMessages([]);
@@ -107,16 +147,30 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
       setSessionsError(null);
       setIsLoadingSessions(true);
       hubApi
-        .listSessions(config, { project: project.name ?? project.project_path })
-        .then((list) => setSessions(list))
-        .catch((err) => setSessionsError(String(err)))
-        .finally(() => setIsLoadingSessions(false));
+        .listSessions(config, {
+          project: project.name ?? project.project_path,
+          machine: project.machine_hostname,
+          provider: project.provider,
+        })
+        .then((list) => {
+          if (sessionsGenerationRef.current !== generation) return;
+          setSessions(list);
+        })
+        .catch((err) => {
+          if (sessionsGenerationRef.current !== generation) return;
+          setSessionsError(String(err));
+        })
+        .finally(() => {
+          if (sessionsGenerationRef.current !== generation) return;
+          setIsLoadingSessions(false);
+        });
     },
     [config]
   );
 
   const handleLoadMore = useCallback(() => {
     if (!openSession) return;
+    const generation = messagesGenerationRef.current;
     setIsLoadingMessages(true);
     hubApi
       .sessionMessages(config, openSession.ref, {
@@ -124,11 +178,18 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         offset: messages.length,
       })
       .then((page) => {
+        if (messagesGenerationRef.current !== generation) return;
         setMessages((prev) => [...prev, ...page.messages]);
         setTotalCount(page.totalCount);
       })
-      .catch((err) => setMessagesError(String(err)))
-      .finally(() => setIsLoadingMessages(false));
+      .catch((err) => {
+        if (messagesGenerationRef.current !== generation) return;
+        setMessagesError(String(err));
+      })
+      .finally(() => {
+        if (messagesGenerationRef.current !== generation) return;
+        setIsLoadingMessages(false);
+      });
   }, [config, openSession, messages.length]);
 
   const handleSearchSubmit = useCallback(
@@ -136,13 +197,23 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
       e.preventDefault();
       const query = searchQuery.trim();
       if (!query) return;
+      const generation = ++searchGenerationRef.current;
       setIsSearching(true);
       setSearchError(null);
       hubApi
         .search(config, query)
-        .then((hits) => setSearchHits(hits))
-        .catch((err) => setSearchError(String(err)))
-        .finally(() => setIsSearching(false));
+        .then((hits) => {
+          if (searchGenerationRef.current !== generation) return;
+          setSearchHits(hits);
+        })
+        .catch((err) => {
+          if (searchGenerationRef.current !== generation) return;
+          setSearchError(String(err));
+        })
+        .finally(() => {
+          if (searchGenerationRef.current !== generation) return;
+          setIsSearching(false);
+        });
     },
     [config, searchQuery]
   );
@@ -166,21 +237,21 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           data-testid="archive-search-input"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={t("archiveHub.browser.searchPlaceholder")}
-          aria-label={t("archiveHub.browser.searchPlaceholder")}
+          placeholder={t("settings.archiveHub.browser.searchPlaceholder")}
+          aria-label={t("settings.archiveHub.browser.searchPlaceholder")}
           className="flex-1 h-8 rounded-md border border-border bg-background px-2 text-xs"
         />
         <button
           type="submit"
           className="h-8 shrink-0 rounded-md border border-border px-3 text-xs hover:bg-muted"
         >
-          {t("archiveHub.browser.searchButton")}
+          {t("settings.archiveHub.browser.searchButton")}
         </button>
       </form>
 
       {isSearching && (
         <p className="text-xs text-muted-foreground shrink-0">
-          {t("archiveHub.browser.search.loading")}
+          {t("settings.archiveHub.browser.search.loading")}
         </p>
       )}
       {searchError && (
@@ -188,7 +259,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
       )}
       {searchHits && searchHits.length === 0 && !isSearching && (
         <p className="text-xs text-muted-foreground shrink-0">
-          {t("archiveHub.browser.search.empty")}
+          {t("settings.archiveHub.browser.search.empty")}
         </p>
       )}
       {searchHits && searchHits.length > 0 && (
@@ -216,11 +287,11 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         {/* Projects pane */}
         <div className="w-48 shrink-0 overflow-y-auto border border-border/50 rounded-md">
           <p className="px-2 py-1.5 text-2xs font-medium text-muted-foreground">
-            {t("archiveHub.browser.projects.title")}
+            {t("settings.archiveHub.browser.projects.title")}
           </p>
           {isLoadingProjects && (
             <p className="px-2 py-1 text-xs text-muted-foreground">
-              {t("archiveHub.browser.projects.loading")}
+              {t("settings.archiveHub.browser.projects.loading")}
             </p>
           )}
           {projectsError && (
@@ -228,7 +299,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           )}
           {!isLoadingProjects && !projectsError && projects.length === 0 && (
             <p className="px-2 py-1 text-xs text-muted-foreground">
-              {t("archiveHub.browser.projects.empty")}
+              {t("settings.archiveHub.browser.projects.empty")}
             </p>
           )}
           <ul>
@@ -254,16 +325,16 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         {/* Sessions pane */}
         <div className="w-64 shrink-0 overflow-y-auto border border-border/50 rounded-md">
           <p className="px-2 py-1.5 text-2xs font-medium text-muted-foreground">
-            {t("archiveHub.browser.sessions.title")}
+            {t("settings.archiveHub.browser.sessions.title")}
           </p>
           {!selectedProject && (
             <p className="px-2 py-1 text-xs text-muted-foreground">
-              {t("archiveHub.browser.selectProject")}
+              {t("settings.archiveHub.browser.selectProject")}
             </p>
           )}
           {selectedProject && isLoadingSessions && (
             <p className="px-2 py-1 text-xs text-muted-foreground">
-              {t("archiveHub.browser.sessions.loading")}
+              {t("settings.archiveHub.browser.sessions.loading")}
             </p>
           )}
           {sessionsError && (
@@ -274,7 +345,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
             !sessionsError &&
             sessions.length === 0 && (
               <p className="px-2 py-1 text-xs text-muted-foreground">
-                {t("archiveHub.browser.sessions.empty")}
+                {t("settings.archiveHub.browser.sessions.empty")}
               </p>
             )}
           <ul>
@@ -291,7 +362,8 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                 >
                   <p className="truncate">{session.summary ?? session.session_id}</p>
                   <p className="text-2xs text-muted-foreground truncate">
-                    {session.message_count} {t("archiveHub.browser.sessions.messageCountUnit")}
+                    {session.message_count}{" "}
+                    {t("settings.archiveHub.browser.sessions.messageCountUnit")}
                     {session.last_message_time ? ` · ${session.last_message_time}` : ""}
                   </p>
                 </button>
@@ -303,16 +375,16 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         {/* Messages pane */}
         <div className="flex-1 min-w-0 overflow-y-auto border border-border/50 rounded-md">
           <p className="px-2 py-1.5 text-2xs font-medium text-muted-foreground truncate">
-            {openSession?.label ?? t("archiveHub.browser.selectSession")}
+            {openSession?.label ?? t("settings.archiveHub.browser.selectSession")}
           </p>
           {!openSession && (
             <p className="px-2 py-1 text-xs text-muted-foreground">
-              {t("archiveHub.browser.selectSession")}
+              {t("settings.archiveHub.browser.selectSession")}
             </p>
           )}
           {openSession && isLoadingMessages && messages.length === 0 && (
             <p className="px-2 py-1 text-xs text-muted-foreground">
-              {t("archiveHub.browser.messages.loading")}
+              {t("settings.archiveHub.browser.messages.loading")}
             </p>
           )}
           {messagesError && (
@@ -323,22 +395,17 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
             !messagesError &&
             messages.length === 0 && (
               <p className="px-2 py-1 text-xs text-muted-foreground">
-                {t("archiveHub.browser.messages.empty")}
+                {t("settings.archiveHub.browser.messages.empty")}
               </p>
             )}
           <div className="px-2 py-1 space-y-1">
-            {messages.map((row) => {
-              const claudeMessage = hubMessageToClaudeMessage(
-                row,
-                String(openSession?.ref ?? "")
-              );
-              const text = extractClaudeMessageContent(claudeMessage);
-              return (
-                <ExpandKeyProvider key={row.id} value={claudeMessage.uuid}>
-                  <MessageContentDisplay content={text} messageType={claudeMessage.type} />
-                </ExpandKeyProvider>
-              );
-            })}
+            {messages.map((row) => (
+              <ArchivedMessage
+                key={row.id}
+                row={row}
+                sessionId={String(openSession?.ref ?? "")}
+              />
+            ))}
           </div>
           {hasMoreMessages && (
             <div className="px-2 pb-2">
@@ -352,7 +419,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                 {isLoadingMessages ? (
                   <Loader2 className="w-3.5 h-3.5 mx-auto animate-spin" />
                 ) : (
-                  t("archiveHub.browser.messages.loadMore")
+                  t("settings.archiveHub.browser.messages.loadMore")
                 )}
               </button>
             </div>

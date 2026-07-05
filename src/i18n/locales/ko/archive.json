@@ -127,22 +127,5 @@
   "archive.create.mainSessions": "메인 세션 ({{count}})",
   "archive.create.subagentSessions": "서브에이전트 세션 ({{count}})",
   "archive.settings.link": "아카이브 관리자",
-  "archive.settings.linkDescription": "정리 전에 대화 기록을 관리하고 보존하세요",
-  "archiveHub.title": "아카이브 허브",
-  "archiveHub.browser.searchPlaceholder": "아카이브된 기록 검색...",
-  "archiveHub.browser.searchButton": "검색",
-  "archiveHub.browser.search.loading": "검색 중...",
-  "archiveHub.browser.search.empty": "검색 결과가 없습니다",
-  "archiveHub.browser.projects.title": "프로젝트",
-  "archiveHub.browser.projects.loading": "프로젝트 불러오는 중...",
-  "archiveHub.browser.projects.empty": "아직 아카이브된 프로젝트가 없습니다",
-  "archiveHub.browser.sessions.title": "세션",
-  "archiveHub.browser.sessions.loading": "세션 불러오는 중...",
-  "archiveHub.browser.sessions.empty": "이 프로젝트에 아카이브된 세션이 없습니다",
-  "archiveHub.browser.sessions.messageCountUnit": "개 메시지",
-  "archiveHub.browser.selectProject": "아카이브된 세션을 보려면 프로젝트를 선택하세요",
-  "archiveHub.browser.selectSession": "메시지를 보려면 세션을 선택하세요",
-  "archiveHub.browser.messages.loading": "메시지 불러오는 중...",
-  "archiveHub.browser.messages.empty": "이 세션에는 메시지가 없습니다",
-  "archiveHub.browser.messages.loadMore": "더 보기"
+  "archive.settings.linkDescription": "정리 전에 대화 기록을 관리하고 보존하세요"
 }
