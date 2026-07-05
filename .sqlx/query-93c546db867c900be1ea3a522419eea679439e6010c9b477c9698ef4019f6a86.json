@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT m.id            AS \"id!\",\n               m.message_key   AS \"message_key!\",\n               m.uuid,\n               m.parent_uuid,\n               m.seq           AS \"seq!\",\n               m.\"timestamp\",\n               m.type          AS message_type,\n               m.role,\n               m.model,\n               m.stop_reason,\n               m.input_tokens,\n               m.output_tokens,\n               m.cost_usd,\n               m.duration_ms,\n               m.is_sidechain  AS \"is_sidechain!\",\n               m.content\n        FROM messages m\n        WHERE m.session_id = $1\n        ORDER BY m.seq ASC, m.\"timestamp\" ASC NULLS LAST, m.id ASC\n        LIMIT $2 OFFSET $3\n        ",
+  "query": "\n        SELECT m.id            AS \"id!\",\n               m.message_key   AS \"message_key!\",\n               m.uuid,\n               m.parent_uuid,\n               m.seq           AS \"seq!\",\n               m.\"timestamp\",\n               m.type          AS message_type,\n               m.role,\n               m.model,\n               m.stop_reason,\n               m.input_tokens,\n               m.output_tokens,\n               m.cost_usd,\n               m.duration_ms,\n               m.is_sidechain  AS \"is_sidechain!\",\n               m.content\n        FROM messages m\n        WHERE m.session_id = $1\n        ORDER BY m.\"timestamp\" ASC NULLS LAST, m.seq ASC, m.id ASC\n        LIMIT $2 OFFSET $3\n        ",
   "describe": {
     "columns": [
       {
@@ -110,5 +110,5 @@
       true
     ]
   },
-  "hash": "7fee48e0f395e10055f90579e0c0b22f40d441c827edc117cc6741737bf102fd"
+  "hash": "93c546db867c900be1ea3a522419eea679439e6010c9b477c9698ef4019f6a86"
 }

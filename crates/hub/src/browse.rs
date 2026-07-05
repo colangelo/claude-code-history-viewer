@@ -3,6 +3,7 @@
 //! machine in the archive, with bounded, stable (id-tiebroken) pagination.
 
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderName;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -195,15 +196,54 @@ pub struct MessageRow {
     pub content: Option<serde_json::Value>,
 }
 
-/// `:id` is the hub's surrogate session id (from the sessions list), which is
-/// globally unique — unlike a provider session id, which can repeat per machine.
+/// Resolve a `:id` path segment to a session surrogate id: numeric values are
+/// taken as the surrogate id itself; anything else is looked up as a provider
+/// session id (the UUID carried by search hits and session rows). A provider
+/// session id can repeat across machines, so an ambiguous match is a 400
+/// listing the candidate surrogate ids.
+async fn resolve_session_ref(state: &AppState, session_ref: &str) -> Result<i64, HubError> {
+    if let Ok(pk) = session_ref.parse::<i64>() {
+        return Ok(pk);
+    }
+    let ids = sqlx::query_scalar!(
+        r#"SELECT id AS "id!" FROM sessions WHERE session_id = $1 ORDER BY id"#,
+        session_ref,
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    match ids.as_slice() {
+        [] => Err(HubError::NotFound(format!(
+            "no session with id {session_ref}"
+        ))),
+        [pk] => Ok(*pk),
+        many => Err(HubError::BadRequest(format!(
+            "session id {session_ref} is ambiguous across machines; use a numeric session id from /v1/sessions (candidates: {})",
+            many.iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// `:id` is the hub's surrogate session id (from the sessions list) or, as a
+/// convenience, an unambiguous provider session id (see [`resolve_session_ref`]).
+/// The response body is the page of messages; `X-Total-Count` carries the
+/// session's total message count so clients can detect a truncated page.
 pub async fn session_messages(
     _auth: Authenticated,
     State(state): State<AppState>,
-    Path(session_pk): Path<i64>,
+    Path(session_ref): Path<String>,
     Query(page): Query<PageParams>,
-) -> Result<Json<Vec<MessageRow>>, HubError> {
+) -> Result<([(HeaderName, String); 1], Json<Vec<MessageRow>>), HubError> {
+    let session_pk = resolve_session_ref(&state, &session_ref).await?;
     let page = Page::from(page.limit, page.offset);
+    let total = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!" FROM messages WHERE session_id = $1"#,
+        session_pk,
+    )
+    .fetch_one(&state.pool)
+    .await?;
     let rows = sqlx::query!(
         r#"
         SELECT m.id            AS "id!",
@@ -224,7 +264,7 @@ pub async fn session_messages(
                m.content
         FROM messages m
         WHERE m.session_id = $1
-        ORDER BY m.seq ASC, m."timestamp" ASC NULLS LAST, m.id ASC
+        ORDER BY m."timestamp" ASC NULLS LAST, m.seq ASC, m.id ASC
         LIMIT $2 OFFSET $3
         "#,
         session_pk,
@@ -234,26 +274,29 @@ pub async fn session_messages(
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| MessageRow {
-                id: r.id,
-                message_key: r.message_key,
-                uuid: r.uuid,
-                parent_uuid: r.parent_uuid,
-                seq: r.seq,
-                timestamp: r.timestamp,
-                message_type: r.message_type,
-                role: r.role,
-                model: r.model,
-                stop_reason: r.stop_reason,
-                input_tokens: r.input_tokens,
-                output_tokens: r.output_tokens,
-                cost_usd: r.cost_usd,
-                duration_ms: r.duration_ms,
-                is_sidechain: r.is_sidechain,
-                content: r.content,
-            })
-            .collect(),
+    Ok((
+        [(HeaderName::from_static("x-total-count"), total.to_string())],
+        Json(
+            rows.into_iter()
+                .map(|r| MessageRow {
+                    id: r.id,
+                    message_key: r.message_key,
+                    uuid: r.uuid,
+                    parent_uuid: r.parent_uuid,
+                    seq: r.seq,
+                    timestamp: r.timestamp,
+                    message_type: r.message_type,
+                    role: r.role,
+                    model: r.model,
+                    stop_reason: r.stop_reason,
+                    input_tokens: r.input_tokens,
+                    output_tokens: r.output_tokens,
+                    cost_usd: r.cost_usd,
+                    duration_ms: r.duration_ms,
+                    is_sidechain: r.is_sidechain,
+                    content: r.content,
+                })
+                .collect(),
+        ),
     ))
 }

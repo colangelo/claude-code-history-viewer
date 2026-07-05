@@ -343,6 +343,174 @@ async fn session_messages_returned_in_order() {
 }
 
 #[tokio::test]
+async fn session_messages_accepts_session_uuid() {
+    let hub = spawn().await;
+    // A realistic provider session id (UUID), not the surrogate PK.
+    let suid = Uuid::new_v4().to_string();
+    let b = batch(
+        &hub,
+        vec![proj("/tmp/a", "alpha")],
+        vec![sess(&suid, "/tmp/a")],
+        vec![
+            msg(&suid, "k0", 0, "2026-01-01T00:00:00Z", "first"),
+            msg(&suid, "k1", 1, "2026-01-01T00:01:00Z", "second"),
+        ],
+    );
+    ingest(&hub, &b).await;
+
+    let msgs = get(
+        &hub,
+        &format!("/v1/sessions/{suid}/messages"),
+        &[],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(msgs.status(), 200, "session UUID in the path must resolve");
+    let msgs: Value = msgs.json().await.unwrap();
+    assert_eq!(msgs.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn session_messages_multi_file_sessions_are_chronological() {
+    let hub = spawn().await;
+    // Subagent transcript files carry the parent session id, so one hub session
+    // can aggregate several files, each with its own seq numbering from 0.
+    // Ordering must be chronological, not seq-major (which interleaves files).
+    let suid = Uuid::new_v4().to_string();
+    let b = batch(
+        &hub,
+        vec![proj("/tmp/a", "alpha")],
+        vec![sess(&suid, "/tmp/a")],
+        vec![
+            // main transcript
+            msg(&suid, "main-0", 0, "2026-01-01T00:00:00Z", "m0"),
+            msg(&suid, "main-1", 1, "2026-01-01T00:01:00Z", "m1"),
+            msg(&suid, "main-2", 2, "2026-01-01T00:04:00Z", "m2"),
+            // subagent transcript, seq restarts at 0, runs between m1 and m2
+            msg(&suid, "agent-0", 0, "2026-01-01T00:02:00Z", "a0"),
+            msg(&suid, "agent-1", 1, "2026-01-01T00:03:00Z", "a1"),
+        ],
+    );
+    ingest(&hub, &b).await;
+
+    let msgs = get(
+        &hub,
+        &format!("/v1/sessions/{suid}/messages"),
+        &[],
+        Some(&hub.token),
+    )
+    .await;
+    let msgs: Value = msgs.json().await.unwrap();
+    let keys: Vec<&str> = msgs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["message_key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        keys,
+        vec!["main-0", "main-1", "agent-0", "agent-1", "main-2"],
+        "messages must be in chronological order across files"
+    );
+}
+
+#[tokio::test]
+async fn session_messages_reports_total_count_so_truncation_is_detectable() {
+    let hub = spawn().await;
+    let suid = Uuid::new_v4().to_string();
+    let messages: Vec<IngestMessage> = (0..3)
+        .map(|i| {
+            msg(
+                &suid,
+                &format!("k{i}"),
+                i,
+                &format!("2026-01-01T00:0{i}:00Z"),
+                "x",
+            )
+        })
+        .collect();
+    let b = batch(
+        &hub,
+        vec![proj("/tmp/a", "alpha")],
+        vec![sess(&suid, "/tmp/a")],
+        messages,
+    );
+    ingest(&hub, &b).await;
+
+    let resp = get(
+        &hub,
+        &format!("/v1/sessions/{suid}/messages"),
+        &[("limit", "2")],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let total = resp
+        .headers()
+        .get("x-total-count")
+        .expect("X-Total-Count header must be present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        total, "3",
+        "header carries the session's total message count"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body.as_array().unwrap().len(),
+        2,
+        "body is still the limited page"
+    );
+}
+
+#[tokio::test]
+async fn session_messages_unknown_session_uuid_is_404() {
+    let hub = spawn().await;
+    let resp = get(
+        &hub,
+        &format!("/v1/sessions/{}/messages", Uuid::new_v4()),
+        &[],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn session_messages_ambiguous_session_uuid_is_400_with_candidates() {
+    // Two machines (two hub handles on the shared DB) archive the same
+    // provider session id; resolving it by UUID must refuse with candidates.
+    let hub_a = spawn().await;
+    let hub_b = spawn().await;
+    let suid = Uuid::new_v4().to_string();
+    for hub in [&hub_a, &hub_b] {
+        let b = batch(
+            hub,
+            vec![proj("/tmp/a", "alpha")],
+            vec![sess(&suid, "/tmp/a")],
+            vec![msg(&suid, "k0", 0, "2026-01-01T00:00:00Z", "hello")],
+        );
+        ingest(hub, &b).await;
+    }
+
+    let resp = get(
+        &hub_a,
+        &format!("/v1/sessions/{suid}/messages"),
+        &[],
+        Some(&hub_a.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    let err = body["error"].as_str().unwrap();
+    assert!(
+        err.contains("ambiguous"),
+        "error should say ambiguous: {err}"
+    );
+}
+
+#[tokio::test]
 async fn unauthenticated_read_is_401() {
     let hub = spawn().await;
     let resp = get(&hub, "/v1/projects", &[], None).await;
