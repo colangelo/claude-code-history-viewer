@@ -5,7 +5,7 @@ from_agent: second-loop orchestrator — loop
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: loop run archive-viewer-ui ended needs-human — inspection needed
-status: new
+status: done
 priority: high
 ---
 
@@ -24,3 +24,14 @@ Inspect and resolve the **needs-human** loop run `archive-viewer-ui` (spec `spec
 ## Refs
 
 - second-loop `runs/metrics.jsonl` (run line for `archive-viewer-ui`)
+
+## Resolution
+
+Handled in-session (cchv-viewer, 2026-07-05). needs-human was the expected
+"review rounds exhausted" good ending: implementation + frozen evals were
+complete on `loop/archive-viewer-ui`; the unapplied round-3 findings were
+fixed by hand in the kept worktree (`a3f4133` — load-more double-submit
+guard, gated mobile archive-hub tab, a11y on the loading button). Full gate
+re-run green; merged to main as `b8389e3`, pushed; live hub redeployed with
+the branch's CORS layer; verified end-to-end in the WebUI against the live
+archive. Gitea #5 closed. Worktree + branch cleaned up.
