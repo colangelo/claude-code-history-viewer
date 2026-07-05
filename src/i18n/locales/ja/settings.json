@@ -527,5 +527,12 @@
   "settings.wsl.scanning": "WSLをスキャン中...",
   "settings.wsl.slowWarning": "WSLファイルアクセスはネイティブより遅い場合があります",
   "settings.wsl.defaultBadge": "デフォルト",
-  "settings.wsl.detectError": "WSLディストリビューションの検出に失敗しました"
+  "settings.wsl.detectError": "WSLディストリビューションの検出に失敗しました",
+  "settings.archiveHub.title": "アーカイブハブ",
+  "settings.archiveHub.description": "他のマシンからアーカイブされた会話履歴を閲覧・検索するには、cchv アーカイブハブに接続してください。",
+  "settings.archiveHub.url": "ハブURL",
+  "settings.archiveHub.urlPlaceholder": "http://100.x.x.x:8787",
+  "settings.archiveHub.token": "ベアラートークン",
+  "settings.archiveHub.tokenPlaceholder": "読み取り専用トークン",
+  "settings.archiveHub.save": "保存"
 }

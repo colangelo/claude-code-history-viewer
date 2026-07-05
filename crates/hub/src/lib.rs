@@ -15,11 +15,13 @@ pub mod search;
 pub mod state;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::HeaderName;
 use axum::routing::{get, post};
 use axum::Router;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
+use tower_http::cors::{Any, CorsLayer};
 
 pub use config::HubConfig;
 pub use state::AppState;
@@ -35,7 +37,21 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// Build the HTTP router for the given state.
+///
+/// CORS is wide open (any origin) because the hub is tailnet-only and every
+/// read is still gated by the bearer token; this layer only lifts the
+/// browser's same-origin block so the viewer's webview/browser contexts can
+/// call the hub directly (no viewer-side proxy — see
+/// `openspec/specs/archive-search-api/spec.md`). `X-Total-Count` must be
+/// explicitly exposed since it isn't on the CORS-safelisted response header
+/// list `fetch` allows scripts to read by default.
 pub fn router(state: AppState) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .expose_headers([HeaderName::from_static("x-total-count")]);
+
     Router::new()
         .route("/v1/healthz", get(health::healthz))
         .route("/v1/healthz/ingest", get(health::healthz_ingest))
@@ -45,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/sessions", get(browse::list_sessions))
         .route("/v1/sessions/{id}/messages", get(browse::session_messages))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(cors)
         .with_state(state)
 }
 

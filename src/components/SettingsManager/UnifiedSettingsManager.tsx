@@ -30,6 +30,7 @@ import { SettingsEditorPane } from "./editor/SettingsEditorPane";
 import { SettingsDiagnosticsPanel } from "./dialogs/SettingsDiagnosticsPanel";
 import { CustomDirectoriesSection } from "./sections/CustomDirectoriesSection";
 import { WslSection } from "./sections/WslSection";
+import { ArchiveHubSection } from "./sections/ArchiveHubSection";
 
 export type ActivePanel = "editor" | "diagnostics";
 
@@ -101,6 +102,8 @@ export const UnifiedSettingsManager: React.FC<UnifiedSettingsManagerProps> = ({
   const { t } = useTranslation();
   const { switchToArchive } = useAnalyticsNavigation();
   const serverReadOnly = useAppStore((state) => state.isServerReadOnly);
+  const archiveHubSettings = useAppStore((state) => state.userMetadata.settings);
+  const updateUserSettings = useAppStore((state) => state.updateUserSettings);
 
   // Settings state
   const [allSettings, setAllSettings] = React.useState<AllSettingsResponse | null>(null);
@@ -327,6 +330,23 @@ export const UnifiedSettingsManager: React.FC<UnifiedSettingsManagerProps> = ({
                 isExpanded={isWslExpanded}
                 onToggle={(open) => setIsWslExpanded(open)}
                 readOnly={serverReadOnly}
+              />
+            </Card>
+
+            {/* Archive Hub — cross-machine archive connection, app-level setting */}
+            <Card className="shrink-0">
+              <p className="px-3 pt-2.5 text-sm font-medium">
+                {t("settings.archiveHub.title")}
+              </p>
+              <ArchiveHubSection
+                initialUrl={archiveHubSettings.archiveHubUrl}
+                initialToken={archiveHubSettings.archiveHubToken}
+                onSave={async (url, token) => {
+                  await updateUserSettings({
+                    archiveHubUrl: url || undefined,
+                    archiveHubToken: token || undefined,
+                  });
+                }}
               />
             </Card>
 

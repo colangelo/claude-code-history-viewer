@@ -244,6 +244,14 @@ pub struct UserSettings {
     /// WSL integration settings (Windows only)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl: Option<WslSettings>,
+
+    /// Base URL of the cchv archive hub (e.g. `http://100.79.255.107:8787`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_hub_url: Option<String>,
+
+    /// Bearer token for the archive hub's read API
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive_hub_token: Option<String>,
 }
 
 #[cfg(test)]

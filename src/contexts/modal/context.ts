@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-export type ModalType = "feedback" | "folderSelector" | "globalSearch";
+export type ModalType = "feedback" | "folderSelector" | "globalSearch" | "archiveHubBrowser";
 export type FolderSelectorMode = "notFound" | "change";
 export type FeedbackType = "bug" | "feature" | "improvement" | "other";
 

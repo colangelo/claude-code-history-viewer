@@ -527,5 +527,12 @@
   "settings.wsl.scanning": "Scanning WSL...",
   "settings.wsl.slowWarning": "WSL file access may be slower than native",
   "settings.wsl.defaultBadge": "default",
-  "settings.wsl.detectError": "Failed to detect WSL distributions"
+  "settings.wsl.detectError": "Failed to detect WSL distributions",
+  "settings.archiveHub.title": "Archive Hub",
+  "settings.archiveHub.description": "Connect to a cchv archive hub to browse and search conversation history archived from other machines.",
+  "settings.archiveHub.url": "Hub URL",
+  "settings.archiveHub.urlPlaceholder": "http://100.x.x.x:8787",
+  "settings.archiveHub.token": "Bearer token",
+  "settings.archiveHub.tokenPlaceholder": "Read token",
+  "settings.archiveHub.save": "Save"
 }

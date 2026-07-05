@@ -127,5 +127,22 @@
   "archive.create.mainSessions": "主工作階段 ({{count}})",
   "archive.create.subagentSessions": "子代理工作階段 ({{count}})",
   "archive.settings.link": "封存管理器",
-  "archive.settings.linkDescription": "在清理前管理並保存您的對話歷史"
+  "archive.settings.linkDescription": "在清理前管理並保存您的對話歷史",
+  "archiveHub.title": "封存中樞",
+  "archiveHub.browser.searchPlaceholder": "搜尋封存的歷史紀錄...",
+  "archiveHub.browser.searchButton": "搜尋",
+  "archiveHub.browser.search.loading": "搜尋中...",
+  "archiveHub.browser.search.empty": "找不到符合的結果",
+  "archiveHub.browser.projects.title": "專案",
+  "archiveHub.browser.projects.loading": "正在載入專案...",
+  "archiveHub.browser.projects.empty": "尚無封存的專案",
+  "archiveHub.browser.sessions.title": "工作階段",
+  "archiveHub.browser.sessions.loading": "正在載入工作階段...",
+  "archiveHub.browser.sessions.empty": "此專案沒有封存的工作階段",
+  "archiveHub.browser.sessions.messageCountUnit": "則訊息",
+  "archiveHub.browser.selectProject": "選擇專案以檢視其封存的工作階段",
+  "archiveHub.browser.selectSession": "選擇工作階段以檢視其訊息",
+  "archiveHub.browser.messages.loading": "正在載入訊息...",
+  "archiveHub.browser.messages.empty": "此工作階段沒有訊息",
+  "archiveHub.browser.messages.loadMore": "載入更多"
 }
