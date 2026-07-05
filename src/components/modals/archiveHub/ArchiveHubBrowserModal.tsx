@@ -20,7 +20,7 @@ export const ArchiveHubBrowserModal = ({
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className="sm:max-w-6xl h-[85vh] flex flex-col p-4"
-        aria-label={t("archiveHub.title")}
+        aria-label={t("settings.archiveHub.title")}
       >
         <ArchiveBrowser config={config} />
       </DialogContent>

@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-05T14:29:02.632Z
- * 총 키 개수: 1831
+ * 생성 시간: 2026-07-05T14:53:49.535Z
+ * 총 키 개수: 1847
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (536개)
+ * settings namespace의 번역 키 (552개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -657,6 +657,22 @@ export type SettingsKeys =
   | 'folderPicker.selectedPath'
   | 'folderPicker.validating'
   | 'folderPicker.validationError'
+  | 'settings.archiveHub.browser.messages.empty'
+  | 'settings.archiveHub.browser.messages.loadMore'
+  | 'settings.archiveHub.browser.messages.loading'
+  | 'settings.archiveHub.browser.projects.empty'
+  | 'settings.archiveHub.browser.projects.loading'
+  | 'settings.archiveHub.browser.projects.title'
+  | 'settings.archiveHub.browser.search.empty'
+  | 'settings.archiveHub.browser.search.loading'
+  | 'settings.archiveHub.browser.searchButton'
+  | 'settings.archiveHub.browser.searchPlaceholder'
+  | 'settings.archiveHub.browser.selectProject'
+  | 'settings.archiveHub.browser.selectSession'
+  | 'settings.archiveHub.browser.sessions.empty'
+  | 'settings.archiveHub.browser.sessions.loading'
+  | 'settings.archiveHub.browser.sessions.messageCountUnit'
+  | 'settings.archiveHub.browser.sessions.title'
   | 'settings.archiveHub.description'
   | 'settings.archiveHub.save'
   | 'settings.archiveHub.title'
@@ -3004,6 +3020,22 @@ export type TranslationKey =
   | 'sessionPicker.empty'
   | 'sessionPicker.subtitle'
   | 'sessionPicker.title'
+  | 'settings.archiveHub.browser.messages.empty'
+  | 'settings.archiveHub.browser.messages.loadMore'
+  | 'settings.archiveHub.browser.messages.loading'
+  | 'settings.archiveHub.browser.projects.empty'
+  | 'settings.archiveHub.browser.projects.loading'
+  | 'settings.archiveHub.browser.projects.title'
+  | 'settings.archiveHub.browser.search.empty'
+  | 'settings.archiveHub.browser.search.loading'
+  | 'settings.archiveHub.browser.searchButton'
+  | 'settings.archiveHub.browser.searchPlaceholder'
+  | 'settings.archiveHub.browser.selectProject'
+  | 'settings.archiveHub.browser.selectSession'
+  | 'settings.archiveHub.browser.sessions.empty'
+  | 'settings.archiveHub.browser.sessions.loading'
+  | 'settings.archiveHub.browser.sessions.messageCountUnit'
+  | 'settings.archiveHub.browser.sessions.title'
   | 'settings.archiveHub.description'
   | 'settings.archiveHub.save'
   | 'settings.archiveHub.title'

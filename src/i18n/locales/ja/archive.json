@@ -127,22 +127,5 @@
   "archive.create.mainSessions": "メインセッション ({{count}})",
   "archive.create.subagentSessions": "サブエージェントセッション ({{count}})",
   "archive.settings.link": "アーカイブマネージャー",
-  "archive.settings.linkDescription": "クリーンアップ前に会話履歴を管理・保存",
-  "archiveHub.title": "アーカイブハブ",
-  "archiveHub.browser.searchPlaceholder": "アーカイブされた履歴を検索...",
-  "archiveHub.browser.searchButton": "検索",
-  "archiveHub.browser.search.loading": "検索中...",
-  "archiveHub.browser.search.empty": "一致する結果がありません",
-  "archiveHub.browser.projects.title": "プロジェクト",
-  "archiveHub.browser.projects.loading": "プロジェクトを読み込み中...",
-  "archiveHub.browser.projects.empty": "アーカイブされたプロジェクトはまだありません",
-  "archiveHub.browser.sessions.title": "セッション",
-  "archiveHub.browser.sessions.loading": "セッションを読み込み中...",
-  "archiveHub.browser.sessions.empty": "このプロジェクトにはアーカイブされたセッションがありません",
-  "archiveHub.browser.sessions.messageCountUnit": "件のメッセージ",
-  "archiveHub.browser.selectProject": "アーカイブされたセッションを表示するにはプロジェクトを選択してください",
-  "archiveHub.browser.selectSession": "メッセージを表示するにはセッションを選択してください",
-  "archiveHub.browser.messages.loading": "メッセージを読み込み中...",
-  "archiveHub.browser.messages.empty": "このセッションにはメッセージがありません",
-  "archiveHub.browser.messages.loadMore": "もっと見る"
+  "archive.settings.linkDescription": "クリーンアップ前に会話履歴を管理・保存"
 }

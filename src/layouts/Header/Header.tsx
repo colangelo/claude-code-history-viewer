@@ -290,7 +290,7 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
           {hasArchiveHubConfig && (
             <NavButton
               icon={Globe}
-              label={t("archiveHub.title")}
+              label={t("settings.archiveHub.title")}
               isActive={false}
               onClick={() => openModal("archiveHubBrowser")}
             />

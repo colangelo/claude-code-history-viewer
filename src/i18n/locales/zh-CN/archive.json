@@ -127,22 +127,5 @@
   "archive.create.mainSessions": "主会话 ({{count}})",
   "archive.create.subagentSessions": "子代理会话 ({{count}})",
   "archive.settings.link": "归档管理器",
-  "archive.settings.linkDescription": "在清理前管理和保存您的对话历史",
-  "archiveHub.title": "归档中心",
-  "archiveHub.browser.searchPlaceholder": "搜索归档的历史记录...",
-  "archiveHub.browser.searchButton": "搜索",
-  "archiveHub.browser.search.loading": "搜索中...",
-  "archiveHub.browser.search.empty": "未找到匹配结果",
-  "archiveHub.browser.projects.title": "项目",
-  "archiveHub.browser.projects.loading": "正在加载项目...",
-  "archiveHub.browser.projects.empty": "尚无归档项目",
-  "archiveHub.browser.sessions.title": "会话",
-  "archiveHub.browser.sessions.loading": "正在加载会话...",
-  "archiveHub.browser.sessions.empty": "此项目没有归档的会话",
-  "archiveHub.browser.sessions.messageCountUnit": "条消息",
-  "archiveHub.browser.selectProject": "选择一个项目以查看其归档的会话",
-  "archiveHub.browser.selectSession": "选择一个会话以查看其消息",
-  "archiveHub.browser.messages.loading": "正在加载消息...",
-  "archiveHub.browser.messages.empty": "此会话中没有消息",
-  "archiveHub.browser.messages.loadMore": "加载更多"
+  "archive.settings.linkDescription": "在清理前管理和保存您的对话历史"
 }
