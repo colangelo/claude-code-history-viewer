@@ -256,7 +256,16 @@ EOF
     "$DAEMON_BIN" --once || rc=$?
   rm -rf "$fake"
   unmount_snapshot
-  [ "$rc" -eq 0 ] || die "$stamp: ingest pass reported errors (exit $rc) — checkpoint left un-advanced for failed files; re-run is safe"
+  if [ "$rc" -ne 0 ]; then
+    # Per-session failures (parse errors, rejected batches) are logged by the
+    # daemon above; the rest of the snapshot ingested fine and the checkpoint
+    # didn't advance for the failed files, so a re-run is safe and cheap.
+    # In --all mode keep sweeping — one bad session must not strand the
+    # remaining snapshots.
+    FAILED_STAMPS+=("$stamp")
+    log "$stamp: ingest pass reported errors (exit $rc) — continuing; see daemon WARN lines above"
+    return
+  fi
   log "$stamp: done"
 }
 
@@ -273,6 +282,7 @@ case "$MODE" in
     [ "$DRY_RUN" = 1 ] || check_hub
     [ "$DRY_RUN" = 1 ] || resolve_daemon_bin
     prepare_identity
+    FAILED_STAMPS=()
     if [ "$MODE" = one ]; then
       list_stamps | grep -qx "$STAMP" || die "snapshot $STAMP not found on $DEVICE (see --list)"
       ingest_snapshot "$STAMP"
@@ -280,6 +290,10 @@ case "$MODE" in
       local_stamps=$(list_stamps)
       [ -n "$local_stamps" ] || die "no Time Machine snapshots found on $DEVICE"
       while IFS= read -r s; do ingest_snapshot "$s"; done <<< "$local_stamps"
+    fi
+    if [ "${#FAILED_STAMPS[@]}" -gt 0 ]; then
+      log "backfill finished WITH ERRORS in: ${FAILED_STAMPS[*]} (machine: ${MACHINE:-local}, store: $STORE) — re-run those stamps after triage; dedup makes it cheap"
+      exit 1
     fi
     log "backfill complete (machine: ${MACHINE:-local}, store: $STORE)"
     ;;
