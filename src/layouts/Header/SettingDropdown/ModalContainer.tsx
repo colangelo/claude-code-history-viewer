@@ -3,7 +3,6 @@ import {
   FolderSelectorContainer,
   GlobalSearchModalContainer,
   SessionPickerModalContainer,
-  ArchiveHubBrowserModalContainer,
 } from "@/components/modals";
 
 export const ModalContainer = () => {
@@ -13,7 +12,6 @@ export const ModalContainer = () => {
       <FeedbackModalContainer />
       <GlobalSearchModalContainer />
       <SessionPickerModalContainer />
-      <ArchiveHubBrowserModalContainer />
     </>
   );
 };
