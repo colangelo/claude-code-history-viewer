@@ -17,4 +17,4 @@
 
 - [x] 3.1 Write `docs/archive/timemachine-backfill.md` runbook: prerequisites, per-machine usage, foreign-disk recovery (ac-mbp walkthrough), coverage math + m4m's 2026-03-17..19 hole, symlink trap, troubleshooting (sandbox/mount permission, hub unreachable, binary on foreign hosts)
 - [x] 3.2 Add Justfile recipe(s) (`just tm-backfill …` passthrough to the script)
-- [ ] 3.3 Update `AGENTS.md`/`CLAUDE.md` pointer if the repo keeps an ops index (one line linking the runbook); commit granularly (crate change, script, docs)
+- [x] 3.3 Update `AGENTS.md`/`CLAUDE.md` pointer if the repo keeps an ops index (one line linking the runbook); commit granularly (crate change, script, docs)

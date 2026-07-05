@@ -19,6 +19,13 @@ tokens`) are not seeded in OpenBao yet — the always-on archive daemon keeps
 using `op read` at start until an AppRole is provisioned (12 h OIDC tokens
 don't fit launchd).
 
+## History archive ops
+
+Archive deployment: `docs/archive/deployment.md`. Recovering history older
+than Claude Code's ~30-day local retention from Time Machine backups (any
+machine, incl. retired ones via their TM disk): `docs/archive/timemachine-backfill.md`
+(`just tm-backfill --list` to see what's recoverable).
+
 ## Agent relay
 
 Cross-repo messages arrive in `agent-relay/inbox/` and as Gitea issues labelled
