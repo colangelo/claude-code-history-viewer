@@ -127,5 +127,22 @@
   "archive.create.mainSessions": "Main Sessions ({{count}})",
   "archive.create.subagentSessions": "Subagent Sessions ({{count}})",
   "archive.settings.link": "Archive Manager",
-  "archive.settings.linkDescription": "Manage and preserve your conversation history before cleanup"
+  "archive.settings.linkDescription": "Manage and preserve your conversation history before cleanup",
+  "archiveHub.title": "Archive Hub",
+  "archiveHub.browser.searchPlaceholder": "Search archived history...",
+  "archiveHub.browser.searchButton": "Search",
+  "archiveHub.browser.search.loading": "Searching...",
+  "archiveHub.browser.search.empty": "No matches found",
+  "archiveHub.browser.projects.title": "Projects",
+  "archiveHub.browser.projects.loading": "Loading projects...",
+  "archiveHub.browser.projects.empty": "No archived projects yet",
+  "archiveHub.browser.sessions.title": "Sessions",
+  "archiveHub.browser.sessions.loading": "Loading sessions...",
+  "archiveHub.browser.sessions.empty": "No archived sessions for this project",
+  "archiveHub.browser.sessions.messageCountUnit": "messages",
+  "archiveHub.browser.selectProject": "Select a project to view its archived sessions",
+  "archiveHub.browser.selectSession": "Select a session to view its messages",
+  "archiveHub.browser.messages.loading": "Loading messages...",
+  "archiveHub.browser.messages.empty": "No messages in this session",
+  "archiveHub.browser.messages.loadMore": "Load more"
 }

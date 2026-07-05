@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-03T13:47:09.756Z
- * 총 키 개수: 1824
+ * 생성 시간: 2026-07-05T14:29:02.632Z
+ * 총 키 개수: 1831
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (529개)
+ * settings namespace의 번역 키 (536개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -657,6 +657,13 @@ export type SettingsKeys =
   | 'folderPicker.selectedPath'
   | 'folderPicker.validating'
   | 'folderPicker.validationError'
+  | 'settings.archiveHub.description'
+  | 'settings.archiveHub.save'
+  | 'settings.archiveHub.title'
+  | 'settings.archiveHub.token'
+  | 'settings.archiveHub.tokenPlaceholder'
+  | 'settings.archiveHub.url'
+  | 'settings.archiveHub.urlPlaceholder'
   | 'settings.context.userWide'
   | 'settings.context.userWideDesc'
   | 'settings.customDirectories'
@@ -2997,6 +3004,13 @@ export type TranslationKey =
   | 'sessionPicker.empty'
   | 'sessionPicker.subtitle'
   | 'sessionPicker.title'
+  | 'settings.archiveHub.description'
+  | 'settings.archiveHub.save'
+  | 'settings.archiveHub.title'
+  | 'settings.archiveHub.token'
+  | 'settings.archiveHub.tokenPlaceholder'
+  | 'settings.archiveHub.url'
+  | 'settings.archiveHub.urlPlaceholder'
   | 'settings.context.userWide'
   | 'settings.context.userWideDesc'
   | 'settings.customDirectories'

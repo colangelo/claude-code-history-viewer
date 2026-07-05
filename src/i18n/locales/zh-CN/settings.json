@@ -527,5 +527,12 @@
   "settings.wsl.scanning": "正在扫描 WSL...",
   "settings.wsl.slowWarning": "WSL 文件访问可能比本地慢",
   "settings.wsl.defaultBadge": "默认",
-  "settings.wsl.detectError": "检测 WSL 发行版失败"
+  "settings.wsl.detectError": "检测 WSL 发行版失败",
+  "settings.archiveHub.title": "归档中心",
+  "settings.archiveHub.description": "连接 cchv 归档中心，浏览和搜索从其他设备归档的对话历史。",
+  "settings.archiveHub.url": "中心 URL",
+  "settings.archiveHub.urlPlaceholder": "http://100.x.x.x:8787",
+  "settings.archiveHub.token": "Bearer 令牌",
+  "settings.archiveHub.tokenPlaceholder": "只读令牌",
+  "settings.archiveHub.save": "保存"
 }

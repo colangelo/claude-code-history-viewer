@@ -10,6 +10,7 @@ interface ModalState {
   feedback: boolean;
   folderSelector: boolean;
   globalSearch: boolean;
+  archiveHubBrowser: boolean;
   folderSelectorMode: FolderSelectorMode;
   feedbackPrefill: FeedbackPrefill | null;
 }
@@ -42,6 +43,7 @@ export const ModalProvider: React.FC<{ children: ReactNode }> = ({
     feedback: false,
     folderSelector: false,
     globalSearch: false,
+    archiveHubBrowser: false,
     folderSelectorMode: "notFound",
     feedbackPrefill: null,
   });
@@ -104,6 +106,7 @@ export const ModalProvider: React.FC<{ children: ReactNode }> = ({
       feedback: false,
       folderSelector: false,
       globalSearch: false,
+      archiveHubBrowser: false,
       feedbackPrefill: null,
     }));
     requestAnimationFrame(() => {
