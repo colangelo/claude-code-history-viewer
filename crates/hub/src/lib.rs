@@ -29,10 +29,12 @@ pub static MIGRATOR: Migrator = sqlx::migrate!("../../migrations");
 
 /// Max request-body size. Axum's 2 MiB default rejects (413) real ingest
 /// batches — a single agent message with a large tool result can exceed it on
-/// its own, permanently blocking that session's sync. The hub is tailnet-only
-/// and bearer-authed, so a generous cap is safe; the daemon's
-/// `batch_max_messages` bounds typical batches well below this.
-const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+/// its own, permanently blocking that session's sync. Real transcripts hold
+/// single 40 MiB records (Time Machine backfill, EMS-Roster 2026-01), which
+/// serialize to ~2x that as an `IngestMessage` (raw + content) — hence 256 MiB.
+/// The hub is tailnet-only and bearer-authed, so a generous cap is safe; the
+/// daemon bounds typical batches by count AND bytes far below this.
+const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 /// Build the HTTP router for the given state.
 pub fn router(state: AppState) -> Router {

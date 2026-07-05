@@ -90,8 +90,25 @@ pub fn to_ingest_message(
         // MVP: `raw` is the normalized record (lossless for all modeled data).
         // Byte-exact original passthrough is a documented future enhancement.
         raw: serde_json::to_value(m).unwrap_or(serde_json::Value::Null),
-        search_text: Some(history_core::search_text::search_text(m)),
+        search_text: Some(clamped_search_text(m)),
     }
+}
+
+/// The hub truncates `search_text` to 512 KiB at ingest (tsvector limit);
+/// sending more than that is pure wire waste — a 40 MiB tool result would
+/// triple-ship (raw + content + `search_text`) and blow the body limit.
+const SEARCH_TEXT_MAX_BYTES: usize = 512 * 1024;
+
+fn clamped_search_text(m: &ClaudeMessage) -> String {
+    let mut text = history_core::search_text::search_text(m);
+    if text.len() > SEARCH_TEXT_MAX_BYTES {
+        let mut end = SEARCH_TEXT_MAX_BYTES;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
 }
 
 pub fn to_ingest_session(
