@@ -15,9 +15,12 @@ home-network. Canonical: home-network `docs/secrets-standard.md`; portable
 copy: CONTEXT `PATTERNS/secrets.md`.
 
 Repo-specific: the cchv items (`cchv - app role @ pg1`, `cchv - archive hub
-tokens`) are not seeded in OpenBao yet — the always-on archive daemon keeps
-using `op read` at start until an AppRole is provisioned (12 h OIDC tokens
-don't fit launchd).
+tokens`) are not seeded in OpenBao yet — seed + daemon AppRole requested from
+home-network 2026-07-05 (home-network#17, suggested paths `kv/infra/cchv/pg1`
+and `kv/infra/cchv/hub-tokens`). Until infra replies, the always-on archive
+daemon keeps using `op read` at start (12 h OIDC tokens don't fit launchd);
+once the AppRole lands, flip the daemon + `docs/archive/deployment.md` to
+bao-first and close the loop on #17.
 
 ## History archive ops
 
