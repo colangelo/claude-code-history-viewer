@@ -55,7 +55,27 @@ fn strip_nul_value(v: &mut serde_json::Value) {
     }
 }
 
-/// Sanitize every free-text/JSON field Postgres will reject NULs in.
+/// Postgres rejects tsvectors over 1 MiB of lexeme data, and `text_search` is
+/// GENERATED from `search_text` — an over-long message would fail the whole
+/// batch (gitea #7; hit in practice by Time Machine backfills of old sessions).
+/// Clamp well under the limit: only FTS on the tail is lost; `raw`/`content`
+/// keep full fidelity.
+const SEARCH_TEXT_MAX_BYTES: usize = 512 * 1024;
+
+/// Truncate a string in place to at most `max` bytes on a char boundary.
+fn clamp_utf8(s: &mut String, max: usize) {
+    if s.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
+/// Sanitize every free-text/JSON field Postgres will reject NULs in, and
+/// clamp `search_text` under the tsvector size limit.
 fn sanitize_batch(batch: &mut IngestBatch) {
     for s in &mut batch.sessions {
         strip_nul_opt(&mut s.summary);
@@ -66,6 +86,9 @@ fn sanitize_batch(batch: &mut IngestBatch) {
             strip_nul_value(c);
         }
         strip_nul_opt(&mut m.search_text);
+        if let Some(st) = &mut m.search_text {
+            clamp_utf8(st, SEARCH_TEXT_MAX_BYTES);
+        }
     }
 }
 
@@ -307,4 +330,66 @@ pub async fn ingest(
 
     tx.commit().await?;
     Ok(Json(resp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_utf8_respects_char_boundaries() {
+        let mut s = "abcdef".to_string();
+        clamp_utf8(&mut s, 4);
+        assert_eq!(s, "abcd");
+
+        // 'é' is 2 bytes; a cut inside it must back off to the boundary.
+        let mut s = "aéé".to_string(); // bytes: a(1) é(2) é(2) = 5
+        clamp_utf8(&mut s, 2);
+        assert_eq!(s, "a");
+
+        let mut s = "short".to_string();
+        clamp_utf8(&mut s, 100);
+        assert_eq!(s, "short");
+    }
+
+    #[test]
+    fn sanitize_clamps_oversized_search_text() {
+        let mut batch = IngestBatch {
+            machine: archive_protocol::MachineInfo {
+                machine_id: uuid::Uuid::nil(),
+                hostname: "h".into(),
+                os: None,
+            },
+            projects: vec![],
+            sessions: vec![],
+            messages: vec![archive_protocol::IngestMessage {
+                provider: "claude".into(),
+                session_id: "s".into(),
+                message_key: "k".into(),
+                uuid: None,
+                parent_uuid: None,
+                seq: 0,
+                timestamp: None,
+                message_type: None,
+                role: None,
+                model: None,
+                stop_reason: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
+                cost_usd: None,
+                duration_ms: None,
+                is_sidechain: false,
+                content: None,
+                raw: serde_json::json!({}),
+                search_text: Some("x".repeat(SEARCH_TEXT_MAX_BYTES + 1000)),
+            }],
+        };
+        sanitize_batch(&mut batch);
+        assert_eq!(
+            batch.messages[0].search_text.as_ref().unwrap().len(),
+            SEARCH_TEXT_MAX_BYTES
+        );
+    }
 }

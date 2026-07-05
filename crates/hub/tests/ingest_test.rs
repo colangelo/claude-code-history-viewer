@@ -396,3 +396,45 @@ async fn ingest_sanitizes_nul_characters() {
     assert!(!raw_str.contains('\0'), "NUL must not reach jsonb");
     assert!(raw_str.contains('\u{FFFD}'), "raw preserves a marker");
 }
+
+/// gitea #7: a message whose `search_text` exceeds Postgres's 1 MiB tsvector
+/// limit must not fail the batch — the hub clamps `search_text` at ingest
+/// (raw/content keep full fidelity). Hit in practice by Time Machine
+/// backfills of old sessions.
+#[tokio::test]
+async fn oversized_search_text_is_clamped_not_rejected() {
+    let hub = spawn().await;
+    // Distinct words so the tsvector genuinely grows with input size.
+    let mut huge = String::new();
+    for i in 0..200_000 {
+        use std::fmt::Write;
+        write!(huge, "w{i} ").unwrap();
+    }
+    assert!(
+        huge.len() > 1_048_575,
+        "test input must exceed the pg limit"
+    );
+    let batch = sample_batch(
+        hub.machine_id,
+        "sess-huge",
+        vec![msg(
+            "sess-huge",
+            "k-huge",
+            Some("u-huge"),
+            "2026-03-27T17:17:03Z",
+            &huge,
+        )],
+    );
+    let res = post_ingest(&hub, Some(&hub.token), &batch).await;
+    assert_eq!(res.status(), 200, "oversized message must ingest");
+
+    let stored: String = sqlx::query_scalar(
+        "SELECT search_text FROM messages WHERE machine_id = $1 AND message_key = 'k-huge'",
+    )
+    .bind(hub.machine_id)
+    .fetch_one(&hub.pool)
+    .await
+    .expect("row must exist");
+    assert!(stored.len() <= 512 * 1024, "search_text must be clamped");
+    assert!(stored.starts_with("w0 w1 "), "head of text preserved");
+}
