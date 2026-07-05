@@ -1,3 +1,19 @@
+## MODIFIED Requirements
+
+### Requirement: At-least-once batched delivery
+
+The daemon SHALL deliver records to the hub in bounded batches and retry failed deliveries with backoff. Batches MUST be bounded both by message count and by serialized payload size (default 8 MiB, overridable via `CCHV_INGEST_MAX_BATCH_BYTES`), so that sessions containing very large messages do not produce requests exceeding the hub's body limit; a single message larger than the byte budget is still sent (alone), leaving the hub as the arbiter of a hard reject. Because the hub ingest is idempotent, re-delivery of an already-stored batch MUST NOT create duplicates. The daemon MUST advance a file's checkpoint only after the hub acknowledges the corresponding batch.
+
+#### Scenario: Transient hub failure is retried and eventually delivered
+
+- **WHEN** an ingest POST fails transiently and then succeeds on retry
+- **THEN** the records are stored exactly once and the checkpoint advances only after the successful acknowledgement
+
+#### Scenario: Session with huge messages is split under the body limit
+
+- **WHEN** a session's messages would serialize to more than the byte budget in a single count-bounded batch
+- **THEN** the daemon splits delivery into multiple smaller batches, none exceeding the byte budget (except a lone oversized message), and every message is delivered
+
 ## ADDED Requirements
 
 ### Requirement: Single-pass execution mode

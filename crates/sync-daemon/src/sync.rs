@@ -193,6 +193,48 @@ pub async fn run_once<C: HubClient>(
     stats
 }
 
+/// Byte budget for one ingest batch's messages. The hub caps request bodies
+/// (32 MiB today); count-only chunking blew through it on old sessions with
+/// huge messages (413s during Time Machine backfills). Overridable via
+/// `CCHV_INGEST_MAX_BATCH_BYTES`.
+const DEFAULT_MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
+
+fn max_batch_bytes() -> usize {
+    std::env::var("CCHV_INGEST_MAX_BATCH_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&b| b > 0)
+        .unwrap_or(DEFAULT_MAX_BATCH_BYTES)
+}
+
+/// Split messages into chunks bounded by count AND serialized size. A single
+/// message over the byte budget still ships (alone) — the hub is the arbiter
+/// of a hard reject, and hiding it here would silently drop history.
+fn chunk_by_count_and_bytes(
+    messages: &[archive_protocol::IngestMessage],
+    batch_max: usize,
+    byte_max: usize,
+) -> Vec<&[archive_protocol::IngestMessage]> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    let mut bytes = 0usize;
+    for (i, m) in messages.iter().enumerate() {
+        let size = serde_json::to_vec(m).map(|v| v.len()).unwrap_or(0);
+        let count_full = i - start >= batch_max.max(1);
+        let bytes_full = i > start && bytes + size > byte_max;
+        if count_full || bytes_full {
+            chunks.push(&messages[start..i]);
+            start = i;
+            bytes = 0;
+        }
+        bytes += size;
+    }
+    if start < messages.len() {
+        chunks.push(&messages[start..]);
+    }
+    chunks
+}
+
 /// Deliver one session's project+session+messages, chunked. Returns false if any
 /// batch failed (so the caller leaves the checkpoint un-advanced and retries
 /// next pass — the hub dedups the re-delivery).
@@ -221,7 +263,7 @@ async fn deliver_session<C: HubClient>(
             }
         };
     }
-    for chunk in messages.chunks(batch_max.max(1)) {
+    for chunk in chunk_by_count_and_bytes(messages, batch_max, max_batch_bytes()) {
         let batch = IngestBatch {
             machine: machine.clone(),
             projects: vec![project.clone()],
@@ -237,4 +279,68 @@ async fn deliver_session<C: HubClient>(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(text_len: usize) -> archive_protocol::IngestMessage {
+        archive_protocol::IngestMessage {
+            provider: "claude".into(),
+            session_id: "s".into(),
+            message_key: "k".into(),
+            uuid: None,
+            parent_uuid: None,
+            seq: 0,
+            timestamp: None,
+            message_type: None,
+            role: None,
+            model: None,
+            stop_reason: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_creation_tokens: None,
+            cache_read_tokens: None,
+            cost_usd: None,
+            duration_ms: None,
+            is_sidechain: false,
+            content: None,
+            raw: serde_json::json!({}),
+            search_text: Some("x".repeat(text_len)),
+        }
+    }
+
+    #[test]
+    fn chunks_respect_count_cap() {
+        let msgs: Vec<_> = (0..10).map(|_| msg(10)).collect();
+        let chunks = chunk_by_count_and_bytes(&msgs, 4, usize::MAX);
+        let sizes: Vec<usize> = chunks.iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![4, 4, 2]);
+    }
+
+    #[test]
+    fn chunks_respect_byte_cap() {
+        // Each message serializes to a bit over 1000 bytes; cap at ~2 messages.
+        let msgs: Vec<_> = (0..5).map(|_| msg(1000)).collect();
+        let per = serde_json::to_vec(&msgs[0]).unwrap().len();
+        let chunks = chunk_by_count_and_bytes(&msgs, 500, per * 2);
+        assert!(chunks.iter().all(|c| c.len() <= 2), "chunks: {chunks:?}");
+        let total: usize = chunks.iter().map(|c| c.len()).sum();
+        assert_eq!(total, 5, "no message lost");
+    }
+
+    #[test]
+    fn oversized_single_message_ships_alone() {
+        let msgs = vec![msg(10), msg(100_000), msg(10)];
+        let chunks = chunk_by_count_and_bytes(&msgs, 500, 1000);
+        let sizes: Vec<usize> = chunks.iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn empty_input_yields_no_chunks() {
+        let chunks = chunk_by_count_and_bytes(&[], 500, 1000);
+        assert!(chunks.is_empty());
+    }
 }
