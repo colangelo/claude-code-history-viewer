@@ -11,6 +11,8 @@ pub enum HubError {
     Unauthorized,
     /// Well-formed request that failed validation.
     BadRequest(String),
+    /// The referenced resource does not exist.
+    NotFound(String),
     /// A database error.
     Db(sqlx::Error),
     /// Any other server-side failure.
@@ -22,6 +24,7 @@ impl std::fmt::Display for HubError {
         match self {
             HubError::Unauthorized => write!(f, "unauthorized"),
             HubError::BadRequest(m) => write!(f, "bad request: {m}"),
+            HubError::NotFound(m) => write!(f, "not found: {m}"),
             HubError::Db(e) => write!(f, "database error: {e}"),
             HubError::Internal(m) => write!(f, "internal error: {m}"),
         }
@@ -41,6 +44,7 @@ impl IntoResponse for HubError {
         let (status, message) = match &self {
             HubError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             HubError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            HubError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             HubError::Db(e) => {
                 // Log the detail server-side; do not leak it to the client.
                 tracing::error!(error = %e, "database error");
