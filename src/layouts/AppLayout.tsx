@@ -10,6 +10,7 @@ import {
   Coins,
   Settings,
   Archive,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LoadingSpinner } from "@/components/ui/loading";
@@ -25,11 +26,13 @@ import { SimpleUpdateManager } from "@/components/SimpleUpdateManager";
 import { SettingsManager } from "@/components/SettingsManager";
 import { SessionBoard } from "@/components/SessionBoard/SessionBoard";
 import { ArchiveManager } from "@/components/ArchiveManager";
+import { ArchiveBrowser } from "@/components/ArchiveBrowser";
 import { BottomTabBar } from "@/components/mobile/BottomTabBar";
 import { MobileNavigatorSheet } from "@/components/mobile/MobileNavigatorSheet";
 import { Header } from "@/layouts/Header/Header";
 import { ModalContainer } from "@/layouts/Header/SettingDropdown/ModalContainer";
 import { DesktopOnly } from "@/contexts/platform";
+import { useAppStore } from "@/store/useAppStore";
 import {
   AppErrorType,
   type ClaudeMessage,
@@ -202,6 +205,18 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
     liveStatusMessage,
   } = props;
 
+  // Archive hub connection, derived from settings — memoized so ArchiveBrowser
+  // (whose effects key off object identity) doesn't refetch on every render.
+  const archiveHubUrl = useAppStore((s) => s.userMetadata.settings.archiveHubUrl);
+  const archiveHubToken = useAppStore((s) => s.userMetadata.settings.archiveHubToken);
+  const hubConfig = React.useMemo(
+    () =>
+      archiveHubUrl && archiveHubToken
+        ? { url: archiveHubUrl, token: archiveHubToken }
+        : null,
+    [archiveHubUrl, archiveHubToken]
+  );
+
   // Error State
   if (error && error.type !== AppErrorType.CLAUDE_FOLDER_NOT_FOUND) {
     return (
@@ -363,12 +378,15 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
               computed.isSettingsView ||
               computed.isBoardView ||
               computed.isArchiveView ||
+              computed.isArchiveHubView ||
               (isViewingGlobalStats && !computed.isSettingsView)) && (
               <div className="px-4 py-3 md:px-6 md:py-4 border-b border-border/50 bg-card/50">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center">
                     {isViewingGlobalStats ? (
                       <Database className="w-5 h-5 text-accent" />
+                    ) : computed.isArchiveHubView ? (
+                      <Globe className="w-5 h-5 text-accent" />
                     ) : computed.isArchiveView ? (
                       <Archive className="w-5 h-5 text-accent" />
                     ) : computed.isSettingsView ? (
@@ -387,7 +405,9 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
                     <h2 className="text-sm font-semibold text-foreground">
                       {isViewingGlobalStats
                         ? t("analytics.globalOverview")
-                        : computed.isArchiveView
+                        : computed.isArchiveHubView
+                          ? t("settings.archiveHub.title")
+                          : computed.isArchiveView
                           ? t("archive.title")
                           : computed.isSettingsView
                             ? t("settingsManager.title")
@@ -402,7 +422,9 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
                     <p className="text-xs text-muted-foreground">
                       {isViewingGlobalStats
                         ? globalOverviewDescription
-                        : computed.isArchiveView
+                        : computed.isArchiveHubView
+                          ? t("settings.archiveHub.description")
+                          : computed.isArchiveView
                           ? t("archive.description")
                           : computed.isSettingsView
                             ? t("settingsManager.description")
@@ -473,7 +495,11 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
 
             {/* Content */}
             <div className="flex-1 overflow-hidden">
-              {computed.isArchiveView ? (
+              {computed.isArchiveHubView && hubConfig ? (
+                <div className="h-full flex flex-col p-3 md:p-6">
+                  <ArchiveBrowser config={hubConfig} />
+                </div>
+              ) : computed.isArchiveView ? (
                 <div className="h-full flex flex-col p-3 md:p-6">
                   <ArchiveManager
                     className="flex-1 min-h-0"
@@ -692,9 +718,13 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
                 case "archive":
                   analyticsActions.switchToArchive();
                   break;
+                case "archiveHub":
+                  analyticsActions.switchToArchiveHub();
+                  break;
               }
             }}
             hasProject={!!selectedProject}
+            showArchiveHub={!!hubConfig}
           />
         )}
 

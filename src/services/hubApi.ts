@@ -110,31 +110,80 @@ export interface HubPageOptions {
   offset?: number;
 }
 
-const NOT_IMPLEMENTED = "hubApi: not implemented";
+/** Strip a trailing slash so `${base}${path}` never doubles one up. */
+function baseUrl(config: HubConfig): string {
+  return config.url.replace(/\/+$/, "");
+}
+
+/** Build a hub URL, only setting query params that are actually provided. */
+function hubUrl(
+  config: HubConfig,
+  path: string,
+  params?: Record<string, string | number | undefined>
+): URL {
+  const url = new URL(`${baseUrl(config)}${path}`);
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) {
+        url.searchParams.set(key, String(value));
+      }
+    }
+  }
+  return url;
+}
+
+function authHeaders(config: HubConfig): HeadersInit {
+  return { Authorization: `Bearer ${config.token}` };
+}
+
+async function hubGet(url: URL, config: HubConfig): Promise<Response> {
+  const res = await fetch(url.toString(), { headers: authHeaders(config) });
+  if (!res.ok) {
+    throw new Error(`hub request to ${url.pathname} failed: ${res.status}`);
+  }
+  return res;
+}
 
 export const hubApi = {
   /** `GET /v1/healthz` — no auth; true iff the hub is reachable and healthy. */
-  async healthz(_config: HubConfig): Promise<boolean> {
-    void _config;
-    throw new Error(NOT_IMPLEMENTED);
+  async healthz(config: HubConfig): Promise<boolean> {
+    try {
+      const res = await fetch(`${baseUrl(config)}/v1/healthz`);
+      return res.ok;
+    } catch {
+      return false;
+    }
   },
 
   /** `GET /v1/projects` — archived projects across machines. */
   async listProjects(
-    _config: HubConfig,
-    _options?: HubListOptions
+    config: HubConfig,
+    options?: HubListOptions
   ): Promise<HubProject[]> {
-    void [_config, _options];
-    throw new Error(NOT_IMPLEMENTED);
+    const url = hubUrl(config, "/v1/projects", {
+      machine: options?.machine,
+      provider: options?.provider,
+      limit: options?.limit,
+      offset: options?.offset,
+    });
+    const res = await hubGet(url, config);
+    return (await res.json()) as HubProject[];
   },
 
   /** `GET /v1/sessions` — archived sessions, filterable by project/machine/provider. */
   async listSessions(
-    _config: HubConfig,
-    _options?: HubListOptions
+    config: HubConfig,
+    options?: HubListOptions
   ): Promise<HubSession[]> {
-    void [_config, _options];
-    throw new Error(NOT_IMPLEMENTED);
+    const url = hubUrl(config, "/v1/sessions", {
+      machine: options?.machine,
+      provider: options?.provider,
+      project: options?.project,
+      limit: options?.limit,
+      offset: options?.offset,
+    });
+    const res = await hubGet(url, config);
+    return (await res.json()) as HubSession[];
   },
 
   /**
@@ -143,33 +192,106 @@ export const hubApi = {
    * session UUID. `totalCount` comes from the `X-Total-Count` response header.
    */
   async sessionMessages(
-    _config: HubConfig,
-    _ref: number | string,
-    _options?: HubPageOptions
+    config: HubConfig,
+    ref: number | string,
+    options?: HubPageOptions
   ): Promise<HubMessagePage> {
-    void [_config, _ref, _options];
-    throw new Error(NOT_IMPLEMENTED);
+    const url = hubUrl(config, `/v1/sessions/${encodeURIComponent(String(ref))}/messages`, {
+      limit: options?.limit,
+      offset: options?.offset,
+    });
+    const res = await hubGet(url, config);
+    const messages = (await res.json()) as HubMessage[];
+    const totalCountHeader = res.headers.get("x-total-count");
+    const totalCount = totalCountHeader !== null ? Number(totalCountHeader) : messages.length;
+    return { messages, totalCount };
   },
 
   /** `GET /v1/search` — Postgres websearch full-text query over the archive. */
   async search(
-    _config: HubConfig,
-    _query: string,
-    _options?: HubSearchOptions
+    config: HubConfig,
+    query: string,
+    options?: HubSearchOptions
   ): Promise<HubSearchHit[]> {
-    void [_config, _query, _options];
-    throw new Error(NOT_IMPLEMENTED);
+    const url = hubUrl(config, "/v1/search", {
+      q: query,
+      machine: options?.machine,
+      provider: options?.provider,
+      project: options?.project,
+      from: options?.from,
+      to: options?.to,
+      limit: options?.limit,
+      offset: options?.offset,
+    });
+    const res = await hubGet(url, config);
+    const data = (await res.json()) as HubSearchHit[] | { results: HubSearchHit[] };
+    return Array.isArray(data) ? data : data.results;
   },
 };
 
 /**
  * Map a hub message row to the viewer's `ClaudeMessage` union so archived
- * messages render through the existing message renderers.
+ * messages render through the existing message renderers. Unknown/missing
+ * `message_type` values degrade to a renderable "system" message rather than
+ * throwing, since the archive can carry provider message shapes this viewer
+ * doesn't otherwise recognize.
  */
 export function hubMessageToClaudeMessage(
-  _row: HubMessage,
-  _sessionId: string
+  row: HubMessage,
+  sessionId: string
 ): ClaudeMessage {
-  void [_row, _sessionId];
-  throw new Error(NOT_IMPLEMENTED);
+  const uuid = row.uuid ?? row.message_key;
+  const timestamp = row.timestamp ?? "";
+  const content = (row.content ?? "") as ClaudeMessage["content"];
+  const isSidechain = row.is_sidechain;
+  const kind = row.message_type ?? row.role;
+
+  if (kind === "user") {
+    return {
+      type: "user",
+      role: "user",
+      uuid,
+      sessionId,
+      timestamp,
+      isSidechain,
+      content,
+    };
+  }
+
+  if (kind === "assistant") {
+    return {
+      type: "assistant",
+      role: "assistant",
+      uuid,
+      sessionId,
+      timestamp,
+      isSidechain,
+      content,
+      model: row.model ?? undefined,
+      stop_reason: (row.stop_reason ?? undefined) as
+        | "tool_use"
+        | "end_turn"
+        | "max_tokens"
+        | "stop_sequence"
+        | "pause_turn"
+        | "refusal"
+        | undefined,
+      usage: {
+        input_tokens: row.input_tokens ?? undefined,
+        output_tokens: row.output_tokens ?? undefined,
+      },
+      costUSD: row.cost_usd ?? undefined,
+      durationMs: row.duration_ms ?? undefined,
+    };
+  }
+
+  return {
+    type: "system",
+    subtype: row.message_type ?? "unknown",
+    uuid,
+    sessionId,
+    timestamp,
+    isSidechain,
+    content,
+  };
 }

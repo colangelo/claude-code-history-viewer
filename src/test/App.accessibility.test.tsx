@@ -68,6 +68,7 @@ const { useAppStoreMock } = vi.hoisted(() => {
     setSelectedSession: vi.fn(),
     fontScale: 100,
     highContrast: false,
+    userMetadata: { version: 1, sessions: {}, projects: {}, settings: {} },
   };
 
   type StoreMock = {
