@@ -1,0 +1,25 @@
+# cchv backlog schema — extends the gitea-backlog skill's general defaults
+# with project specifics. The declared vocabulary governs the agent-drivable
+# Gitea Issues backlog on `ac/claude-code-history-viewer` (scoped labels).
+#
+# "Done" = closed, never a label. `agent-relay`/`agent-blocked` are a SEPARATE
+# channel (declared `reserved` in the general schema) — a backlog item is never
+# `agent-relay`. See agent-relay/AGENTS.md.
+#
+# NOTE: upstream-facing work (contributions to jhlee0409/claude-code-history-
+# viewer) is tracked here with `area/upstream`; the public GitHub issue tracker
+# is upstream's, not ours.
+
+[schema]
+version = 1
+extends = "general"      # type/ status/ horizon/ priority/ needs/ + reserved come from general
+
+# Single-user repo: horizon/ is enough — drop the priority axis.
+[scopes.priority]
+enabled = false
+
+# cchv subsystems (non-exclusive; an issue may span several).
+[scopes.area]
+exclusive = false
+color = "#1d76db"
+values = ["hub", "daemon", "providers", "viewer", "secondloop", "upstream", "ci", "docs", "meta"]
