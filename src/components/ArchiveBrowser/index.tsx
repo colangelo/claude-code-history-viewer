@@ -169,7 +169,9 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
   );
 
   const handleLoadMore = useCallback(() => {
-    if (!openSession) return;
+    // Guard against double-submit: a second click can land before React
+    // applies the button's disabled state, duplicating a page.
+    if (!openSession || isLoadingMessages) return;
     const generation = messagesGenerationRef.current;
     setIsLoadingMessages(true);
     hubApi
@@ -190,7 +192,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         if (messagesGenerationRef.current !== generation) return;
         setIsLoadingMessages(false);
       });
-  }, [config, openSession, messages.length]);
+  }, [config, openSession, messages.length, isLoadingMessages]);
 
   const handleSearchSubmit = useCallback(
     (e: FormEvent) => {
@@ -417,7 +419,13 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                 className="w-full rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
               >
                 {isLoadingMessages ? (
-                  <Loader2 className="w-3.5 h-3.5 mx-auto animate-spin" />
+                  <>
+                    <Loader2
+                      className="w-3.5 h-3.5 mx-auto animate-spin"
+                      aria-hidden="true"
+                    />
+                    <span className="sr-only">{t("common.loading")}</span>
+                  </>
                 ) : (
                   t("settings.archiveHub.browser.messages.loadMore")
                 )}
