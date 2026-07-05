@@ -118,8 +118,8 @@ your conversation context.
    next pull elsewhere. **Never start work on a message someone else has claimed** (see
    *Stale claims* below for the one exception).
 3. **Handle** — when done, the **same party that claimed it** moves the file to
-   `archive/`, sets `status: done`, and appends a `## Resolution` section (what was done
-   + commit refs). Never leave handled work unarchived — a dangling `new` re-triggers the
+   `archive/`, sets `status: done`, and appends a `## Resolution` section (what was
+   done + commit refs). Never leave handled work unarchived — a dangling `new` re-triggers the
    poller every tick; a dangling `in-progress` goes stale and gets re-handled.
 4. **Reply** — write a *new* message back to the sender's inbox with `thread:` set to the original filename. (A reply is just another message.)
 
