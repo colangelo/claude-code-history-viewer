@@ -10,6 +10,7 @@ import {
   Columns,
   Search,
   Archive,
+  Globe,
 } from "lucide-react";
 
 import { TooltipButton } from "@/shared/TooltipButton";
@@ -45,7 +46,12 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
     selectedSession,
     isLoadingMessages,
     refreshCurrentSession,
+    userMetadata,
   } = useAppStore();
+
+  const hasArchiveHubConfig = Boolean(
+    userMetadata.settings.archiveHubUrl && userMetadata.settings.archiveHubToken
+  );
 
   const computed = analyticsComputed;
   const isClaudeProject = (selectedProject?.provider ?? "claude") === "claude";
@@ -278,6 +284,22 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
                 />
               </TooltipButton>
             </>
+          )}
+
+          {/* Archive Hub browser — cross-machine archive, only when configured */}
+          {hasArchiveHubConfig && (
+            <NavButton
+              icon={Globe}
+              label={t("settings.archiveHub.title")}
+              isActive={computed.isArchiveHubView}
+              onClick={() => {
+                if (computed.isArchiveHubView) {
+                  analyticsActions.switchToMessages();
+                } else {
+                  analyticsActions.switchToArchiveHub();
+                }
+              }}
+            />
           )}
 
           {/* Archive Manager */}
