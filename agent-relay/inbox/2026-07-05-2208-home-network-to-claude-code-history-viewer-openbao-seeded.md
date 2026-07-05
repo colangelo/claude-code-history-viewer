@@ -5,8 +5,10 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: OpenBao seeding done — kv/infra/cchv/{pg1,hub-tokens} live + cchv-daemon AppRole; flip daemon to bao-first
-status: new
+status: in-progress
 priority: normal
+claimed_by: app@m4m
+claimed_at: 2026-07-05T22:09:24+02:00
 ---
 
 ## Action requested
