@@ -23,31 +23,78 @@ use crate::config::DaemonConfig;
 use crate::identity::Identity;
 use crate::watcher::PassThrottle;
 
+/// Everything a sync pass needs, resolved from config + state dir.
+struct Runtime {
+    config: DaemonConfig,
+    identity: Identity,
+    client: ReqwestHubClient,
+    checkpoint: Checkpoint,
+    exclude: Vec<history_core::providers::ProviderId>,
+}
+
+impl Runtime {
+    fn init() -> anyhow::Result<Self> {
+        let config = DaemonConfig::load()?;
+        let state_dir = config.resolve_state_dir()?;
+        let identity = Identity::load_or_create(&state_dir)?;
+        tracing::info!(machine_id = %identity.machine_id, hostname = %identity.hostname, "daemon identity");
+
+        let client = ReqwestHubClient::new(&config.hub_url, &config.hub_token);
+        let checkpoint = Checkpoint::load(&state_dir);
+
+        let mut exclude = Vec::new();
+        for id in &config.providers_exclude {
+            match history_core::providers::ProviderId::parse(id) {
+                Some(p) => exclude.push(p),
+                None => {
+                    tracing::warn!(provider = %id, "providers_exclude: unknown provider id, ignoring");
+                }
+            }
+        }
+        if !exclude.is_empty() {
+            tracing::info!(?exclude, "provider scan exclusions active");
+        }
+        Ok(Runtime {
+            config,
+            identity,
+            client,
+            checkpoint,
+            exclude,
+        })
+    }
+}
+
+/// Run exactly one sync pass and exit — no watcher, no rescan loop. Errors in
+/// the pass surface as a non-zero exit so backfill scripts can gate on it.
+pub async fn run_once() -> anyhow::Result<()> {
+    let mut rt = Runtime::init()?;
+    let stats = sync::run_once(
+        &rt.client,
+        &rt.identity,
+        &mut rt.checkpoint,
+        rt.config.batch_max_messages,
+        &rt.exclude,
+    )
+    .await;
+    tracing::info!(?stats, "sync pass complete");
+    if stats.errors > 0 {
+        anyhow::bail!("sync pass completed with {} error(s)", stats.errors);
+    }
+    Ok(())
+}
+
 /// Run the daemon until Ctrl-C: one immediate sync pass, then a pass every
 /// `scan_interval_secs` (the safety-net rescan), plus early passes triggered
 /// by the debounced file watcher (a latency optimization only — the rescan
 /// keeps firing on its own schedule regardless of watcher activity).
 pub async fn run() -> anyhow::Result<()> {
-    let config = DaemonConfig::load()?;
-    let state_dir = config.resolve_state_dir()?;
-    let identity = Identity::load_or_create(&state_dir)?;
-    tracing::info!(machine_id = %identity.machine_id, hostname = %identity.hostname, "daemon identity");
-
-    let client = ReqwestHubClient::new(&config.hub_url, &config.hub_token);
-    let mut checkpoint = Checkpoint::load(&state_dir);
-
-    let mut exclude = Vec::new();
-    for id in &config.providers_exclude {
-        match history_core::providers::ProviderId::parse(id) {
-            Some(p) => exclude.push(p),
-            None => {
-                tracing::warn!(provider = %id, "providers_exclude: unknown provider id, ignoring");
-            }
-        }
-    }
-    if !exclude.is_empty() {
-        tracing::info!(?exclude, "provider scan exclusions active");
-    }
+    let Runtime {
+        config,
+        identity,
+        client,
+        mut checkpoint,
+        exclude,
+    } = Runtime::init()?;
 
     // Watch-root discovery runs provider detection, which walks the
     // filesystem and can block indefinitely on cloud-backed dirs (observed

@@ -10,5 +10,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    sync_daemon::run().await
+    let mut once = false;
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--once" => once = true,
+            other => anyhow::bail!("unknown argument: {other} (supported: --once)"),
+        }
+    }
+
+    if once {
+        sync_daemon::run_once().await
+    } else {
+        sync_daemon::run().await
+    }
 }
