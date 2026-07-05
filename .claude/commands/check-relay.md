@@ -12,6 +12,15 @@ Repo slug: `ac/claude-code-history-viewer`. Gitea API base:
 `https://gitea.cat-bluegill.ts.net/api/v1`.
 Get the token: `GITEA_TOKEN=$(printf 'protocol=https\nhost=gitea.cat-bluegill.ts.net\n\n' | git credential fill | awk -F= '/^password/{print $2}')`.
 
+## 0. Which handler are you? — $ARGUMENTS
+
+If the arguments above contain `--headless`, you are the **unattended poller**: you MUST
+skip file messages with `handle_via: interactive` and issues labelled `relay-interactive`
+— leave them completely untouched (don't claim, don't comment); they are reserved for a
+session with the user present. Without `--headless` you are an attended session and may
+handle everything (but leave `handle_via: poller` messages to the poller unless the user
+says otherwise).
+
 ## 1. File inbox
 
 ```bash

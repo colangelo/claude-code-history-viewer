@@ -76,6 +76,7 @@ Get the stamp with `date '+%Y-%m-%d-%H%M'`.
 | `claimed_at` | ⏳ | required once `in-progress`: claim time, ISO 8601 absolute (`date -Iseconds`) |
 | `priority` |  | `low` / `normal` / `high` (default `normal`) |
 | `thread` |  | filename of the message this replies to (omit if new topic) |
+| `handle_via` |  | which handler may claim it: `any` (default) / `interactive` / `poller`. `interactive` = **attended session only** — the background poller must skip it; set this when the user should see the exchange live (decisions, anything they'll ask the fg agent about). `poller` = background handler only — attended sessions leave it unless the user explicitly asks. |
 
 ## Body structure
 
@@ -110,7 +111,10 @@ your conversation context.
 ## Lifecycle
 
 1. **Deliver** — sender writes the file to the recipient inbox with `status: new`, commits & pushes.
-2. **Claim — MANDATORY, before doing any work.** Set `status: in-progress`, add
+2. **Claim — MANDATORY, before doing any work.** Eligibility comes first: respect
+   `handle_via` — a headless/poller handler **never claims** a `handle_via: interactive`
+   message (leave it untouched, don't even mark it), and an attended session leaves
+   `handle_via: poller` ones to the poller unless the user asks. Then set `status: in-progress`, add
    `claimed_by: <role>@<host>` and `claimed_at: $(date -Iseconds)`, then **commit & push
    immediately** (before starting the actual work). This is the lock: all scans filter on
    `status: new`, so a claimed message is invisible to other handlers — instantly for
@@ -145,6 +149,9 @@ whether you want a durable tracked item (issue) or a lightweight note (file).
 
 - Title prefixed `[from <repo>]`; body = the ask + self-contained context + refs.
 - **Label it `agent-relay`.** Routing is the repo itself (one agent per repo).
+- Should it only be handled with the user present? **Also label it `relay-interactive`**
+  (the issues-channel analogue of `handle_via: interactive`): the poller's gate excludes
+  it, so only an attended session will claim it.
 
 **Receive** — your inbox is `state=open` issues labelled `agent-relay` in your repo
 (scan at session start; a poller may also drive it — see below):
@@ -181,16 +188,23 @@ plain `curl`, no LLM):
 
 ```bash
 n=$(curl -s -H "Authorization: token $GITEA_TOKEN" \
-  "https://gitea.cat-bluegill.ts.net/api/v1/repos/ac/<repo>/issues?state=open&labels=agent-relay" | jq length)
-[ "$n" -gt 0 ] && claude -p --bare "/check-relay" --allowedTools "Bash,Read,Edit"
+  "https://gitea.cat-bluegill.ts.net/api/v1/repos/ac/<repo>/issues?state=open&labels=agent-relay" \
+  | jq '[.[] | select(([.labels[]?.name] | index("relay-interactive")) | not)] | length')
+[ "$n" -gt 0 ] && claude -p "/check-relay --headless" --allowedTools "Bash,Read,Edit"
 ```
+
+The `--headless` argument tells `/check-relay` it is running unattended, so it must skip
+`handle_via: interactive` files and `relay-interactive` issues (both jq filter above and
+handler check exist — the gate keeps the poller from waking for nothing, the handler
+check keeps a mixed batch safe).
 
 `/loop` is in-session only and cloud Routines can't reach the tailnet Gitea, so use a
 local launchd/cron job on an always-on tailnet host. Standing this up is **infra's**
 (`home-network`) job. Each repo provides a `/check-relay` command for the handler.
 
 **Labels:** `agent-relay` = unprocessed inbound message; `agent-working` = claimed, in
-flight (the lock); `agent-blocked` = processed but unresolved, needs attention.
+flight (the lock); `agent-blocked` = processed but unresolved, needs attention;
+`relay-interactive` = attended-session-only (additive to `agent-relay`; the poller skips it).
 
 ### Not the backlog tracker — keep relay labels separate
 
