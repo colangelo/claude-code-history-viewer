@@ -15,6 +15,7 @@ pub mod search;
 pub mod state;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::header::AUTHORIZATION;
 use axum::http::HeaderName;
 use axum::routing::{get, post};
 use axum::Router;
@@ -38,18 +39,22 @@ const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 /// Build the HTTP router for the given state.
 ///
-/// CORS is wide open (any origin) because the hub is tailnet-only and every
-/// read is still gated by the bearer token; this layer only lifts the
-/// browser's same-origin block so the viewer's webview/browser contexts can
-/// call the hub directly (no viewer-side proxy — see
-/// `openspec/specs/archive-search-api/spec.md`). `X-Total-Count` must be
-/// explicitly exposed since it isn't on the CORS-safelisted response header
-/// list `fetch` allows scripts to read by default.
+/// CORS allows any origin because the hub is tailnet-only and every read is
+/// still gated by the bearer token; this layer only lifts the browser's
+/// same-origin block so the viewer's webview/browser contexts can call the
+/// hub directly (no viewer-side proxy — see
+/// `openspec/specs/archive-search-api/spec.md`). `Authorization` must be
+/// listed explicitly: per the Fetch spec a wildcard
+/// `Access-Control-Allow-Headers: *` does NOT cover `Authorization`, so a
+/// browser preflight would otherwise still block the bearer-token requests
+/// this API requires. `X-Total-Count` similarly must be explicitly exposed
+/// since it isn't on the CORS-safelisted response header list `fetch` allows
+/// scripts to read by default.
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any)
+        .allow_headers([AUTHORIZATION])
         .expose_headers([HeaderName::from_static("x-total-count")]);
 
     Router::new()

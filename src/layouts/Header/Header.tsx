@@ -291,8 +291,14 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
             <NavButton
               icon={Globe}
               label={t("settings.archiveHub.title")}
-              isActive={false}
-              onClick={() => openModal("archiveHubBrowser")}
+              isActive={computed.isArchiveHubView}
+              onClick={() => {
+                if (computed.isArchiveHubView) {
+                  analyticsActions.switchToMessages();
+                } else {
+                  analyticsActions.switchToArchiveHub();
+                }
+              }}
             />
           )}
 
