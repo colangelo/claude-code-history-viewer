@@ -194,3 +194,10 @@ rust-tools-install:
     cargo install cargo-audit --locked
     cargo install cargo-insta --locked
     cargo install cargo-mutants --locked
+
+# ===== History Archive =====
+
+# Recover expired history from Time Machine backups into the hub archive
+# (see docs/archive/timemachine-backfill.md). Ex: just tm-backfill --list
+tm-backfill *ARGS:
+    ./scripts/tm-backfill.sh {{ARGS}}
