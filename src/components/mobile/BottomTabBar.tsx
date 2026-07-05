@@ -1,4 +1,4 @@
-import { FolderOpen, MessageSquare, Columns, BarChart3, SlidersHorizontal } from "lucide-react";
+import { FolderOpen, MessageSquare, Columns, BarChart3, SlidersHorizontal, Globe } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
@@ -8,6 +8,8 @@ interface BottomTabBarProps {
   onSwitchView: (view: string) => void;
   hasProject: boolean;
   isViewingGlobalStats?: boolean;
+  /** Show the cross-machine archive hub tab (only when hub settings are configured). */
+  showArchiveHub?: boolean;
 }
 
 const tabs = [
@@ -18,8 +20,18 @@ const tabs = [
   { id: "settings", icon: SlidersHorizontal, labelKey: "common.mobile.tab.settings", alwaysEnabled: true },
 ] as const;
 
-export function BottomTabBar({ activeView, onOpenSidebar, onSwitchView, hasProject, isViewingGlobalStats }: BottomTabBarProps) {
+const archiveHubTab = {
+  id: "archiveHub",
+  icon: Globe,
+  labelKey: "settings.archiveHub.title",
+  alwaysEnabled: true,
+} as const;
+
+export function BottomTabBar({ activeView, onOpenSidebar, onSwitchView, hasProject, isViewingGlobalStats, showArchiveHub }: BottomTabBarProps) {
   const { t } = useTranslation();
+  const visibleTabs = showArchiveHub
+    ? [...tabs.slice(0, 4), archiveHubTab, tabs[4]]
+    : [...tabs];
 
   return (
     <nav
@@ -27,7 +39,7 @@ export function BottomTabBar({ activeView, onOpenSidebar, onSwitchView, hasProje
       aria-label="Navigation"
     >
       <div className="flex items-center justify-around h-full px-2">
-        {tabs.map(({ id, icon: Icon, labelKey, alwaysEnabled }) => {
+        {visibleTabs.map(({ id, icon: Icon, labelKey, alwaysEnabled }) => {
           const isActive =
             id === "projects"
               ? false

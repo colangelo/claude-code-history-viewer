@@ -718,9 +718,13 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
                 case "archive":
                   analyticsActions.switchToArchive();
                   break;
+                case "archiveHub":
+                  analyticsActions.switchToArchiveHub();
+                  break;
               }
             }}
             hasProject={!!selectedProject}
+            showArchiveHub={!!hubConfig}
           />
         )}
 
