@@ -33,7 +33,8 @@ file never deletes anything from the hub.
 > on pg1; the credential lands in 1Password as `cchv - app role @ pg1` (vault
 > `AC-DevOps`); connect via `pg1.cat-bluegill.ts.net:5432`. You inherit pg1's
 > nightly logical backups + PVE backups for free. Never put literal passwords or
-> tokens in `hub.toml` committed anywhere — resolve them at deploy time (`op read`).
+> tokens in `hub.toml` committed anywhere — they are resolved **at launch, bao-first**
+> by `scripts/cchv-launch.sh` (see "House deployment: bao-first secrets" below).
 > The generic instructions below are for deployments outside the homelab. The
 > local dev/test setup (CI `postgres` service containers, `cchv_archive_dev/_test`)
 > is unaffected — the shared-backend rule concerns the *deployed* archive only.
@@ -110,8 +111,9 @@ access. TLS termination (e.g. behind a reverse proxy) can be added later.
 > follow the tailnet-services pattern (`~/_sync/dev/CONTEXT/PATTERNS/
 > tailnet-services.md` — ideally Tailscale Serve `:443` for in-tailnet TLS), and
 > wire a Gatus uptime check on `/v1/healthz` per `PATTERNS/monitoring.md` when it
-> goes live. Bearer tokens live in 1Password (vault `AC-DevOps`), referenced by
-> item title, never committed.
+> goes live. Bearer tokens live in OpenBao (`kv/infra/cchv/hub-tokens`; 1Password
+> vault `AC-DevOps` is the human vault + fallback), referenced by path/item title,
+> never committed.
 
 ## 3. Sync daemon (on each machine)
 
@@ -159,6 +161,38 @@ launchctl load ~/Library/LaunchAgents/dev.cchv.daemon.plist
 
 On Linux, a systemd **user** service with `Environment=DAEMON_CONFIG=…` works
 equivalently.
+
+## 3b. House deployment: bao-first secrets (`scripts/cchv-launch.sh`)
+
+> Homelab machines don't run the binaries directly. Both launchd jobs run
+> `~/.local/bin/cchv-launch <daemon|hub>` (installed from
+> `scripts/cchv-launch.sh`), which resolves secrets at every launch —
+> **OpenBao-first, `op read` fallback, last-known-good cache as the floor** —
+> renders a 0600 runtime config, and `exec`s the binary. Flipped 2026-07-05
+> (home-network #17); live on m4m for both `dev.cchv.daemon` and `dev.cchv.hub`.
+
+- **Templates, not secrets, on disk**: `~/.config/cchv/daemon.toml` and
+  `hub.toml` are templates with `@HUB_TOKEN@` / `@DB_PASSWORD@` /
+  `@M4M_TOKEN@` / `@AC_MBM5_TOKEN@` placeholders. The launcher renders them to
+  `daemon.runtime.toml` / `hub.runtime.toml` (0600) and points
+  `DAEMON_CONFIG`/`HUB_CONFIG` there.
+- **OpenBao source of truth**: `kv/infra/cchv/pg1` (hub DB creds) and
+  `kv/infra/cchv/hub-tokens` (`<host>_token`, `<host>_machine_id`). Read via
+  AppRole `cchv-daemon` (policy `cchv-read`, token TTL 15m — fine, the token is
+  only used for the reads at launch).
+- **Per-machine setup (once)**: materialize the AppRole creds file
+  `~/.config/cchv/bao-approle` (`role_id=…` / `secret_id=…`, chmod 0600) from
+  1P item `openbao - cchv-daemon approle` (vault `AC-DevOps`), install the
+  script to `~/.local/bin/cchv-launch`, and point the plist's
+  `ProgramArguments` at `cchv-launch daemon` (drop the `DAEMON_CONFIG` env —
+  the launcher sets it).
+- **Fallbacks**: if bao is unreachable, the launcher tries
+  `op read` (may need Touch ID — fine for attended starts); if that fails too,
+  it reuses the previous runtime render and logs a warning. KeepAlive retries
+  cover transient outages.
+- **Rotation**: rotate in 1P, re-copy to bao per home-network
+  `docs/secrets-standard.md`, then `launchctl unload/load` the job — the next
+  launch re-renders.
 
 ## 4. Verify end-to-end
 

@@ -14,13 +14,15 @@ seed / AppRole / ACL grant? Relay message or `agent-relay` issue to
 home-network. Canonical: home-network `docs/secrets-standard.md`; portable
 copy: CONTEXT `PATTERNS/secrets.md`.
 
-Repo-specific: the cchv items (`cchv - app role @ pg1`, `cchv - archive hub
-tokens`) are not seeded in OpenBao yet — seed + daemon AppRole requested from
-home-network 2026-07-05 (home-network#17, suggested paths `kv/infra/cchv/pg1`
-and `kv/infra/cchv/hub-tokens`). Until infra replies, the always-on archive
-daemon keeps using `op read` at start (12 h OIDC tokens don't fit launchd);
-once the AppRole lands, flip the daemon + `docs/archive/deployment.md` to
-bao-first and close the loop on #17.
+Repo-specific: the cchv secrets ARE seeded in OpenBao (home-network#17, done
+2026-07-05) — `kv/infra/cchv/pg1` (hub DB creds) and `kv/infra/cchv/hub-tokens`
+(per-machine hub tokens). The always-on archive jobs (daemon + hub) are
+**bao-first** via `scripts/cchv-launch.sh` and the AppRole `cchv-daemon`
+(creds file `~/.config/cchv/bao-approle`, from 1P item
+`openbao - cchv-daemon approle`); `op read` is the fallback, a last-known-good
+rendered config the floor. See `docs/archive/deployment.md` §3b. Flipped on
+m4m 2026-07-05; ac-mbm5's daemon still runs the old static config — flip it
+with the §3b per-machine steps next time an attended session is on ac-mbm5.
 
 ## History archive ops
 
