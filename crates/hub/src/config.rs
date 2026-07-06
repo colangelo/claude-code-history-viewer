@@ -18,6 +18,12 @@ pub struct HubConfig {
     /// `/v1/*` routes always win; unset keeps the plain-404 fallback.
     #[serde(default)]
     pub static_dir: Option<PathBuf>,
+    /// Tailscale logins granted READ scope when the request carries a
+    /// matching `Tailscale-User-Login` header (injected by Tailscale serve
+    /// for tailnet clients; Funnel traffic gets none). Opt-in — empty means
+    /// bearer-only. Ingest always requires a bearer token.
+    #[serde(default)]
+    pub trust_tailscale_identity: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,8 +40,9 @@ fn default_bind_addr() -> String {
 
 impl HubConfig {
     /// Load from the TOML file at `HUB_CONFIG`, else from environment variables
-    /// (`DATABASE_URL`, `HUB_BIND_ADDR`, optional `HUB_STATIC_DIR`, and
-    /// optional single-machine `HUB_TOKEN` + `HUB_MACHINE_ID`).
+    /// (`DATABASE_URL`, `HUB_BIND_ADDR`, optional `HUB_STATIC_DIR`, optional
+    /// comma-separated `HUB_TRUST_TAILSCALE_IDENTITY`, and optional
+    /// single-machine `HUB_TOKEN` + `HUB_MACHINE_ID`).
     pub fn load() -> anyhow::Result<Self> {
         if let Ok(path) = std::env::var("HUB_CONFIG") {
             let text = std::fs::read_to_string(&path)
@@ -59,11 +66,21 @@ impl HubConfig {
             });
         }
         let static_dir = std::env::var("HUB_STATIC_DIR").ok().map(PathBuf::from);
+        let trust_tailscale_identity = std::env::var("HUB_TRUST_TAILSCALE_IDENTITY")
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(HubConfig {
             database_url,
             bind_addr,
             tokens,
             static_dir,
+            trust_tailscale_identity,
         })
     }
 

@@ -46,8 +46,33 @@ impl FromRequestParts<AppState> for AuthedMachine {
     }
 }
 
-/// Proof that the caller holds a valid token. Read endpoints query across all
-/// machines, so they only need authentication, not a bound machine identity.
+/// Header injected by Tailscale serve for tailnet clients (absent on Funnel
+/// traffic). Verified by serve itself; the hub trusts it only for logins in
+/// the configured allow-list.
+const TAILSCALE_USER_LOGIN: &str = "tailscale-user-login";
+
+/// True iff the request carries a `Tailscale-User-Login` header matching the
+/// configured allow-list. Grants READ scope only — ingest never calls this.
+fn trusted_tailscale_identity(parts: &Parts, state: &AppState) -> bool {
+    if state.trusted_identities.is_empty() {
+        return false;
+    }
+    parts
+        .headers
+        .get(TAILSCALE_USER_LOGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|login| {
+            state
+                .trusted_identities
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(login))
+        })
+}
+
+/// Proof that the caller may read. Read endpoints query across all machines,
+/// so they need authentication but not a bound machine identity: a valid
+/// bearer token, or (opt-in) a trusted Tailscale serve identity header.
 pub struct Authenticated;
 
 impl FromRequestParts<AppState> for Authenticated {
@@ -57,7 +82,10 @@ impl FromRequestParts<AppState> for Authenticated {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        resolve_machine(parts, state)?;
-        Ok(Authenticated)
+        if resolve_machine(parts, state).is_ok() || trusted_tailscale_identity(parts, state) {
+            Ok(Authenticated)
+        } else {
+            Err(HubError::Unauthorized)
+        }
     }
 }

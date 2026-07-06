@@ -133,7 +133,10 @@ function hubUrl(
 }
 
 function authHeaders(config: HubConfig): HeadersInit {
-  return { Authorization: `Bearer ${config.token}` };
+  // Empty token = rely on host-side auth (e.g. Tailscale serve identity
+  // headers on a same-origin hub) — sending "Bearer " would only force a
+  // pointless CORS preflight and a guaranteed 401 on the bearer path.
+  return config.token ? { Authorization: `Bearer ${config.token}` } : {};
 }
 
 async function hubGet(url: URL, config: HubConfig): Promise<Response> {

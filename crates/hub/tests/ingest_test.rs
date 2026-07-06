@@ -47,6 +47,7 @@ async fn spawn() -> TestHub {
     let state = hub::AppState {
         pool: pool.clone(),
         tokens: Arc::new(tokens),
+        trusted_identities: Arc::new(Vec::new()),
     };
     let app = hub::router(state, None);
 

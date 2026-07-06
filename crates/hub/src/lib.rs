@@ -97,7 +97,11 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let state = AppState::new(pool, config.token_map());
+    let state = AppState::new(
+        pool,
+        config.token_map(),
+        config.trust_tailscale_identity.clone(),
+    );
     if let Some(dir) = &config.static_dir {
         tracing::info!(dir = %dir.display(), "serving static archive webapp at /");
     }
