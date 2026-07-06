@@ -1,7 +1,8 @@
-# static-archive-webapp
+# static-archive-webapp Specification
 
-## ADDED Requirements
-
+## Purpose
+TBD - created by archiving change static-archive-web. Update Purpose after archive.
+## Requirements
 ### Requirement: Standalone static build
 
 The project SHALL provide a build target that produces the archive browser as
@@ -69,11 +70,12 @@ against the hub.
 
 ### Requirement: Localized UI
 
-All user-facing strings introduced by the webapp (connect screen, errors,
-disconnect) SHALL exist in all 5 locales (en, ko, ja, zh-CN, zh-TW) and pass
-`i18n:validate`.
+The webapp SHALL provide every user-facing string it introduces (connect
+screen, errors, disconnect) in all 5 locales (en, ko, ja, zh-CN, zh-TW),
+passing `i18n:validate`.
 
 #### Scenario: Locale validation passes
 
 - **WHEN** `pnpm run i18n:validate` runs after the change
 - **THEN** it reports all locales in sync with no duplicate keys
+
