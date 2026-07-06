@@ -4,6 +4,7 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -13,6 +14,10 @@ pub struct HubConfig {
     pub bind_addr: String,
     #[serde(default)]
     pub tokens: Vec<TokenEntry>,
+    /// When set, serve this directory's files at `/` (static archive webapp).
+    /// `/v1/*` routes always win; unset keeps the plain-404 fallback.
+    #[serde(default)]
+    pub static_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -29,8 +34,8 @@ fn default_bind_addr() -> String {
 
 impl HubConfig {
     /// Load from the TOML file at `HUB_CONFIG`, else from environment variables
-    /// (`DATABASE_URL`, `HUB_BIND_ADDR`, and optional single-machine
-    /// `HUB_TOKEN` + `HUB_MACHINE_ID`).
+    /// (`DATABASE_URL`, `HUB_BIND_ADDR`, optional `HUB_STATIC_DIR`, and
+    /// optional single-machine `HUB_TOKEN` + `HUB_MACHINE_ID`).
     pub fn load() -> anyhow::Result<Self> {
         if let Ok(path) = std::env::var("HUB_CONFIG") {
             let text = std::fs::read_to_string(&path)
@@ -53,10 +58,12 @@ impl HubConfig {
                 label: None,
             });
         }
+        let static_dir = std::env::var("HUB_STATIC_DIR").ok().map(PathBuf::from);
         Ok(HubConfig {
             database_url,
             bind_addr,
             tokens,
+            static_dir,
         })
     }
 
