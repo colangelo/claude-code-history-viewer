@@ -127,5 +127,16 @@
   "archive.create.mainSessions": "メインセッション ({{count}})",
   "archive.create.subagentSessions": "サブエージェントセッション ({{count}})",
   "archive.settings.link": "アーカイブマネージャー",
-  "archive.settings.linkDescription": "クリーンアップ前に会話履歴を管理・保存"
+  "archive.settings.linkDescription": "クリーンアップ前に会話履歴を管理・保存",
+  "archive.web.title": "アーカイブブラウザー",
+  "archive.web.subtitle": "他のマシンからアーカイブされた会話履歴を閲覧・検索するには、cchv アーカイブハブに接続してください。",
+  "archive.web.urlLabel": "ハブURL",
+  "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
+  "archive.web.tokenLabel": "ベアラートークン",
+  "archive.web.tokenPlaceholder": "読み取り専用トークン",
+  "archive.web.connect": "接続",
+  "archive.web.connecting": "接続中...",
+  "archive.web.connectFailed": "接続に失敗しました: {{error}}",
+  "archive.web.storageHint": "ハブURLとトークンはこのブラウザー（localStorage）にのみ保存されます。",
+  "archive.web.disconnect": "切断"
 }

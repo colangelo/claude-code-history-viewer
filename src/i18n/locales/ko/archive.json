@@ -127,5 +127,16 @@
   "archive.create.mainSessions": "메인 세션 ({{count}})",
   "archive.create.subagentSessions": "서브에이전트 세션 ({{count}})",
   "archive.settings.link": "아카이브 관리자",
-  "archive.settings.linkDescription": "정리 전에 대화 기록을 관리하고 보존하세요"
+  "archive.settings.linkDescription": "정리 전에 대화 기록을 관리하고 보존하세요",
+  "archive.web.title": "아카이브 브라우저",
+  "archive.web.subtitle": "다른 기기에서 아카이브된 대화 기록을 탐색하고 검색하려면 cchv 아카이브 허브에 연결하세요.",
+  "archive.web.urlLabel": "허브 URL",
+  "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
+  "archive.web.tokenLabel": "베어러 토큰",
+  "archive.web.tokenPlaceholder": "읽기 전용 토큰",
+  "archive.web.connect": "연결",
+  "archive.web.connecting": "연결 중...",
+  "archive.web.connectFailed": "연결 실패: {{error}}",
+  "archive.web.storageHint": "허브 URL과 토큰은 이 브라우저(localStorage)에만 저장됩니다.",
+  "archive.web.disconnect": "연결 해제"
 }

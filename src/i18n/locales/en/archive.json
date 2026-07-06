@@ -127,5 +127,16 @@
   "archive.create.mainSessions": "Main Sessions ({{count}})",
   "archive.create.subagentSessions": "Subagent Sessions ({{count}})",
   "archive.settings.link": "Archive Manager",
-  "archive.settings.linkDescription": "Manage and preserve your conversation history before cleanup"
+  "archive.settings.linkDescription": "Manage and preserve your conversation history before cleanup",
+  "archive.web.title": "Archive Browser",
+  "archive.web.subtitle": "Connect to a cchv archive hub to browse and search conversation history archived from other machines.",
+  "archive.web.urlLabel": "Hub URL",
+  "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
+  "archive.web.tokenLabel": "Bearer token",
+  "archive.web.tokenPlaceholder": "Read token",
+  "archive.web.connect": "Connect",
+  "archive.web.connecting": "Connecting...",
+  "archive.web.connectFailed": "Connection failed: {{error}}",
+  "archive.web.storageHint": "The hub URL and token are stored only in this browser (localStorage).",
+  "archive.web.disconnect": "Disconnect"
 }

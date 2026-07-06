@@ -127,5 +127,16 @@
   "archive.create.mainSessions": "主工作階段 ({{count}})",
   "archive.create.subagentSessions": "子代理工作階段 ({{count}})",
   "archive.settings.link": "封存管理器",
-  "archive.settings.linkDescription": "在清理前管理並保存您的對話歷史"
+  "archive.settings.linkDescription": "在清理前管理並保存您的對話歷史",
+  "archive.web.title": "封存瀏覽器",
+  "archive.web.subtitle": "連線至 cchv 封存中樞，瀏覽並搜尋其他裝置封存的對話紀錄。",
+  "archive.web.urlLabel": "中樞 URL",
+  "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
+  "archive.web.tokenLabel": "Bearer 權杖",
+  "archive.web.tokenPlaceholder": "唯讀權杖",
+  "archive.web.connect": "連線",
+  "archive.web.connecting": "連線中...",
+  "archive.web.connectFailed": "連線失敗：{{error}}",
+  "archive.web.storageHint": "中樞 URL 與權杖僅儲存於此瀏覽器（localStorage）。",
+  "archive.web.disconnect": "中斷連線"
 }
