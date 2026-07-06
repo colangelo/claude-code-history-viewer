@@ -5,7 +5,7 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Kill the ConnectGate prompt: trust Tailscale serve identity headers for read-auth (user ask)"
-status: in-progress
+status: done
 claimed_by: app@m4m
 claimed_at: 2026-07-06T12:58:00+02:00
 priority: normal
@@ -58,3 +58,20 @@ Result: Homer tile → straight into the archive, any owner device, no prompts.
   (serve → 127.0.0.1:8790), webapp `~/.config/cchv/webapp/`, Homer tile live.
 - ConnectGate: src/components/ArchiveBrowser/ (per your 0341 refs), hub client
   src/services/hubApi.ts.
+
+## Resolution
+
+Handled 2026-07-06 by app@m4m (attended). Implemented exactly as proposed
+(headers over tsidp):
+
+- Hub: opt-in `trust_tailscale_identity` allow-list (toml / env); trusted
+  `Tailscale-User-Login` grants READ; ingest stays bearer-only. 4 new
+  integration tests.
+- Webapp: same-origin tokenless probe on load — 2xx skips the ConnectGate
+  (nothing persisted); gate kept as fallback. `hubApi` omits the Authorization
+  header when the token is empty.
+- Commit 3094891 (spec deltas archived f7cf718); staged on m4m:
+  `~/.config/cchv/staging/cchv-hub-3094891` + refreshed `~/.config/cchv/webapp/`;
+  sanity-run green (200/401/401/static-200).
+- Deploy handoff sent: home-network inbox `2026-07-06-1258-…-identity-auth-staged.md`
+  (config line + binary swap per runbook).
