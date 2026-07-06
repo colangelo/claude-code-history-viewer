@@ -15,6 +15,7 @@ package-lock.json
 
 # Build outputs
 dist
+dist-archive
 dist-ssr
 *.local
 
