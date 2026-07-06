@@ -2,14 +2,16 @@
  * Connect gate for the standalone static archive webapp
  * (spec: openspec/specs/static-archive-webapp/spec.md).
  *
- * Owns the hub connection lifecycle: shows a URL+token form when nothing is
- * stored, probes the hub with an authenticated call before persisting
- * (healthz alone would not validate the token), and renders `ArchiveBrowser`
- * once connected. The config lives in `localStorage` only — the static build
- * has no settings backend.
+ * Owns the hub connection lifecycle. Order of attempts:
+ * 1. stored config from a previous manual connect (`localStorage`);
+ * 2. same-origin auto-connect — a tokenless probe of the page origin, which
+ *    succeeds when the host authenticates the request itself (hub behind
+ *    Tailscale serve with `trust_tailscale_identity`); persists nothing;
+ * 3. the manual URL+token form, validated with an authenticated probe
+ *    before persisting (healthz alone would not validate the token).
  */
 
-import { useCallback, useId, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,12 +27,42 @@ import {
 export function ConnectGate() {
   const { t } = useTranslation();
   const [config, setConfig] = useState<HubConfig | null>(() => loadStoredHubConfig());
+  const [probing, setProbing] = useState(() => loadStoredHubConfig() == null);
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const probeStarted = useRef(false);
   const urlId = useId();
   const tokenId = useId();
+
+  // Same-origin auto-connect: if the host authenticates us (e.g. Tailscale
+  // serve identity headers), skip the gate entirely. Never persisted — the
+  // next load re-probes, so revoking host-side access takes effect.
+  useEffect(() => {
+    if (config != null || probeStarted.current) {
+      setProbing(false);
+      return;
+    }
+    probeStarted.current = true;
+    let cancelled = false;
+    const sameOrigin: HubConfig = { url: window.location.origin, token: "" };
+    hubApi
+      .listProjects(sameOrigin, { limit: 1 })
+      .then(() => {
+        if (!cancelled) setConfig(sameOrigin);
+      })
+      .catch(() => {
+        // Host doesn't vouch for us — fall through to the manual form.
+      })
+      .finally(() => {
+        if (!cancelled) setProbing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = useCallback(
     async (event: FormEvent) => {
@@ -58,6 +90,19 @@ export function ConnectGate() {
     setConfig(null);
     setError(null);
   }, []);
+
+  if (probing && config == null) {
+    return (
+      <div
+        className="flex h-full items-center justify-center"
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
+        <span className="sr-only">{t("archive.web.connecting")}</span>
+      </div>
+    );
+  }
 
   if (config) {
     return (
