@@ -86,7 +86,7 @@ export interface UserSettings {
   customClaudePaths?: CustomClaudePath[];
   /** WSL integration settings (Windows only) */
   wsl?: WslSettings;
-  /** Base URL of the cchv archive hub (e.g. "http://198.51.100.7:8787") */
+  /** Base URL of the cchv archive hub (e.g. "https://hub.internal:8788") */
   archiveHubUrl?: string;
   /** Bearer token for the archive hub's read API */
   archiveHubToken?: string;

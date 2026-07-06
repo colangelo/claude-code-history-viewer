@@ -15,7 +15,7 @@
 import type { ClaudeMessage } from "../types";
 
 export interface HubConfig {
-  /** Base URL of the hub, e.g. `http://198.51.100.7:8787` (no trailing slash). */
+  /** Base URL of the hub, e.g. `https://hub.internal:8788` (no trailing slash). */
   url: string;
   /** Bearer token for the hub's read API. */
   token: string;
