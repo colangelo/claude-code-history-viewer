@@ -5,8 +5,10 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: Migrate to the global /check-relay skill — delete this repo's local copy
-status: new
+status: in-progress
 priority: normal
+claimed_by: app@m4m
+claimed_at: 2026-07-06T03:49:54+02:00
 ---
 
 ## Action requested
