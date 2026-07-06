@@ -92,20 +92,34 @@ list_stamps() {
 # ---------- snapshot mounting ----------
 
 MNT=""
+PREMOUNTED=0
 # NOTE: don't gate the unmount on grepping the mount table — mktemp returns
 # /var/folders/… while mount(8) lists /private/var/folders/…, so a path match
 # silently skips the unmount and the next mount of the same snapshot fails
 # with "Resource busy". Just try; suppressed failures are harmless.
 cleanup() {
-  if [ -n "$MNT" ]; then
+  # A pre-existing system mount (macOS auto-mounts snapshots under
+  # /Volumes/.timemachine when TM tooling browses them) is not ours to unmount.
+  if [ -n "$MNT" ] && [ "$PREMOUNTED" != 1 ]; then
     umount "$MNT" 2>/dev/null || diskutil unmount force "$MNT" >/dev/null 2>&1 || true
     rmdir "$MNT" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
 
-mount_snapshot() { # $1 = stamp; sets MNT
+mount_snapshot() { # $1 = stamp; sets MNT (+ PREMOUNTED=1 if reusing a system mount)
   local stamp="$1"
+  PREMOUNTED=0
+  # Already mounted (system auto-mount)? Reuse it — a second mount_apfs of the
+  # same snapshot fails with "Resource busy".
+  local existing
+  existing=$(mount | grep -F "com.apple.TimeMachine.${stamp}.backup@${DEVICE} on " \
+    | sed -E 's/^.* on (.*) \(apfs.*/\1/' | head -1 || true)   # pipefail: no match is fine
+  if [ -n "$existing" ] && [ -d "$existing" ]; then
+    MNT="$existing"
+    PREMOUNTED=1
+    return
+  fi
   MNT=$(mktemp -d "${TMPDIR:-/tmp}/tm-backfill-mnt.XXXXXX")
   if ! mount_apfs -o ro -s "com.apple.TimeMachine.${stamp}.backup" "$DEVICE" "$MNT" >/dev/null 2>&1; then
     rmdir "$MNT"; MNT=""

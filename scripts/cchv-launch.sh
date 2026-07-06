@@ -91,16 +91,19 @@ render() {
       content="${content//@HUB_TOKEN@/$hub_token}"
       ;;
     hub)
-      local db_pass m4m_token mbm5_token
+      local db_pass m4m_token mbm5_token mbp_token
       db_pass="$(resolve pg1 password \
         "op://AC-DevOps/cchv - app role @ pg1/password")" || return 1
       m4m_token="$(resolve hub-tokens m4m_token \
         "op://AC-DevOps/cchv - archive hub tokens/m4m token")" || return 1
       mbm5_token="$(resolve hub-tokens ac-mbm5_token \
         "op://AC-DevOps/cchv - archive hub tokens/ac-mbm5 token")" || return 1
+      mbp_token="$(resolve hub-tokens ac-mbp_token \
+        "op://AC-DevOps/cchv - archive hub tokens/ac-mbp token")" || return 1
       content="${content//@DB_PASSWORD@/$db_pass}"
       content="${content//@M4M_TOKEN@/$m4m_token}"
       content="${content//@AC_MBM5_TOKEN@/$mbm5_token}"
+      content="${content//@AC_MBP_TOKEN@/$mbp_token}"
       ;;
   esac
 
