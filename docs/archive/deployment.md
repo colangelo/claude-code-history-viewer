@@ -107,6 +107,30 @@ curl http://<tailnet-host>:8787/v1/healthz   # {"status":"ok","db":"up"}
 Transport security is provided by Tailscale (WireGuard); the bearer token gates
 access. TLS termination (e.g. behind a reverse proxy) can be added later.
 
+### Optional: serve the static archive browser at `/`
+
+The hub can host the standalone archive webapp (a backend-free build of the
+viewer's Archive mode) so one process serves both the UI and the API —
+same-origin, so no CORS or mixed-content concerns:
+
+```bash
+just archive-web-build        # in the cchv repo → dist-archive/
+```
+
+Then either add to `hub.toml`:
+
+```toml
+static_dir = "/path/to/dist-archive"
+```
+
+or set `HUB_STATIC_DIR=/path/to/dist-archive` when running from env vars
+(TOML mode ignores env, same precedence as every other hub setting). `/v1/*`
+routes always win over static files; static assets are served without auth
+(the bearer token still gates all data endpoints). Unset = `/` stays 404,
+exactly the pre-static behavior. First visit shows a connect screen (hub URL
++ read token, persisted in that browser's localStorage) — with same-origin
+hosting the URL is just the page's own origin.
+
 > **House deployment:** bind the hub to the node's tailscale IP (not `0.0.0.0`),
 > follow the tailnet-services pattern (`~/_sync/dev/CONTEXT/PATTERNS/
 > tailnet-services.md` — ideally Tailscale Serve `:443` for in-tailnet TLS), and
