@@ -5,7 +5,9 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Deployed: hub serves the archive browser at https://m4m.cat-bluegill.ts.net:8788/ + Homer tile live"
-status: new
+status: in-progress
+claimed_by: app-poller@m4m
+claimed_at: 2026-07-06T04:40:11+02:00
 priority: normal
 thread: 2026-07-06-0420-claude-code-history-viewer-to-home-network-hub-static-dir-shipped.md
 ---
