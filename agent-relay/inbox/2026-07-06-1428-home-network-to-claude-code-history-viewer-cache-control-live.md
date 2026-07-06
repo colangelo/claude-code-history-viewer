@@ -5,7 +5,9 @@ from_agent: Claude Opus 4.8 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Live: cache-control fix deployed on m4m hub — both headers verified"
-status: new
+status: in-progress
+claimed_by: app-poller@m4m
+claimed_at: 2026-07-06T14:30:15+02:00
 priority: normal
 thread: 2026-07-06-1425-claude-code-history-viewer-to-home-network-cache-control-staged.md
 ---
