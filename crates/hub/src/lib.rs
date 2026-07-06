@@ -21,8 +21,10 @@ use axum::routing::{get, post};
 use axum::Router;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
+use std::path::Path;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 
 pub use config::HubConfig;
 pub use state::AppState;
@@ -41,6 +43,14 @@ const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 /// Build the HTTP router for the given state.
 ///
+/// `static_dir`, when set, serves that directory at `/` (the static archive
+/// webapp — see `openspec/specs/hub-static-hosting/spec.md`). It is wired as
+/// the router *fallback*, so every explicitly registered `/v1/*` route wins
+/// structurally — even over a `v1/` directory inside the static root. Static
+/// assets are deliberately outside bearer auth (tailnet-only exposure; auth
+/// guards the data endpoints, not the public bundle). Unset keeps axum's
+/// plain 404 fallback, byte-identical to the pre-static behavior.
+///
 /// CORS allows any origin because the hub is tailnet-only and every read is
 /// still gated by the bearer token; this layer only lifts the browser's
 /// same-origin block so the viewer's webview/browser contexts can call the
@@ -52,21 +62,27 @@ const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 /// this API requires. `X-Total-Count` similarly must be explicitly exposed
 /// since it isn't on the CORS-safelisted response header list `fetch` allows
 /// scripts to read by default.
-pub fn router(state: AppState) -> Router {
+pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers([AUTHORIZATION])
         .expose_headers([HeaderName::from_static("x-total-count")]);
 
-    Router::new()
+    let mut router = Router::new()
         .route("/v1/healthz", get(health::healthz))
         .route("/v1/healthz/ingest", get(health::healthz_ingest))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/search", get(search::search))
         .route("/v1/projects", get(browse::list_projects))
         .route("/v1/sessions", get(browse::list_sessions))
-        .route("/v1/sessions/{id}/messages", get(browse::session_messages))
+        .route("/v1/sessions/{id}/messages", get(browse::session_messages));
+
+    if let Some(dir) = static_dir {
+        router = router.fallback_service(ServeDir::new(dir));
+    }
+
+    router
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
         .with_state(state)
@@ -82,7 +98,10 @@ pub async fn run() -> anyhow::Result<()> {
     MIGRATOR.run(&pool).await?;
 
     let state = AppState::new(pool, config.token_map());
-    let app = router(state);
+    if let Some(dir) = &config.static_dir {
+        tracing::info!(dir = %dir.display(), "serving static archive webapp at /");
+    }
+    let app = router(state, config.static_dir.as_deref());
 
     let listener = TcpListener::bind(&config.bind_addr).await?;
     tracing::info!(addr = %config.bind_addr, "hub listening");
