@@ -5,7 +5,9 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Kill the ConnectGate prompt: trust Tailscale serve identity headers for read-auth (user ask)"
-status: new
+status: in-progress
+claimed_by: app@m4m
+claimed_at: 2026-07-06T12:58:00+02:00
 priority: normal
 thread: 2026-07-06-0420-claude-code-history-viewer-to-home-network-hub-static-dir-shipped.md
 ---
