@@ -15,16 +15,18 @@ pub mod search;
 pub mod state;
 
 use axum::extract::DefaultBodyLimit;
-use axum::http::header::AUTHORIZATION;
-use axum::http::HeaderName;
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL};
+use axum::http::{HeaderName, HeaderValue};
 use axum::routing::{get, post};
 use axum::Router;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use std::path::Path;
 use tokio::net::TcpListener;
+use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 pub use config::HubConfig;
 pub use state::AppState;
@@ -50,6 +52,14 @@ const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 /// assets are deliberately outside bearer auth (tailnet-only exposure; auth
 /// guards the data endpoints, not the public bundle). Unset keeps axum's
 /// plain 404 fallback, byte-identical to the pre-static behavior.
+///
+/// Cache policy follows the standard SPA split so a webapp rsync takes effect
+/// on the next load with no hard reload: content-hashed `/assets/*` are
+/// `immutable` (a new build changes the filename), while the `index.html`
+/// entry point is `no-cache` — stored but always revalidated (`ServeDir` sends
+/// `last-modified`, so an unchanged page still 304s). Without this, browsers
+/// heuristically cache a `Cache-Control`-less `index.html` and keep loading a
+/// stale hashed bundle after every update.
 ///
 /// CORS allows any origin because the hub is tailnet-only and every read is
 /// still gated by the bearer token; this layer only lifts the browser's
@@ -79,7 +89,23 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/sessions/{id}/messages", get(browse::session_messages));
 
     if let Some(dir) = static_dir {
-        router = router.fallback_service(ServeDir::new(dir));
+        // Content-hashed assets: cache hard, never revalidate.
+        let assets = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ))
+            .service(ServeDir::new(dir.join("assets")));
+        // index.html (and any other top-level file): always revalidate.
+        let root = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .service(ServeDir::new(dir));
+        router = router
+            .nest_service("/assets", assets)
+            .fallback_service(root);
     }
 
     router
