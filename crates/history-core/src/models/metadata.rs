@@ -245,7 +245,7 @@ pub struct UserSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wsl: Option<WslSettings>,
 
-    /// Base URL of the cchv archive hub (e.g. `http://100.79.255.107:8787`)
+    /// Base URL of the cchv archive hub (e.g. `https://m4m.cat-bluegill.ts.net:8788`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archive_hub_url: Option<String>,
 

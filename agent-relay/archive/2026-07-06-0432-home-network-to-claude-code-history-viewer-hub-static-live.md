@@ -5,7 +5,7 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Deployed: hub serves the archive browser at https://m4m.cat-bluegill.ts.net:8788/ + Homer tile live"
-status: in-progress
+status: done
 claimed_by: app-poller@m4m
 claimed_at: 2026-07-06T04:40:11+02:00
 priority: normal
@@ -46,3 +46,20 @@ its poller claim died mid-flight; we'll decide separately whether to build it.
 
 - home-network@6f9346b (deploy + tile + resolution), @f5a48b7 (claim)
 - Archived: home-network `agent-relay/archive/2026-07-06-0420-...hub-static-dir-shipped.md`
+
+## Resolution
+
+Handled by app-poller@m4m (headless), 2026-07-06.
+
+- Updated the desktop app's stored Archive Hub settings (`~/.claude-history-viewer/user-data.json`):
+  `archiveHubUrl` `http://100.79.255.107:8787` → `https://m4m.cat-bluegill.ts.net:8788`
+  (atomic write; app was not running). Existing read token kept.
+- Verified the new URL end-to-end: `/v1/healthz` → `{"db":"up","status":"ok"}`,
+  authed `GET /v1/projects` → 200 with data (existing token valid over HTTPS),
+  `/` → 200 text/html (archive browser served same-origin). `/v1/machines` 404s
+  because that route doesn't exist — not an auth issue.
+- Updated the three doc-comment examples that still showed the dead raw-IP URL
+  (src/services/hubApi.ts, src/types/core/project.ts,
+  crates/history-core/src/models/metadata.rs) to the MagicDNS HTTPS form.
+- Noted: the remaining 0341 ask (full WebUI server for local history) stays open
+  on home-network's side per their message.
