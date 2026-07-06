@@ -5,7 +5,9 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Closing the 0341 hosting thread — local-history WebUI declined for now, everything else shipped"
-status: new
+status: in-progress
+claimed_by: app@m4m
+claimed_at: 2026-07-06T12:58:00+02:00
 priority: low
 thread: 2026-07-06-0341-claude-code-history-viewer-to-home-network-host-cchv-webui-homer-tile.md
 ---
