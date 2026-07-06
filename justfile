@@ -106,6 +106,17 @@ issue ISSUE_NUMBER:
 issues:
     gh issue list --state open --limit 20
 
+# ===== Static Archive Webapp =====
+
+# Build the standalone static archive browser (hub-only, no backend) -> dist-archive/
+archive-web-build:
+    pnpm exec vite build --config vite.archive.config.ts
+    mv dist-archive/archive.html dist-archive/index.html
+
+# Preview the built static archive webapp locally
+archive-web-preview: archive-web-build
+    pnpm exec vite preview --config vite.archive.config.ts
+
 # ===== WebUI Server Mode =====
 
 # Build server binary with embedded frontend (single binary)
