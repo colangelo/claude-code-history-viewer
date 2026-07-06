@@ -63,13 +63,16 @@ async fn serves_index_and_assets_when_configured() {
     let base = spawn(Some(root)).await;
     let client = reqwest::Client::new();
 
-    // `/` resolves to index.html, no Authorization header required.
+    // `/` resolves to index.html, no Authorization header required, and must
+    // always revalidate so a webapp update is picked up without a hard reload.
     let res = client.get(format!("{base}/")).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let ct = res.headers()["content-type"].to_str().unwrap().to_string();
     assert!(ct.starts_with("text/html"), "content-type was {ct}");
+    assert_eq!(res.headers()["cache-control"], "no-cache");
     assert!(res.text().await.unwrap().contains("archive"));
 
+    // Content-hashed assets are served immutable so browsers skip revalidation.
     let res = client
         .get(format!("{base}/assets/app.css"))
         .send()
@@ -78,6 +81,10 @@ async fn serves_index_and_assets_when_configured() {
     assert_eq!(res.status(), 200);
     let ct = res.headers()["content-type"].to_str().unwrap().to_string();
     assert!(ct.starts_with("text/css"), "content-type was {ct}");
+    assert_eq!(
+        res.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
 }
 
 #[tokio::test]
