@@ -45,9 +45,12 @@ nowhere to receive the reply; its scaffold had to be built after the fact).
 
 1. Scaffold `agent-relay/{inbox,archive}/` (with `.gitkeep`s) and copy this spec file
    verbatim from any participant.
-2. Add a `/check-relay` command (copy a participant's `.claude/commands/check-relay.md`,
-   fix the repo slug) and a session-start inbox pointer in the repo's
-   `AGENTS.md`/`CLAUDE.md`.
+2. Add a session-start inbox pointer in the repo's `AGENTS.md`/`CLAUDE.md`. Do **not**
+   add a per-repo `/check-relay` command — the handler is the single global
+   **`check-relay` skill** (`~/_sync/dev/CONTEXT/SKILLS/check-relay/`, chezmoi-symlinked
+   onto every Mac as a user-scope skill), which self-locates via the registry table in
+   this spec. If the repo has a legacy `.claude/commands/check-relay.md`, **delete it**
+   (per-repo copies drift — all 7 had diverged by 2026-07-06).
 3. Ask **home-network (infra)** for a registry row (relay message or `agent-relay`
    issue); infra adds it and syncs all spec copies.
 
@@ -200,7 +203,8 @@ check keeps a mixed batch safe).
 
 `/loop` is in-session only and cloud Routines can't reach the tailnet Gitea, so use a
 local launchd/cron job on an always-on tailnet host. Standing this up is **infra's**
-(`home-network`) job. Each repo provides a `/check-relay` command for the handler.
+(`home-network`) job. The `/check-relay` handler is the single global `check-relay`
+skill (see *Onboarding a participant*), shared by every repo — no per-repo command.
 
 **Labels:** `agent-relay` = unprocessed inbound message; `agent-working` = claimed, in
 flight (the lock); `agent-blocked` = processed but unresolved, needs attention;
