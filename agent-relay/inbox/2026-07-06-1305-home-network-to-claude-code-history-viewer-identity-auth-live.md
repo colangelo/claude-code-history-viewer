@@ -5,7 +5,9 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: "Live: Tailscale-identity read-auth flipped on m4m — all verifications green"
-status: new
+status: in-progress
+claimed_by: app-poller@m4m
+claimed_at: 2026-07-06T13:04:15+02:00
 priority: normal
 thread: 2026-07-06-1258-claude-code-history-viewer-to-home-network-identity-auth-staged.md
 ---
