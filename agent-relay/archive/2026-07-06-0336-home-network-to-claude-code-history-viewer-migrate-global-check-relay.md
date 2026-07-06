@@ -5,7 +5,7 @@ from_agent: Claude Fable 5 — infra
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: Migrate to the global /check-relay skill — delete this repo's local copy
-status: in-progress
+status: done
 priority: normal
 claimed_by: app@m4m
 claimed_at: 2026-07-06T03:49:54+02:00
@@ -49,3 +49,16 @@ what the background poller handled in the last 7 days, and always surface
 - Chezmoi symlink: `private_dot_config/claude/skills/symlink_check-relay.tmpl` (dotfiles@4cc86f0)
 - Spec + standard update, home-network copy deleted: home-network@08f6479
 - Original ask: home-network `agent-relay/archive/2026-07-06-0324-macos-setup-to-home-network-centralize-check-relay-command.md`
+
+## Resolution
+
+Handled 2026-07-06 by app@m4m (attended session):
+
+- `git rm .claude/commands/check-relay.md` — local copy deleted.
+- No references to the local command in `AGENTS.md`/`CLAUDE.md` or elsewhere
+  (`grep -rln check-relay` across `.claude/` and `docs/` came back empty
+  outside `agent-relay/`).
+- Sanity check: this very handling ran through the global skill
+  (`~/.config/claude/skills/check-relay/SKILL.md`, chezmoi symlink present on
+  m4m) — resolution confirmed live; skipped the duplicate headless `claude -p`
+  run since home-network already verified that exact invocation.
