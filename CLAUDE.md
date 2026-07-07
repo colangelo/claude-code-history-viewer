@@ -53,25 +53,22 @@ pnpm lint                                       # Run ESLint
 
 ## Branch Strategy
 
-```
-main     ← 릴리즈 전용 (사용자가 GitHub에서 보는 기본 브랜치)
-develop  ← 개발 통합 (feature/* 브랜치의 머지 대상)
-feature/* ← 개별 기능 (develop에서 분기, develop으로 PR)
-```
+This is a **hybrid fork** with two distinct flows:
 
-### 규칙
+- **Fork work (the default).** `main` is the integration *and* release line.
+  Day-to-day changes (the archive stack, fixes, features) land on `main`
+  directly, or via short-lived `feature/*` / second-loop worktree branches that
+  merge back into `main`. Releases are cut from `main` as `cchv-v*` tags (see
+  Version Management). There is **no fork `develop` gate** — commit to `main`
+  with sufficient granularity.
+- **Contributing back to upstream.** `jhlee0409/claude-code-history-viewer` uses
+  a `feature/* → develop → main` flow, so an upstream PR branches from
+  `upstream/develop` and targets it (e.g. `feature/pi-provider` → PR
+  jhlee0409#445). The `develop` branch exists **only** for this; it is not the
+  fork's integration branch.
 
-| 브랜치 | 역할 | PR 대상 |
-|--------|------|---------|
-| `main` | 릴리즈된 코드만. README/docs는 현재 릴리즈 기준 | - |
-| `develop` | 다음 릴리즈 작업 통합 | `main` (릴리즈 시에만) |
-| `feature/*`, `fix/*` | 개별 작업 | `develop` |
-
-### 주의사항
-
-- **feature/fix PR은 반드시 `develop`을 base로 생성** (`main` 아님)
-- `main`에 직접 머지하지 않음 — 릴리즈 시에만 `develop` → `main` 머지
-- README, 스크린샷 등 사용자 문서는 릴리즈 커밋에서만 `main`에 반영
+Upstream is the fork's **parser supply chain**: each sync ports `jhlee0409`
+parser fixes into `crates/history-core` on `main`.
 
 ## Agent skills
 
@@ -94,32 +91,39 @@ by `/grill-with-docs`. See `docs/agents/domain.md`.
 
 ## Version Management
 
-This is a **Tauri desktop application** distributed via GitHub Releases (not npm).
+The fork ships the **web viewer + archive stack** (static archive webapp, WebUI
+server, hub, sync-daemon) — **no desktop distribution**. It owns a single
+version line, **`cchv-vX.Y.Z`**, decoupled from upstream's `v1.x`. Upstream's
+`v1.x` tags are fetched for the parser supply chain but are **not** ours; on an
+upstream sync, keep our version. The line is `0.x` (pre-stable dogfood tier).
+
+Version history (see `git tag -n 'cchv-v*'`): `cchv-v0.1.0` archive MVP ·
+`v0.2.0` daemon hardening · `v0.3.0` hub API DX + archive viewer UI · `v0.4.0`
+static webapp + hub static hosting · `v0.5.0` Tailscale-identity read-auth ·
+`v0.5.1` SPA cache split (current, live on m4m).
 
 ### Single Source of Truth
 
-**`package.json`** is the single source of truth for version numbers.
+**`package.json`** `version` is the source of truth. `just sync-version`
+propagates it to the Rust workspace and Tauri config:
 
 ```
-package.json (원본)
+package.json (version)
     ↓ just sync-version
-├── src-tauri/Cargo.toml
+├── Cargo.toml  [workspace.package] version   ← every crate inherits it
+│                                               (version.workspace = true)
 └── src-tauri/tauri.conf.json
 ```
 
 ### Version Bump Guide
 
 ```bash
-# 방법 1: npm version 사용 (npm 배포 아님, 버전 번호만 변경)
-npm version prerelease --preid=beta --no-git-tag-version
-# package.json: 1.0.0-beta.4 → 1.0.0-beta.5
-
-# 방법 2: 수동으로 package.json 편집
-# "version": "1.0.0-beta.5"
-
-# 버전 동기화 (필수)
-just sync-version
+# edit package.json "version", or bump the number (no npm publish):
+npm version <patch|minor|major> --no-git-tag-version   # e.g. 0.5.1 → 0.6.0
+just sync-version                                       # propagate (required)
 ```
+
+SemVer: bug fix → patch, new feature → minor, breaking → major.
 
 ### Release Process
 
@@ -148,98 +152,63 @@ pnpm run i18n:validate          # 5개 언어 키 동기화 확인 (en, ko, ja, 
 - `pnpm install` 생략 시 lockfile과 node_modules 불일치로 빌드 실패 가능
 - lint에서 `@typescript-eslint/no-explicit-any` 에러 발생 시 `as unknown as TargetType` 패턴 사용
 
-#### Phase 2: 변경사항 분석 및 버전 결정
+#### Phase 2: decide the version
 
 ```bash
-# 마지막 릴리즈 이후 커밋 수 확인
-git log $(git tag --sort=-version:refname | head -1)..HEAD --oneline | wc -l
-
-# 변경사항 요약 확인
-git log $(git tag --sort=-version:refname | head -1)..HEAD --oneline
+# commits since the last cchv release (glob scoped to OUR line, not upstream v*)
+git log "$(git tag --list 'cchv-v*' --sort=-version:refname | head -1)"..HEAD --oneline
 ```
 
-**버전 결정 기준 (SemVer):**
-| 변경 유형 | 버전 | 예시 |
-|-----------|------|------|
-| 버그 수정만 | patch (x.y.Z) | 1.3.0 → 1.3.1 |
-| 새 기능 추가 | minor (x.Y.0) | 1.3.0 → 1.4.0 |
-| 호환성 깨지는 변경 | major (X.0.0) | 1.3.0 → 2.0.0 |
+SemVer: bug fix → patch (0.5.1 → 0.5.2), new feature → minor (0.5.1 → 0.6.0),
+breaking → major.
 
-#### Phase 3: 버전 범프 및 커밋 (develop → main)
+#### Phase 3: bump, tag, push (on `main`)
 
 ```bash
-# 1. develop에서 최종 확인
-git checkout develop
-pnpm tsc --build . && pnpm vitest run
-
-# 2. main으로 머지
-git checkout main
-git pull origin main
-git merge develop
-
-# 3. 버전 업데이트
-npm version <version> --no-git-tag-version
-# 예: npm version 1.3.1 --no-git-tag-version
-
-# 4. 버전 동기화 (package.json → Cargo.toml + tauri.conf.json)
-just sync-version
-
-# 5. 최종 빌드 확인 (동기화 후 Cargo.toml 변경 반영)
-pnpm tsc --build . && pnpm vitest run
-
-# 6. 커밋 및 태그 (main 브랜치에서)
-git add -A
-git commit -m "chore: release v1.3.1"
-git tag v1.3.1
-git push && git push --tags
-
-# 7. develop에 릴리즈 커밋 역머지
-git checkout develop
-git merge main
-git push
+npm version <version> --no-git-tag-version   # e.g. 0.6.0 (no npm publish)
+just sync-version                            # package.json → workspace + tauri.conf
+pnpm tsc --build . && pnpm vitest run        # re-check after sync
+git add -A && git commit -m "chore(release): cchv-v0.6.0"
+git tag -a cchv-v0.6.0 -m "cchv-v0.6.0"
+git push internal main && git push internal cchv-v0.6.0
+git push origin  main && git push origin  cchv-v0.6.0
 ```
 
-#### Phase 4: 릴리즈 발행 확인
+#### Phase 4: CI + deploy
 
-태그 푸시 후 GitHub Actions (`updater-release.yml`)가 자동 실행:
-1. 멀티플랫폼 빌드 (macOS universal, Windows x64, Linux x64)
-2. `latest.json` 생성 (Tauri 업데이터용, 서명 포함)
-3. GitHub Release 발행 (자동 릴리즈 노트)
+Pushing a `cchv-v*` tag runs `.github/workflows/server-release.yml`, which
+publishes a GitHub Release with the static webapp bundle (`cchv-webapp.tar.gz`)
+and per-platform WebUI server binaries.
+
+The always-on **m4m hub is NOT deployed from that release**. The real path is:
+build locally → stage in `~/.config/cchv/staging/` → relay home-network (infra)
+→ binary swap per `docs/archive/deployment.md`. The GitHub Release is for
+reproducibility and non-local hosts.
 
 ```bash
-# 워크플로우 상태 확인
-gh run list --workflow=updater-release.yml --limit=1
-
-# 릴리즈 확인
-gh release view v1.3.1
-
-# 릴리즈 노트 수동 업데이트 (필요시)
-gh release edit v1.3.1 --notes-file /path/to/notes.md
+gh run list --workflow=server-release.yml --limit=1
+gh release view cchv-v0.6.0
 ```
 
-**릴리즈 후 확인사항:**
-- [ ] 3개 플랫폼 바이너리 모두 첨부됨 (.dmg, .exe, .AppImage)
-- [ ] `latest.json`이 첨부됨 (자동 업데이트용)
-- [ ] `latest.json` 내 `platforms` 에 darwin-aarch64, darwin-x86_64, linux-x86_64, windows-x86_64 포함
-- [ ] 각 플랫폼의 `.sig` 서명 파일 존재
-- [ ] **README.md 업데이트** — 새 기능, 변경된 스크린샷, 버전 배지 등 반영
+#### Troubleshooting
 
-#### 트러블슈팅
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| CI pnpm version clash | `pnpm/action-setup` `version` vs `package.json` `packageManager` | drop `version` in the workflow (auto-detected) |
+| `cargo test` flaky | `env::set_var("HOME")` is process-global → parallel race | `--test-threads=1` |
+| Duplicate release | manual `gh release create` + workflow auto-create | let `server-release.yml` own it |
+| Modules not found after `pnpm install` | lockfile ↔ node_modules drift | `rm -rf node_modules && pnpm install` |
 
-| 문제 | 원인 | 해결 |
-|------|------|------|
-| CI에서 pnpm 버전 충돌 | `pnpm/action-setup`의 `version` 필드와 `package.json`의 `packageManager` 충돌 | 워크플로우에서 `version` 제거 (packageManager 자동 감지) |
-| `cargo test` 간헐적 실패 | `env::set_var("HOME")`이 프로세스 전역 → 병렬 실행 시 경쟁 | `--test-threads=1` 사용 |
-| 릴리즈 중복 생성 | 수동 `gh release create` + 워크플로우 자동 생성 | 수동 생성 금지, 워크플로우에 위임 |
-| 자동 업데이트 시 에러 플래시 | `relaunch()` 전 바이너리 교체로 UI 크래시 | `isRestarting` 상태로 오버레이 표시 후 500ms 딜레이 |
-| `pnpm install` 후에도 모듈 못 찾음 | lockfile과 실제 node_modules 불일치 | `rm -rf node_modules && pnpm install` |
+### Desktop app (retired)
 
-### Auto-Update System
-
-- **업데이트 체크**: `src-tauri/src/commands/update.rs`
-- **프론트엔드 훅**: `src/hooks/useGitHubUpdater.ts`, `src/hooks/useSmartUpdater.ts`
-- **Tauri 설정**: `src-tauri/tauri.conf.json` (updater plugin)
-- **CI/CD**: `.github/workflows/updater-release.yml`
+The Tauri desktop distribution and its auto-updater are **retired** — the fork
+ships only the web viewer, so `src-tauri` now builds solely as the WebUI server
+(`--features webui-server`). The desktop release workflows were removed
+(`updater-release.yml`, `updater-release-retry.yml`). The updater code still
+exists but is **dormant / vestigial** (safe to remove in a future cleanup):
+`src-tauri/src/commands/update.rs`, `src/hooks/useGitHubUpdater.ts`,
+`src/hooks/useSmartUpdater.ts`, and the tauri updater plugin in
+`src-tauri/tauri.conf.json`.
 
 ## Architecture
 
