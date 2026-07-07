@@ -1,20 +1,65 @@
-# Build and release the WebUI server binary (headless mode for VPS/remote servers)
-# Triggered alongside the main desktop release when a version tag is pushed.
+# Build and publish a GitHub Release for the fork's own `cchv-v*` version tags.
 #
-# The server binary embeds frontend assets via rust-embed, producing a single
-# self-contained file with no external dependencies on dist/.
+# This fork ships only the web viewer + archive stack (no desktop distribution),
+# so `cchv-v*` is the single release line — see CLAUDE.md → Version Management.
+# Upstream's `v1.x` tags (fetched for the parser supply chain) are NOT ours and
+# do not trigger a release here.
+#
+# Self-contained: this workflow creates its own release, attaches the static
+# archive webapp bundle and the WebUI server binaries (rust-embed → single
+# self-contained file, no external dist/). The real deploy to m4m still copies
+# a locally-built binary (docs/archive/deployment.md); these artifacts are for
+# reproducibility and non-local hosts.
 name: Server Release
 
 on:
   push:
     tags:
-      - "v*"
+      - "cchv-v*"
 
 permissions:
   contents: write
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Build static archive webapp bundle
+        run: |
+          just archive-web-build
+          tar czf cchv-webapp.tar.gz -C dist-archive .
+
+      - name: Create release and attach the webapp bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" cchv-webapp.tar.gz --clobber
+
   build-server:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -102,99 +147,7 @@ jobs:
           cp target/${{ matrix.target }}/release/claude-code-history-viewer release/cchv-server
           cd release && tar czf ../${{ matrix.artifact }}.tar.gz cchv-server
 
-      - name: Wait for release to be published
-        run: |
-          echo "Waiting for release ${GITHUB_REF_NAME} to be published (non-draft)..."
-          for i in $(seq 1 60); do
-            DRAFT=$(gh api "repos/${{ github.repository }}/releases/tags/${GITHUB_REF_NAME}" --jq '.draft' 2>/dev/null || echo "not_found")
-            if [ "$DRAFT" = "false" ]; then
-              echo "Release ${GITHUB_REF_NAME} is published!"
-              break
-            elif [ "$DRAFT" = "not_found" ]; then
-              echo "Release not found yet... (attempt $i/60)"
-            else
-              echo "Release is still draft... (attempt $i/60)"
-            fi
-            sleep 10
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
-
       - name: Upload to release
         run: gh release upload "${GITHUB_REF_NAME}" "${{ matrix.artifact }}.tar.gz" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-
-  # Update Homebrew formula SHA256 hashes after all builds complete
-  update-homebrew:
-    needs: build-server
-    runs-on: ubuntu-latest
-    steps:
-      - name: Get version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Download release assets and compute SHA256
-        run: |
-          BASE="https://github.com/jhlee0409/claude-code-history-viewer/releases/download/${GITHUB_REF_NAME}"
-          : > CHECKSUMS.sha256
-          for asset in cchv-server-macos-arm64 cchv-server-macos-x64 cchv-server-linux-arm64 cchv-server-linux-x64; do
-            curl -fsSL -o "${asset}.tar.gz" "${BASE}/${asset}.tar.gz"
-            sha=$(sha256sum "${asset}.tar.gz" | cut -d' ' -f1)
-            printf "%s  %s\n" "${sha}" "${asset}.tar.gz" >> CHECKSUMS.sha256
-            asset_var=$(echo "${asset}" | tr '-' '_')
-            echo "${asset_var}=${sha}" >> "$GITHUB_ENV"
-          done
-
-      - name: Upload checksums
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" CHECKSUMS.sha256 --clobber -R "${{ github.repository }}"
-
-      - name: Update Homebrew formula
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-
-          # Fetch current formula
-          gh api repos/jhlee0409/homebrew-tap/contents/Formula/cchv-server.rb \
-            --jq '.content' | base64 -d > cchv-server.rb
-
-          FILE_SHA=$(gh api repos/jhlee0409/homebrew-tap/contents/Formula/cchv-server.rb --jq '.sha')
-
-          # Replace version and SHA256 placeholders/values
-          sed -i "s/version \".*\"/version \"${VERSION}\"/" cchv-server.rb
-          sed -i "s/sha256 \".*_MACOS_ARM64\"/sha256 \"${cchv_server_macos_arm64}\"/" cchv-server.rb
-          sed -i "s/sha256 \".*_MACOS_X64\"/sha256 \"${cchv_server_macos_x64}\"/" cchv-server.rb
-          sed -i "s/sha256 \".*_LINUX_ARM64\"/sha256 \"${cchv_server_linux_arm64}\"/" cchv-server.rb
-          sed -i "s/sha256 \".*_LINUX_X64\"/sha256 \"${cchv_server_linux_x64}\"/" cchv-server.rb
-
-          # Also handle non-placeholder SHA256 (for subsequent releases)
-          # Use line-based replacement: find the url line, then replace the next sha256 line
-          python3 -c "
-          import re, os
-          with open('cchv-server.rb') as f:
-              content = f.read()
-          v = os.environ['VERSION']
-          pairs = [
-              ('macos-arm64', os.environ.get('cchv_server_macos_arm64', '')),
-              ('macos-x64', os.environ.get('cchv_server_macos_x64', '')),
-              ('linux-arm64', os.environ.get('cchv_server_linux_arm64', '')),
-              ('linux-x64', os.environ.get('cchv_server_linux_x64', '')),
-          ]
-          for asset, sha in pairs:
-              if sha:
-                  pattern = r'(url \".*' + re.escape(asset) + r'.*\"\n\s+sha256 \")([a-fA-F0-9]+|PLACEHOLDER\w*)(\")'
-                  content = re.sub(pattern, r'\g<1>' + sha + r'\3', content)
-          content = re.sub(r'version \".*?\"', f'version \"{v}\"', content, count=1)
-          with open('cchv-server.rb', 'w') as f:
-              f.write(content)
-          "
-
-          # Push updated formula
-          gh api repos/jhlee0409/homebrew-tap/contents/Formula/cchv-server.rb \
-            -X PUT \
-            -f message="chore: update cchv-server to v${VERSION}" \
-            -f content="$(base64 -w0 < cchv-server.rb)" \
-            -f sha="${FILE_SHA}"
