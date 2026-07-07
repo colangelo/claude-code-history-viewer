@@ -8,3 +8,17 @@ path = "junit.xml"
 # reason CI runs cargo test with --test-threads=1.
 [profile.loop]
 test-threads = 1
+
+# CI profile used by .github/workflows/rust-tests.yml (Test Suite job). It lived
+# in src-tauri/.config/nextest.toml until the crates extraction moved the
+# workspace root here — nextest reads the root config, so the `ci` profile has to
+# live here now or `--profile ci` errors ("profile 'ci' not found"). test-threads
+# = 1 because the workspace aggregates the process-wide-state tests (HOME etc.).
+[profile.ci]
+retries = 3
+fail-fast = false
+slow-timeout = { period = "120s", terminate-after = 3 }
+test-threads = 1
+
+[profile.ci.junit]
+path = "ci/junit.xml"
