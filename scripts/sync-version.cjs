@@ -1,50 +1,55 @@
 #!/usr/bin/env node
 
 /**
- * package.json의 버전을 src-tauri/Cargo.toml과 src-tauri/tauri.conf.json에 동기화하는 스크립트
+ * Sync the fork-owned version from package.json into the Rust workspace and
+ * the Tauri config.
  *
- * Single Source of Truth: package.json
+ * Single Source of Truth: package.json (`version`).
  *
- * 동기화 대상:
- *   - src-tauri/Cargo.toml (Rust 백엔드 버전)
- *   - src-tauri/tauri.conf.json (Tauri 앱 버전, 업데이터에서 사용)
+ * Targets:
+ *   - Cargo.toml [workspace.package] version  (every crate inherits it via
+ *     `version.workspace = true`)
+ *   - src-tauri/tauri.conf.json               (webui-server / app version)
  *
- * 사용법:
- *   node scripts/sync-version.cjs
- *   just sync-version
+ * This is the fork's own `cchv-v*` line — NOT upstream's `v1.x` desktop
+ * versions. See CLAUDE.md → Version Management.
+ *
+ * Usage:
+ *   node scripts/sync-version.cjs   (or: just sync-version)
  */
 
 const fs = require("fs");
 const path = require("path");
 
 const packageJsonPath = path.join(process.cwd(), "package.json");
-const cargoTomlPath = path.join(process.cwd(), "src-tauri", "Cargo.toml");
+const workspaceCargoPath = path.join(process.cwd(), "Cargo.toml");
 const tauriConfPath = path.join(process.cwd(), "src-tauri", "tauri.conf.json");
 
-// 1. package.json에서 버전 읽기 (Single Source of Truth)
+// 1. Read the source of truth.
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 const version = packageJson.version;
+console.log(`[sync-version] package.json version: ${version}`);
 
-console.log(`[sync-version] package.json 버전: ${version}`);
-
-// 2. Cargo.toml 동기화
-let cargoToml = fs.readFileSync(cargoTomlPath, "utf8");
-const versionRegex = /^version\s*=\s*"[^\"]*"/m;
-
-if (!versionRegex.test(cargoToml)) {
-  console.error("[sync-version] Cargo.toml에서 version 라인을 찾을 수 없습니다.");
+// 2. Sync the workspace version (all crates inherit via version.workspace).
+let cargoToml = fs.readFileSync(workspaceCargoPath, "utf8");
+const wsRegex = /(\[workspace\.package\][^[]*?\n)version\s*=\s*"[^"]*"/;
+if (!wsRegex.test(cargoToml)) {
+  console.error(
+    "[sync-version] Could not find [workspace.package] version in Cargo.toml.",
+  );
   process.exit(1);
 }
+cargoToml = cargoToml.replace(wsRegex, `$1version = "${version}"`);
+fs.writeFileSync(workspaceCargoPath, cargoToml);
+console.log(`[sync-version] ✓ Cargo.toml [workspace.package] → ${version}`);
 
-cargoToml = cargoToml.replace(versionRegex, `version = "${version}"`);
-fs.writeFileSync(cargoTomlPath, cargoToml);
-console.log(`[sync-version] ✓ Cargo.toml → ${version}`);
-
-// 3. tauri.conf.json 동기화
+// 3. Sync tauri.conf.json.
 const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, "utf8"));
 const oldTauriVersion = tauriConf.version;
 tauriConf.version = version;
 fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + "\n");
-console.log(`[sync-version] ✓ tauri.conf.json → ${version} (이전: ${oldTauriVersion})`);
+console.log(
+  `[sync-version] ✓ tauri.conf.json → ${version} (was: ${oldTauriVersion})`,
+);
 
-console.log(`[sync-version] 모든 파일이 ${version}로 동기화되었습니다.`);
+console.log(`[sync-version] all files synced to ${version}.`);
