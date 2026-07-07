@@ -392,16 +392,29 @@ fn session_meta(data: &str) -> Option<SessionMeta> {
         }
 
         message_count += 1;
-        if let Some(ts) = rec.get("timestamp").and_then(Value::as_str) {
-            if first_ts.is_none() {
-                first_ts = Some(ts.to_string());
-            }
-            last_ts = Some(ts.to_string());
-        }
-
         let Some(msg) = rec.get("message") else {
             continue;
         };
+        // Match `convert_record`'s precedence: the authoritative per-message
+        // time is the epoch-millis `message.timestamp`; fall back to the
+        // envelope record's ISO `timestamp` only when it's absent. Keeps
+        // session sort order (first/last message time) consistent with the
+        // timestamps shown on individual messages.
+        let ts = msg
+            .get("timestamp")
+            .and_then(Value::as_u64)
+            .map(ms_to_iso)
+            .or_else(|| {
+                rec.get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if let Some(ts) = ts {
+            if first_ts.is_none() {
+                first_ts = Some(ts.clone());
+            }
+            last_ts = Some(ts);
+        }
         let role = msg.get("role").and_then(Value::as_str).unwrap_or("");
         if role == "user" && summary.is_none() {
             summary = first_text(msg).map(|t| summarize(&t));
@@ -726,8 +739,18 @@ mod tests {
         assert_eq!(m.summary.as_deref(), Some("why does LOGIN fail?"));
         assert!(m.has_tool_use);
         assert!(!m.has_errors);
-        assert_eq!(m.first_ts.as_deref(), Some("2026-06-08T20:31:50.000Z"));
-        assert_eq!(m.last_ts.as_deref(), Some("2026-06-08T20:32:11.000Z"));
+        // first/last session times follow `convert_record`'s precedence: the
+        // nested `message.timestamp` epoch millis (2025 here), NOT the envelope
+        // ISO `timestamp` (2026 in this fixture) — so session sort order stays
+        // consistent with the timestamps shown on individual messages.
+        assert_eq!(
+            m.first_ts.as_deref(),
+            Some(ms_to_iso(1_749_412_310_000).as_str())
+        );
+        assert_eq!(
+            m.last_ts.as_deref(),
+            Some(ms_to_iso(1_749_412_331_000).as_str())
+        );
     }
 
     #[test]
