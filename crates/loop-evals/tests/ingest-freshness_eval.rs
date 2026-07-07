@@ -67,8 +67,9 @@ async fn spawn(machine_ids: &[Uuid]) -> TestHub {
     let state = hub::AppState {
         pool: pool.clone(),
         tokens: Arc::new(tokens),
+        trusted_identities: Arc::new(Vec::new()),
     };
-    let app = hub::router(state);
+    let app = hub::router(state, None);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

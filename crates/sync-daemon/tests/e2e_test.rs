@@ -64,12 +64,13 @@ async fn daemon_to_hub_to_search() {
     let state = hub::AppState {
         pool: pool.clone(),
         tokens: Arc::new(tokens),
+        trusted_identities: Arc::new(Vec::new()),
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");
     tokio::spawn(async move {
-        axum::serve(listener, hub::router(state)).await.unwrap();
+        axum::serve(listener, hub::router(state, None)).await.unwrap();
     });
 
     // --- run the daemon against the real hub -----------------------------
