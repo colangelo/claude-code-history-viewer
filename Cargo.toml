@@ -3,6 +3,17 @@ resolver = "2"
 members = ["src-tauri", "crates/history-core", "crates/protocol", "crates/hub", "crates/sync-daemon", "crates/loop-evals"]
 
 # ---------------------------------------------------------------------------
+# Single fork-owned version line (`cchv-v*` tags). Every crate inherits this
+# via `version.workspace = true`. `just sync-version` keeps package.json,
+# this key, and tauri.conf.json aligned — package.json stays the entry point.
+# NOT tied to upstream's `v1.x` desktop versions: this fork ships only the web
+# viewer + archive stack, so it owns its own version. See CLAUDE.md → Version
+# Management.
+# ---------------------------------------------------------------------------
+[workspace.package]
+version = "0.5.1"
+
+# ---------------------------------------------------------------------------
 # Shared lint configuration. Both the desktop app and the extracted
 # `history-core` library inherit these via `[lints] workspace = true`, so the
 # pedantic profile that the parsers were written against is preserved after the
