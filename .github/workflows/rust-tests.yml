@@ -231,7 +231,8 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run security audit
-        working-directory: src-tauri
+        # Lockfile lives at the workspace root since the crates extraction
+        # (was src-tauri/Cargo.lock). Run audit from the root.
         run: cargo audit
 
   # Documentation check - main branch only
