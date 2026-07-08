@@ -173,9 +173,15 @@ Install (launchd, macOS):
   <dict>
     <key>DAEMON_CONFIG</key><string>/Users/YOU/.config/cchv/daemon.toml</string>
     <key>RUST_LOG</key><string>info</string>
+    <!-- house deployment (§3b): mark launchd starts headless so the launcher
+         skips the interactive `op` fallback (never prompt Touch-ID under KeepAlive) -->
+    <key>CCHV_NONINTERACTIVE</key><string>1</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <!-- launchd-resilience contract: cap KeepAlive respawn churn (default floor
+       is 10s → ~8.6k respawns/night on a fast-failing job) to 5 min. -->
+  <key>ThrottleInterval</key><integer>300</integer>
 </dict></plist>
 ```
 
@@ -209,11 +215,17 @@ equivalently.
   1P item `openbao - cchv-daemon approle` (vault `AC-DevOps`), install the
   script to `~/.local/bin/cchv-launch`, and point the plist's
   `ProgramArguments` at `cchv-launch daemon` (drop the `DAEMON_CONFIG` env —
-  the launcher sets it).
-- **Fallbacks**: if bao is unreachable, the launcher tries
-  `op read` (may need Touch ID — fine for attended starts); if that fails too,
-  it reuses the previous runtime render and logs a warning. KeepAlive retries
-  cover transient outages.
+  the launcher sets it). Keep the plist's `CCHV_NONINTERACTIVE=1` and
+  `ThrottleInterval=300` (above) — they make the launcher conform to the house
+  launchd-resilience contract (`macos-setup docs/launchd-resilience.md`).
+- **Fallbacks** (launchd-resilience-conformant): bao is skipped when the tailnet
+  name doesn't resolve (MagicDNS down at wake — no point eating curl timeouts).
+  `op read` is tried **only in an attended start**; under launchd it's skipped
+  (no tty / `CCHV_NONINTERACTIVE=1`) so a down-tailnet reboot can't storm
+  Touch-ID/TCC prompts. When both are unavailable the launcher reuses the
+  previous runtime render (last-known-good) and logs a warning — a clean idle,
+  not a crash-loop. `ThrottleInterval` caps `KeepAlive` respawn churn to 5 min.
+  (Regression origin: 2026-07-08 m4m tailnet-down prompt storm — see CHANGELOG.)
 - **Rotation**: rotate in 1P, re-copy to bao per home-network
   `docs/secrets-standard.md`, then `launchctl unload/load` the job — the next
   launch re-renders.

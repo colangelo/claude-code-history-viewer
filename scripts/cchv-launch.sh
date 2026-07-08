@@ -5,9 +5,16 @@
 # Usage: cchv-launch.sh <daemon|hub> [--render-only]
 #
 # Resolution order for secrets:
-#   1. OpenBao via the `cchv-daemon` AppRole (creds in ~/.config/cchv/bao-approle)
-#   2. `op read` from 1Password (vault AC-DevOps) — may require Touch ID
-#   3. last-known-good rendered config from a previous successful launch
+#   1. OpenBao via the `cchv-daemon` AppRole (creds in ~/.config/cchv/bao-approle);
+#      skipped when the tailnet name doesn't resolve (MagicDNS down at wake).
+#   2. `op read` from 1Password (vault AC-DevOps) — ATTENDED starts only; skipped
+#      in a headless/launchd context so it can't storm Touch-ID/TCC prompts.
+#   3. last-known-good rendered config from a previous successful launch (the
+#      floor a down-tailnet launchd start degrades to — no prompt, no crash-loop).
+#
+# Conforms to the house launchd-resilience contract (macos-setup
+# docs/launchd-resilience.md): degrade-don't-loop, never prompt headless, gate
+# tailnet work on DNS resolving. ThrottleInterval lives in the plists.
 #
 # The static configs (~/.config/cchv/daemon.toml, hub.toml) are TEMPLATES with
 # @PLACEHOLDER@ markers — no secrets on disk outside the 0600 runtime renders.
@@ -21,6 +28,7 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 BAO_ADDR="${BAO_ADDR:-https://secrets.cat-bluegill.ts.net}"
+BAO_HOST="${BAO_ADDR#*://}"; BAO_HOST="${BAO_HOST%%[:/]*}"
 CFG_DIR="$HOME/.config/cchv"
 APPROLE_FILE="$CFG_DIR/bao-approle"
 HOST="$(hostname -s)"
@@ -39,8 +47,22 @@ log() { echo "[cchv-launch:$MODE] $*" >&2; }
 
 # --- OpenBao: AppRole login, then kv reads ---------------------------------
 BAO_TOKEN=""
+
+# tailnet_resolves — cheap check that a tailnet name actually resolves.
+# Contract point 4 (macos-setup docs/launchd-resilience.md): gate tailnet work on
+# MagicDNS answering, not just the network being up. A wake/reboot with the
+# tailnet still down (100.100.100.100 unreachable) bails here to last-known-good
+# instead of eating 4×10s bao-curl timeouts and a doomed dependency chain. Uses
+# the macOS system resolver (respects MagicDNS split-DNS); on non-macOS (no
+# dscacheutil) we don't gate.
+tailnet_resolves() {
+  command -v dscacheutil >/dev/null 2>&1 || return 0
+  dscacheutil -q host -a name "$BAO_HOST" 2>/dev/null | grep -q 'ip_address'
+}
+
 bao_login() {
   [ -r "$APPROLE_FILE" ] || { log "no AppRole creds at $APPROLE_FILE"; return 1; }
+  tailnet_resolves || { log "tailnet DNS not resolving ($BAO_HOST) — skipping bao"; return 1; }
   local role_id secret_id
   role_id="$(sed -n 's/^role_id=//p' "$APPROLE_FILE")"
   secret_id="$(sed -n 's/^secret_id=//p' "$APPROLE_FILE")"
@@ -60,8 +82,18 @@ bao_kv() {
   [ -n "$val" ] && echo "$val"
 }
 
-# op_read <op://ref>  → value on stdout, or fail (Touch ID may prompt/stall)
+# op_read <op://ref>  → value on stdout, or fail.
+# Contract point 3 (launchd-resilience): NEVER prompt from a headless context.
+# `op read` with desktop/Touch-ID integration pops a TCC dialog per call — under
+# KeepAlive that's a prompt storm (2026-07-08 m4m: tailnet down → bao fails → 4×
+# op reads → Touch-ID prompts every render, all night). op only makes sense in an
+# attended start, so skip it when non-interactive (launchd has no tty; the plists
+# also set CCHV_NONINTERACTIVE=1). Falls through to last-known-good.
 op_read() {
+  if [ "${CCHV_NONINTERACTIVE:-0}" = 1 ] || [ ! -t 0 ]; then
+    log "non-interactive — skipping op fallback (would storm Touch-ID); using cache"
+    return 1
+  fi
   local val
   val="$(op read "$1" 2>/dev/null)" || return 1
   [ -n "$val" ] && echo "$val"
