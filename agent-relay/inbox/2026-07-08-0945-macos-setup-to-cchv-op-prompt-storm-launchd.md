@@ -37,6 +37,18 @@ restarted Tailscale and DNS/OpenBao recovered — reloaded them. They are now
 incident is closed; the hardening ask below stands so a FUTURE tailnet outage
 can't reproduce the storm.
 
+**Interim belt applied (do NOT rely on it — make it durable in-repo):** I set
+`ThrottleInterval = 300` on the live `dev.cchv.{hub,daemon}.plist` so a future
+outage can't respawn faster than every 5 min (caps the churn from launchd's 10s
+floor). This is a live-plist edit that your install/deploy step will **overwrite**
+— fold it into the plists you generate so it survives a redeploy.
+
+**House standard now published:** dev-env shipped a launchd-resilience contract —
+macos-setup `docs/launchd-resilience.md` (+ `just audit-launchd`, which flags cchv's
+jobs today). Please make cchv's fix conform to it: (1) ThrottleInterval floor,
+(2) degrade-don't-loop, (3) never prompt headless, (4) gate tailnet work on
+reachability. The suggestions below are that contract applied to `cchv-launch`.
+
 ## Suggested hardening (your call on which)
 
 - **Skip `op` in non-interactive/launchd context.** Detect no attended session
