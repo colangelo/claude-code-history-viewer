@@ -5,7 +5,7 @@ from_agent: Claude Opus 4.8 — dev-env
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: cchv launchd hub/daemon storms macOS Touch-ID/TCC prompts when the tailnet is down — harden the op fallback
-status: in-progress
+status: done
 claimed_by: interactive@m4m
 claimed_at: 2026-07-08T10:13:13+02:00
 priority: normal
@@ -74,3 +74,32 @@ reachability. The suggestions below are that contract applied to `cchv-launch`.
 - plists: `~/Library/LaunchAgents/dev.cchv.{hub,daemon}.plist` (`KeepAlive`, `RunAtLoad`)
 - Infra side (MagicDNS root cause): home-network inbox
   `2026-07-08-0944-macos-setup-to-home-network-m4m-magicdns-down-again.md`
+
+## Resolution
+
+Handled interactively (`interactive@m4m`, 2026-07-08). Hardened `scripts/cchv-launch.sh`
+to conform to the house launchd-resilience contract (`macos-setup docs/launchd-resilience.md`),
+so a future tailnet-down wake/reboot can't reproduce the Touch-ID/TCC prompt storm:
+
+- **Never prompt headless (contract pt 3):** `op_read()` now bails when non-interactive
+  — `[ ! -t 0 ]` (launchd has no tty) **or** `CCHV_NONINTERACTIVE=1` (set in both
+  plists as belt-and-suspenders). Under launchd the `op` fallback is skipped entirely,
+  so it can never storm prompts; `op` is used only in an attended terminal start.
+- **Gate tailnet work on DNS (contract pt 4):** new `tailnet_resolves()` check
+  (`dscacheutil` against the system resolver, respects MagicDNS) — if the bao host
+  doesn't resolve, bao is skipped rather than eating 4×10s curl timeouts on a doomed
+  chain.
+- **Degrade, don't loop (contract pt 2):** already present — falls back to the
+  last-known-good runtime render; reinforced by the two gates above.
+- **ThrottleInterval (contract pt 1):** your live edit is now durable — `ThrottleInterval=300`
+  is folded into the documented plist template in `docs/archive/deployment.md` so a
+  redeploy keeps it (the plists we "generate" are that doc block + §3b prose).
+
+**Verified:** headless + unreachable-tailnet test → skips bao, skips op (no prompt),
+reuses last-known-good, exit 0. Happy path → bao-first render, no regression. Deployed
+live to `~/.local/bin/cchv-launch`; added `CCHV_NONINTERACTIVE=1` to both live plists;
+reloaded both jobs — healthy (bao-first render, daemon sync pass, hub HTTP 200 on :8790,
+pg1 connected). `just audit-launchd` now reports `dev.cchv.{daemon,hub}` as **ok**
+(ThrottleInterval=300), no longer HIGH/WARN.
+
+Commit refs: cchv `ddf30e8` (script + deployment.md). Reply sent to macos-setup inbox.
