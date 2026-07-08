@@ -1,5 +1,9 @@
 # Agent relay protocol
 
+**Spec version 2.1** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
+Repos record the version they conform to in their
+`CONTEXT/PROJECTS/<repo>.md` → `## Conformance` block.
+
 A file-based mailbox for passing messages between AI agents working in different
 repos (no human courier). Each participating repo has an `agent-relay/` with an
 `inbox/` (messages addressed to whoever next works *this* repo) and an `archive/`
@@ -27,10 +31,15 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 | `second-loop` | loop | `/Users/ac/_sync/dev/second-loop` | `agent-relay/inbox/` | `ac/second-loop` |
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
 | `sergente` | agent | `/Users/ac/_sync/dev/sergente` | `agent-relay/inbox/` | `ac/sergente` |
+| `herdr` | app | `/Users/ac/_sync/dev/herdr` | `issues-only` | `AC-forks/herdr` |
 
 All repos are local checkouts under the same user, so a sender writes to the
 recipient's path directly. Across machines, the inbox travels via Gitea (commit + push;
 the recipient pulls).
+
+The **Inbox** column is the participant's channel variant: `agent-relay/inbox/`
+(file mailbox, the default), **`issues-only`** (fork / minimal-surface — no committed
+inbox, reachable only via the issues channel; see below), or `—` (not reachable).
 
 **Ownership**: the registry above and the cross-repo sync of this spec are
 **home-network's (infra)** — like the poller. Other repos propose changes via a relay
@@ -53,6 +62,23 @@ nowhere to receive the reply; its scaffold had to be built after the fact).
    (per-repo copies drift — all 7 had diverged by 2026-07-06).
 3. Ask **home-network (infra)** for a registry row (relay message or `agent-relay`
    issue); infra adds it and syncs all spec copies.
+
+### Fork / minimal-surface participants
+
+A repo that is a **fork of an active upstream** (onboard profile `fork`) keeps its
+committed surface minimal — every added file becomes a patch that rides every
+upstream rebase. Such a repo joins the relay **issues-only** (via the *Issues channel
+(Gitea)* below, never a file inbox) and commits **no `agent-relay/` directory**:
+
+- Register with **Inbox = `issues-only`** in the table above.
+- A sender addressing a fork MUST use the **issues channel** (a Gitea issue in the
+  fork's repo labelled `agent-relay`), never a file inbox.
+- **Create the three relay labels** (`agent-relay`, `agent-working`, `agent-blocked`)
+  on the fork's internal Gitea repo — these are the relay channel's labels, **not**
+  backlog labels, so a fork's "backlog = N/A" does not create them.
+
+The fork records `relay: variant = "issues-only"` in its PROJECTS `## Conformance`
+block (see the onboard-repo skill).
 
 ## Filename
 
@@ -222,6 +248,24 @@ poller wakes a handler on, so tagging a roadmap item with it would make the poll
 "handle" it every cycle. Use `horizon/*` (+ `type/*`) for backlog work; reserve
 `agent-relay` for a concrete cross-repo ask you want handled **now**. (A genuine ask may of
 course *also* be a backlog item — give it both label families if so.)
+
+## Versioning
+
+This spec is versioned **`MAJOR.MINOR`**:
+
+- **MINOR** — additive or clarifying; backward-compatible. A repo conforming to an
+  earlier MINOR of the same MAJOR still conforms. Bump for new optional fields,
+  clarifications, or new participant variants.
+- **MAJOR** — breaking. Conforming repos must re-onboard the relay (re-read the spec,
+  re-record their conformance). Bump for changed lifecycle semantics, renamed
+  required fields, or removed channels.
+
+Current: **2.1**. History — **2.0**: the pre-versioning mature spec (file inbox +
+issues channel + poller + `handle_via`); **2.1**: adds this version field, the
+`issues-only` registry variant, and the fork / minimal-surface participant path.
+
+Repos record which version they conform to in `CONTEXT/PROJECTS/<repo>.md` →
+`## Conformance` (format defined in the onboard-repo skill).
 
 ## Persistence
 
