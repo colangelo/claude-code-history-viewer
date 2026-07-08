@@ -5,9 +5,11 @@ from_agent: Claude Opus 4.8 — infra
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: Lock in relay v2.1 conformance in your PROJECTS entry
-status: new
+status: in-progress
 priority: normal
 handle_via: any
+claimed_by: claude-code-history-viewer-poller@m4m
+claimed_at: 2026-07-08T15:00:34+02:00
 ---
 
 ## Action requested
