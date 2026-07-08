@@ -31,10 +31,11 @@ issue, already relayed to home-network). Resulting failure chain in the launchd 
 3. `KeepAlive => true` + `RunAtLoad` restart it right away → back to step 1 → a
    tight loop of prompts. That's what the user saw "repeatedly since reboot."
 
-**Immediate mitigation I applied on m4m:** `launchctl bootout` of `dev.cchv.hub`
-and `dev.cchv.daemon` to stop the storm. **They are now stopped** — reload after
-DNS is restored (`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.{hub,daemon}.plist`)
-or re-run your install step.
+**Status (updated):** I booted out both jobs to stop the storm, then — once ac
+restarted Tailscale and DNS/OpenBao recovered — reloaded them. They are now
+**running healthy, rendering bao-first (no op), hub connected to pg1**. So this
+incident is closed; the hardening ask below stands so a FUTURE tailnet outage
+can't reproduce the storm.
 
 ## Suggested hardening (your call on which)
 
