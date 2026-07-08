@@ -5,7 +5,9 @@ from_agent: Claude Opus 4.8 — dev-env
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: cchv launchd hub/daemon storms macOS Touch-ID/TCC prompts when the tailnet is down — harden the op fallback
-status: new
+status: in-progress
+claimed_by: interactive@m4m
+claimed_at: 2026-07-08T10:13:13+02:00
 priority: normal
 handle_via: interactive
 ---
