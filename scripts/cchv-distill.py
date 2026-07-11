@@ -38,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -262,16 +263,27 @@ def generate(model: str, entry_date: str, project: str, transcript: str) -> dict
     prompt = PROMPT_TEMPLATE.format(
         entry_date=entry_date, project=project, transcript=transcript
     )
-    proc = subprocess.run(
-        ["claude", "-p", "--model", model, "--output-format", "json"],
-        input=prompt,
-        capture_output=True,
-        text=True,
-        timeout=CLAUDE_TIMEOUT_SECS,
-        cwd=Path.home(),
-    )
+    # Transient 401s happen when a concurrent Claude Code process refreshes the
+    # shared OAuth token mid-flight; one retry after a pause rides it out.
+    for attempt in (1, 2):
+        proc = subprocess.run(
+            ["claude", "-p", "--model", model, "--output-format", "json"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=CLAUDE_TIMEOUT_SECS,
+            cwd=Path.home(),
+        )
+        if attempt == 1 and "401" in proc.stdout[:300] and proc.returncode != 0:
+            log("transient 401 from claude -p — retrying once")
+            time.sleep(15)
+            continue
+        break
     if proc.returncode != 0:
-        raise RuntimeError(f"claude -p failed: {proc.stderr[:500]}")
+        raise RuntimeError(
+            f"claude -p exited {proc.returncode} "
+            f"(stderr[:300]={proc.stderr[:300]!r}, stdout[:300]={proc.stdout[:300]!r})"
+        )
     try:
         wrapper = json.loads(proc.stdout)
     except json.JSONDecodeError as e:

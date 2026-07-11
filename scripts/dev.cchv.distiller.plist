@@ -8,16 +8,19 @@
 <dict>
     <key>Label</key>
     <string>dev.cchv.distiller</string>
+    <!-- zsh -lc (login shell) like the relay poller: claude -p auth depends on
+         profile env (CLAUDE_CONFIG_DIR points at ~/.config/claude — without it
+         claude looks in ~/.claude and reports "Not logged in"). -->
     <key>ProgramArguments</key>
     <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
         <string>/Users/ac/.local/bin/cchv-distill</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
         <key>CCHV_NONINTERACTIVE</key>
         <string>1</string>
-        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/Users/ac/.local/bin:/usr/bin:/bin</string>
     </dict>
     <key>StartCalendarInterval</key>
     <dict>
