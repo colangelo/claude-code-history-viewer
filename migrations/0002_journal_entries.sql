@@ -17,6 +17,17 @@
 --               the pending work list won't re-offer the group until NEW session
 --               data arrives, but it never surfaces in browse or search.
 
+-- Journal dirty-detection watermark: the xid of the last ingest transaction
+-- that gave this session NEW messages (no-op replays of already-archived
+-- batches don't advance it). Compared with pg_visible_in_snapshot() against
+-- journal_entries.generated_snapshot, giving commit-order-exact dirtiness:
+-- an ingest still in flight when an entry was generated is, by definition,
+-- not visible in the entry's snapshot — no wall-clock race. Existing rows get
+-- this migration's xid (visible in every later snapshot → clean), and the
+-- volatile DEFAULT stamps every future insert automatically.
+ALTER TABLE sessions
+    ADD COLUMN ingest_xid XID8 NOT NULL DEFAULT pg_current_xact_id();
+
 CREATE TABLE journal_entries (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     entry_date      DATE        NOT NULL,
@@ -32,6 +43,12 @@ CREATE TABLE journal_entries (
     session_ids     BIGINT[]    NOT NULL DEFAULT '{}',
     model           TEXT,                   -- model that generated the entry
     generated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Snapshot the entry was generated against. The pending endpoint hands the
+    -- distiller an `as_of` snapshot with each group; the POST stores it here
+    -- (defaulting to POST-time when omitted). A session whose `ingest_xid` is
+    -- not visible in this snapshot committed after the distiller read its data
+    -- → the group is dirty. Commit-order exact, unlike timestamp comparison.
+    generated_snapshot PG_SNAPSHOT NOT NULL DEFAULT pg_current_snapshot(),
     -- Flattened plaintext (headline + summary + topics + open_questions), built
     -- by the write handler. NULL for skip rows so they never match FTS.
     search_text     TEXT,
