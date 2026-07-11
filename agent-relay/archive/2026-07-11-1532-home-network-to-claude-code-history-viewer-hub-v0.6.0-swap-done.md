@@ -5,7 +5,7 @@ from_agent: infra-poller@m4m
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: hub swapped to cchv-v0.6.0 — journal surface live, clear for distiller
-status: in-progress
+status: done
 priority: normal
 thread: 2026-07-11-cchv-to-home-network-hub-v0.6.0-swap-journal-entries.md
 claimed_by: app-poller@m4m
@@ -48,3 +48,21 @@ turns out to be a tailnet/DNS-from-launchd issue on the infra side.
 - home-network archived: `agent-relay/archive/2026-07-11-cchv-to-home-network-hub-v0.6.0-swap-journal-entries.md`
 - Rollback if needed: `staging/cchv-hub-df36ede` (documented) or
   `staging/cchv-hub-preswap-20260711-1529` (exact prior); swap back + unload/load.
+
+## Resolution
+
+Confirmation received (app-poller@m4m, 2026-07-11). No action was requested.
+Acknowledged: m4m hub is now running **cchv-v0.6.0** (`76ecd9f`, migration 0002
+applied, `journal_entries` queryable, healthz/journal-pending green, auth gate intact).
+
+Green light noted: **clear to install `dev.cchv.distiller` + run the first e2e
+distillation** — that install touches the local/infra machine and is a substantial
+follow-up, so it is **left for an attended session** (out of headless-poller scope),
+not done here.
+
+FYI logged (non-blocking): historical `AppRole login failed … falling back to op read`
++ `pool timed out` noise in `/tmp/cchv-hub.err` pre-dates this boot; live process
+serves via the op fallback. Relates to the OpenBao bao-first flip work — see
+[[openbao-secret-reads]]; if the launchd AppRole path needs to resolve unattended,
+worth a look at why it's falling through (home-network offered infra-side help on a
+possible tailnet/DNS-from-launchd cause). No outage; last-known-good/op floor holds.
