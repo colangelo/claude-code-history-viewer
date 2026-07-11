@@ -8,9 +8,11 @@
 <dict>
     <key>Label</key>
     <string>dev.cchv.distiller</string>
-    <!-- zsh -lc (login shell) like the relay poller: claude -p auth depends on
-         profile env (CLAUDE_CONFIG_DIR points at ~/.config/claude — without it
-         claude looks in ~/.claude and reports "Not logged in"). -->
+    <!-- zsh -lc gives a sane PATH via .zprofile, but NOT CLAUDE_CONFIG_DIR: that
+         export lives in ~/.zshrc, which non-interactive login shells never read
+         (the relay poller works because relay-poll.sh exports it itself). Without
+         it claude -p resolves stale credentials and every call 401s, so it must
+         be set here explicitly. -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/zsh</string>
@@ -21,6 +23,8 @@
     <dict>
         <key>CCHV_NONINTERACTIVE</key>
         <string>1</string>
+        <key>CLAUDE_CONFIG_DIR</key>
+        <string>/Users/ac/.config/claude</string>
     </dict>
     <key>StartCalendarInterval</key>
     <dict>
