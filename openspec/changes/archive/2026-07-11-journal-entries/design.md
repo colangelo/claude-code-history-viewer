@@ -55,11 +55,19 @@ credentials.
    pollute search.
 
 3. **Catch-up, not tick-based.** The work list is a SQL view of the data
-   (missing entry, or session ingested after `generated_at`), served by
-   `GET /v1/journal/pending`. The launchd schedule is merely "when to drain".
-   This one mechanism covers distiller downtime, m4m sleep, and machines
-   syncing days of backlog. `skip` rows are watermarks so dead days aren't
-   re-judged every run.
+   (missing entry, or dirty), served by `GET /v1/journal/pending`. The launchd
+   schedule is merely "when to drain". This one mechanism covers distiller
+   downtime, m4m sleep, and machines syncing days of backlog. `skip` rows are
+   watermarks so dead days aren't re-judged every run.
+   *As shipped (review round 3):* dirtiness is **transaction visibility**, not
+   wall-clock — `sessions.ingest_xid` (xid8, stamped only when a session gains
+   messages, so no-op replays can't re-dirty) checked with
+   `pg_visible_in_snapshot()` against the entry's stored `pg_snapshot`.
+   Pending hands the distiller an `as_of` snapshot taken before it reads any
+   transcript; the POST echoes it — data committing anywhere inside the
+   read→generate→POST window keeps the group dirty. Commit-order exact, no
+   locks. POST validation is also exact: session ids must belong to AND fully
+   cover the posted group.
 
 4. **Session→day assignment by first message + `day_start_hour` (04:00).**
    Whole sessions are assigned to one logical day (no message-level
@@ -100,10 +108,9 @@ credentials.
 - [Quota burn from backfill] → backfill never automatic, bounded by
   `--limit`, newest-first; eval (`cchv-find.eval.toml`) measures whether the
   recall win justifies continuing.
-- [Dirty-detection misses] → pending query compares `generated_at` against
-  session ingest time (`sessions.updated_at`), not message timestamps —
-  late-arriving *old* messages still bump `updated_at` at ingest. Covered by
-  an explicit late-arrival test.
+- [Dirty-detection misses] → *superseded by the shipped snapshot mechanism*
+  (decision 3): visibility-based dirtiness has no wall-clock race and ignores
+  no-op replays by construction. Covered by explicit late-arrival tests.
 - [Transcript exceeds context for a single Haiku call] → distiller truncates
   per-session input deterministically (head+tail sampling) before the call;
   entries summarize days, not verbatim logs, so lossy input is acceptable.

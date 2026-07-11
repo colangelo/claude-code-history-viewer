@@ -66,12 +66,18 @@ search results or browse listings unless explicitly requested.
 The hub SHALL expose `GET /v1/journal/pending` (read-auth) returning the
 (date, project_path) groups needing distillation, computed from data — not
 from a schedule. A group is pending when it has archived sessions but no
-journal row, **or** when session data for it was ingested after the existing
-row's `generated_at` (dirty). The endpoint MUST support bounding parameters
-(at minimum a date lower bound and a result limit) so callers can take
-bounded, resumable chunks; results SHALL be ordered newest-first. Groups whose
-logical date is not yet closed (today, per `day_start_hour`) MUST NOT be
-listed.
+journal row, **or** when session data for it became visible after the entry
+was generated (dirty) — judged by transaction visibility, not wall-clock
+comparison, so an ingest still in flight when the entry was generated counts
+as dirty regardless of timestamp interleaving, and replaying an
+already-archived batch (no new messages) does NOT dirty a group. Each pending
+group SHALL carry an `as_of` generation marker (a database snapshot taken
+before the caller reads any transcript) that the distiller echoes back in its
+entry POST, anchoring dirty-detection to the moment the group was read. The
+endpoint MUST support bounding parameters (at minimum a date lower bound and
+a result limit) so callers can take bounded, resumable chunks; results SHALL
+be ordered newest-first. Groups whose logical date is not yet closed (today,
+per `day_start_hour`) MUST NOT be listed.
 
 #### Scenario: Missing entry is pending
 
@@ -94,11 +100,14 @@ listed.
 
 The hub SHALL expose `POST /v1/journal/entries` authenticated by machine
 token (as ingest is), upserting by `(entry_date, project_path)`: re-distilling
-a dirty group replaces the previous entry and refreshes `generated_at`. The
-endpoint MUST validate entry payloads (status is `entry` or `skip`; `entry`
-payloads carry headline, summary, and 3–8 topics; referenced session ids
-exist) and reject invalid ones with a `4xx` and a reason, without partial
-writes.
+a dirty group replaces the previous entry and refreshes its generation
+watermark. The endpoint MUST validate entry payloads (status is `entry` or
+`skip`; `entry` payloads carry headline, summary, 3–8 topics, and a non-empty
+model) and enforce **exact provenance**: every referenced session id MUST
+belong to the posted (entry_date, project_path) group under the logical-day
+fold, and the set MUST cover every archived session in the group — mismatched
+or partial provenance is rejected. Invalid payloads are rejected with a `4xx`
+and a reason, without partial writes.
 
 #### Scenario: Upsert replaces a dirty entry
 
