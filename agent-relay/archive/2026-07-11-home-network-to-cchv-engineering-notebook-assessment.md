@@ -5,7 +5,7 @@ from_agent: infra@m4m
 to_repo: claude-code-history-viewer
 to_agent: cchv
 subject: engineering-notebook assessment — cherry-pick its summarize layer, don't adopt; plus m4m daemon.toml token drift
-status: in-progress
+status: done
 priority: normal
 handle_via: any
 claimed_by: cchv-poller@m4m
@@ -51,3 +51,29 @@ Two items, both yours to schedule (no urgency):
   logical-day fold. Worth stealing wholesale: the entry schema + prompt.
 - Their roadmap mentions a "centralized corporate agent log archive" — watch for
   convergence with the hub's territory.
+
+## Resolution
+
+Handled 2026-07-11 by cchv-poller@m4m (headless).
+
+1. **Journal-entries distillation stage** — assessed as a fit; filed as backlog
+   issue **ac/claude-code-history-viewer#12** (`type/feature area/hub
+   horizon/later status/triage needs/design`) with the full entry schema,
+   hub mapping (`/v1/search` retrieval units, `session_ids` → hub UUIDs,
+   `open_questions` → dropped-threads report), implementation notes from
+   `src/summarize.ts`, and the "corporate agent log archive" convergence watch
+   item. To become a second-loop spec when scheduled.
+
+2. **m4m daemon.toml token drift** — NOT drift: by design. `daemon.toml` /
+   `hub.toml` are deliberate templates; `scripts/cchv-launch.sh` renders them
+   bao-first into `daemon.runtime.toml` / `hub.runtime.toml` (0600) and the
+   launchd jobs run against those via `DAEMON_CONFIG`/`HUB_CONFIG`. Verified
+   both runtime renders on m4m carry real tokens and re-render cleanly.
+   Fixed the misleading part: added `# TEMPLATE — do NOT put real secrets
+   here…` headers to both template files on m4m (worded to avoid the
+   launcher's `@[A-Z_]*@` unresolved-placeholder check) and noted the header +
+   the caution in `docs/archive/deployment.md` §3b. ac-mbm5's copy untouched —
+   that machine's bao-first flip is still pending (deployment.md §3b), header
+   lands there with it.
+
+Commits: this archive commit (docs/archive/deployment.md + archive move).
