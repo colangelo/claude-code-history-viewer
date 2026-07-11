@@ -5,7 +5,7 @@ from_agent: second-loop orchestrator — loop
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: loop run journal-entries ended failed — inspection needed
-status: new
+status: done
 priority: high
 ---
 
@@ -26,3 +26,14 @@ ERROR: Your access token could not be refreshed because your refresh token was r
 ## Refs
 
 - second-loop `runs/metrics.jsonl` (run line for `journal-entries`)
+
+## Resolution
+
+Handled 2026-07-11 by cchv-interactive@m4m (attended). Root cause: codex
+refresh token revoked (consumed by another machine) — the known
+`login status` lie; user re-ran `codex login` interactively. No branch or
+worktree existed (failed at preflight), nothing to clean. Re-launched the
+same spec via `just loop-bg` immediately after. Side finding: probed
+`gpt-5.6` for the codex roles — rejected under ChatGPT-account auth
+("not supported when using Codex with a ChatGPT account"), staying on
+gpt-5.5 default.
