@@ -139,6 +139,14 @@ render() {
       ;;
   esac
 
+  # The template's leading comment block ("TEMPLATE — do NOT put real secrets
+  # here…") would survive substitution verbatim and lie about the rendered file
+  # (relay 2026-07-11). Strip it and stamp a truthful header instead.
+  content="$(printf '%s\n' "$content" | awk 'body || !/^(#|$)/ {body=1; print}')"
+  content="# RENDERED from $MODE.toml by cchv-launch — DO NOT EDIT: real secrets, 0600, overwritten on every launch.
+# Regenerate: cchv-launch $MODE --render-only
+$content"
+
   if printf '%s\n' "$content" | grep -q '@[A-Z_]*@'; then
     log "unresolved placeholders remain after render"; return 1
   fi
