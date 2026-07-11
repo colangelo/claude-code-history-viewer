@@ -310,21 +310,6 @@ pub async fn ingest(
             touched_projects.insert(pid);
         }
     }
-    // Bump `updated_at` for sessions that gained messages. The aggregate UPDATE
-    // above refreshes counts/timestamps but NOT `updated_at`, and a message-only
-    // ingest (messages for a session already in the archive, with no session row
-    // in this batch) never runs the session upsert that would otherwise set it.
-    // Journal dirty-detection compares `sessions.updated_at` against an entry's
-    // `generated_at`, so a late message batch must move it forward to re-open the
-    // group. Runtime query (not the `query!` macro) so the offline build needs no
-    // regenerated `.sqlx` metadata.
-    if !touched_sessions.is_empty() {
-        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
-        sqlx::query("UPDATE sessions SET updated_at = now() WHERE id = ANY($1)")
-            .bind(&touched)
-            .execute(&mut *tx)
-            .await?;
-    }
     for project_pk in &touched_projects {
         sqlx::query!(
             r#"
@@ -341,6 +326,27 @@ pub async fn ingest(
         )
         .execute(&mut *tx)
         .await?;
+    }
+
+    // Session ingest watermark for journal dirty-detection. Two problems this
+    // fixes: (1) the session upsert / aggregate UPDATE above leave `updated_at`
+    // at transaction-start `now()` (or don't touch it at all for a message-only
+    // ingest of an already-archived session); (2) `now()` is transaction-start
+    // time, so an ingest that begins before a journal-entry POST but commits
+    // after it would carry a stale `updated_at < generated_at` and the group
+    // would look clean despite data landing after the entry. Stamping
+    // `clock_timestamp()` (statement wall-clock) as the LAST write before commit
+    // makes the watermark track write order and sit as close to commit as
+    // possible, matching the `clock_timestamp()` `generated_at` on the journal
+    // side. Only sessions that gained messages are bumped (genuine new data);
+    // runtime query (not `query!`) so the offline build needs no `.sqlx`
+    // metadata.
+    if !touched_sessions.is_empty() {
+        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
+        sqlx::query("UPDATE sessions SET updated_at = clock_timestamp() WHERE id = ANY($1)")
+            .bind(&touched)
+            .execute(&mut *tx)
+            .await?;
     }
 
     tx.commit().await?;

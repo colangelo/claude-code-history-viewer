@@ -38,6 +38,11 @@ CREATE TABLE journal_entries (
     text_search     TSVECTOR
         GENERATED ALWAYS AS (to_tsvector('simple', coalesce(search_text, ''))) STORED,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Every 'entry' row MUST record the model that generated it (the spec's
+    -- provenance requirement) — defense in depth so an invalid row can't bypass
+    -- the API validation. Skip rows carry no model.
+    CONSTRAINT journal_entries_entry_has_model
+        CHECK (status <> 'entry' OR (model IS NOT NULL AND btrim(model) <> '')),
     -- One entry per logical date per project, folded across machines.
     UNIQUE (entry_date, project_path)
 );

@@ -194,6 +194,12 @@ pub async fn create(
                 "entry status requires between {MIN_TOPICS} and {MAX_TOPICS} topics (got {n})"
             )));
         }
+        // The spec requires every entry to record the model that generated it.
+        if payload.model.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(HubError::BadRequest(
+                "entry status requires a non-empty model".into(),
+            ));
+        }
     }
 
     // Session provenance is mandatory for BOTH statuses: an entry distills real
@@ -238,12 +244,18 @@ pub async fn create(
         payload.open_questions.clone()
     };
 
+    // `generated_at` is stamped with `clock_timestamp()` (statement wall-clock),
+    // NOT `now()` (transaction-start): dirty-detection compares it against the
+    // session watermark, and a transaction-start timestamp would open a race
+    // where an ingest that starts before this POST but commits after it looks
+    // "clean". Statement-time watermarks on both sides make the comparison track
+    // write order, not transaction-start order. See the ingest-side bump.
     sqlx::query(
         r"
         INSERT INTO journal_entries
             (entry_date, project_path, status, headline, summary, topics,
              open_questions, session_ids, model, generated_at, search_text)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(), $10)
         ON CONFLICT (entry_date, project_path)
         DO UPDATE SET status         = excluded.status,
                       headline        = excluded.headline,
@@ -252,7 +264,7 @@ pub async fn create(
                       open_questions  = excluded.open_questions,
                       session_ids     = excluded.session_ids,
                       model           = excluded.model,
-                      generated_at    = now(),
+                      generated_at    = clock_timestamp(),
                       search_text     = excluded.search_text
         ",
     )
