@@ -321,7 +321,10 @@ def process_group(hub: Hub, group: dict, model: str, dry_run: bool) -> bool:
     payload = {
         "entry_date": entry_date,
         "project_path": project_path,
-        "project_name": group.get("project_name"),
+        # Echo the pending endpoint's snapshot: anchors dirty-detection to the
+        # moment this group was READ, so data committing while we generate
+        # keeps the group dirty (hub rejects/re-pends as appropriate).
+        "as_of": group.get("as_of"),
         "status": entry["status"],
         "headline": entry.get("headline"),
         "summary": entry.get("summary"),
