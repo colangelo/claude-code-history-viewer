@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod health;
 pub mod ingest;
+pub mod journal;
 pub mod pagination;
 pub mod search;
 pub mod state;
@@ -84,6 +85,11 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/healthz/ingest", get(health::healthz_ingest))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/search", get(search::search))
+        .route("/v1/journal/pending", get(journal::pending))
+        .route(
+            "/v1/journal/entries",
+            get(journal::browse).post(journal::create),
+        )
         .route("/v1/projects", get(browse::list_projects))
         .route("/v1/sessions", get(browse::list_sessions))
         .route("/v1/sessions/{id}/messages", get(browse::session_messages));
