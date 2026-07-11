@@ -41,9 +41,7 @@
 //! posting an entry stamps `generated_at = now`, then ingesting another session
 //! for the group bumps `sessions.updated_at` past it.
 
-use archive_protocol::{
-    IngestBatch, IngestMessage, IngestProject, IngestSession, MachineInfo,
-};
+use archive_protocol::{IngestBatch, IngestMessage, IngestProject, IngestSession, MachineInfo};
 use chrono::{Duration, NaiveDate, Utc};
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
@@ -194,17 +192,21 @@ async fn ingest_session(hub: &TestHub, session_id: &str, ts: &str, text: &str) -
 
 /// Map a provider session id to its hub surrogate id via `/v1/sessions`.
 async fn resolve_sid(hub: &TestHub, session_id: &str) -> i64 {
-    let body: Value = get(hub, "/v1/sessions", &[("machine", &hub.hostname)], Some(&hub.token))
-        .await
-        .json()
-        .await
-        .unwrap();
+    let body: Value = get(
+        hub,
+        "/v1/sessions",
+        &[("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
     body.as_array()
         .unwrap()
         .iter()
         .find(|s| s["session_id"].as_str() == Some(session_id))
-        .unwrap_or_else(|| panic!("session {session_id} not found in /v1/sessions"))
-        ["id"]
+        .unwrap_or_else(|| panic!("session {session_id} not found in /v1/sessions"))["id"]
         .as_i64()
         .expect("surrogate id must be an integer")
 }
@@ -264,7 +266,11 @@ async fn my_pending(hub: &TestHub, from: &str) -> Vec<Value> {
         Some(&hub.token),
     )
     .await;
-    assert_eq!(resp.status(), 200, "pending must be 200 for a read-authed call");
+    assert_eq!(
+        resp.status(),
+        200,
+        "pending must be 200 for a read-authed call"
+    );
     let body: Value = resp.json().await.unwrap();
     body.as_array()
         .expect("pending body must be a JSON array")
@@ -283,7 +289,11 @@ async fn my_entries(hub: &TestHub) -> Vec<Value> {
         Some(&hub.token),
     )
     .await;
-    assert_eq!(resp.status(), 200, "browse must be 200 for a read-authed call");
+    assert_eq!(
+        resp.status(),
+        200,
+        "browse must be 200 for a read-authed call"
+    );
     let body: Value = resp.json().await.unwrap();
     body.as_array()
         .expect("entries body must be a JSON array")
@@ -301,7 +311,9 @@ fn ids_contains(v: &Value, id: i64) -> bool {
 }
 
 fn has_date(groups: &[Value], date: &str) -> bool {
-    groups.iter().any(|g| g["entry_date"].as_str() == Some(date))
+    groups
+        .iter()
+        .any(|g| g["entry_date"].as_str() == Some(date))
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +385,11 @@ async fn ac3_logical_day_fold_across_the_4utc_boundary() {
     let sid_eve = ingest_session(&hub, "s-eve", &format!("{ds}T23:00:00Z"), "evening").await;
 
     let groups = my_pending(&hub, &ds).await;
-    assert_eq!(groups.len(), 1, "both sessions fold into one group: {groups:?}");
+    assert_eq!(
+        groups.len(),
+        1,
+        "both sessions fold into one group: {groups:?}"
+    );
     assert_eq!(groups[0]["entry_date"].as_str(), Some(ds.as_str()));
     assert!(ids_contains(&groups[0]["session_ids"], sid_late));
     assert!(ids_contains(&groups[0]["session_ids"], sid_eve));
@@ -385,7 +401,10 @@ async fn ac4_post_stores_entry_browse_returns_it_pending_clears() {
     let hub = spawn().await;
     let date = ymd(days_ago(3));
     let sid = ingest_session(&hub, "s1", &format!("{date}T10:00:00Z"), "work").await;
-    assert!(has_date(&my_pending(&hub, &date).await, &date), "pending before POST");
+    assert!(
+        has_date(&my_pending(&hub, &date).await, &date),
+        "pending before POST"
+    );
 
     let body = entry_body(
         &date,
@@ -424,11 +443,35 @@ async fn ac5_repost_replaces_and_keeps_single_row() {
     let date = ymd(days_ago(3));
     let sid = ingest_session(&hub, "s1", &format!("{date}T10:00:00Z"), "work").await;
 
-    let v1 = entry_body(&date, &hub.project, "First take", "v1 summary", &["a", "b", "c"], &[sid]);
-    assert!((200..300).contains(&post_entry(&hub, Some(&hub.token), &v1).await.status().as_u16()));
+    let v1 = entry_body(
+        &date,
+        &hub.project,
+        "First take",
+        "v1 summary",
+        &["a", "b", "c"],
+        &[sid],
+    );
+    assert!((200..300).contains(
+        &post_entry(&hub, Some(&hub.token), &v1)
+            .await
+            .status()
+            .as_u16()
+    ));
 
-    let v2 = entry_body(&date, &hub.project, "Second take", "v2 summary", &["x", "y", "z"], &[sid]);
-    assert!((200..300).contains(&post_entry(&hub, Some(&hub.token), &v2).await.status().as_u16()));
+    let v2 = entry_body(
+        &date,
+        &hub.project,
+        "Second take",
+        "v2 summary",
+        &["x", "y", "z"],
+        &[sid],
+    );
+    assert!((200..300).contains(
+        &post_entry(&hub, Some(&hub.token), &v2)
+            .await
+            .status()
+            .as_u16()
+    ));
 
     let rows = my_entries(&hub).await;
     assert_eq!(rows.len(), 1, "upsert keeps exactly one row: {rows:?}");
@@ -444,9 +487,24 @@ async fn ac6_late_session_dirties_entry_then_repost_clears() {
     let date = ymd(days_ago(3));
     let sid1 = ingest_session(&hub, "s1", &format!("{date}T10:00:00Z"), "work").await;
 
-    let v1 = entry_body(&date, &hub.project, "Take one", "summary", &["a", "b", "c"], &[sid1]);
-    assert!((200..300).contains(&post_entry(&hub, Some(&hub.token), &v1).await.status().as_u16()));
-    assert!(!has_date(&my_pending(&hub, &date).await, &date), "clean after first POST");
+    let v1 = entry_body(
+        &date,
+        &hub.project,
+        "Take one",
+        "summary",
+        &["a", "b", "c"],
+        &[sid1],
+    );
+    assert!((200..300).contains(
+        &post_entry(&hub, Some(&hub.token), &v1)
+            .await
+            .status()
+            .as_u16()
+    ));
+    assert!(
+        !has_date(&my_pending(&hub, &date).await, &date),
+        "clean after first POST"
+    );
 
     // A late-arriving session for the same group bumps sessions.updated_at
     // past the entry's generated_at -> dirty.
@@ -456,8 +514,20 @@ async fn ac6_late_session_dirties_entry_then_repost_clears() {
         "group must be pending again after a late session"
     );
 
-    let v2 = entry_body(&date, &hub.project, "Take two", "summary2", &["a", "b", "c"], &[sid1, sid2]);
-    assert!((200..300).contains(&post_entry(&hub, Some(&hub.token), &v2).await.status().as_u16()));
+    let v2 = entry_body(
+        &date,
+        &hub.project,
+        "Take two",
+        "summary2",
+        &["a", "b", "c"],
+        &[sid1, sid2],
+    );
+    assert!((200..300).contains(
+        &post_entry(&hub, Some(&hub.token), &v2)
+            .await
+            .status()
+            .as_u16()
+    ));
     assert!(
         !has_date(&my_pending(&hub, &date).await, &date),
         "re-distillation must clear the group again"
@@ -476,7 +546,14 @@ async fn ac7_invalid_payloads_rejected_and_store_nothing() {
     // Only 2 topics (needs 3-8).
     let too_few = entry_body(&date, &hub.project, "h", "s", &["one", "two"], &[sid]);
     // References a session id that does not exist.
-    let bad_sid = entry_body(&date, &hub.project, "h", "s", &["a", "b", "c"], &[bogus_sid]);
+    let bad_sid = entry_body(
+        &date,
+        &hub.project,
+        "h",
+        "s",
+        &["a", "b", "c"],
+        &[bogus_sid],
+    );
     // Unknown status value.
     let bad_status = json!({
         "entry_date": date, "project_path": hub.project, "status": "maybe",
@@ -485,7 +562,10 @@ async fn ac7_invalid_payloads_rejected_and_store_nothing() {
     });
 
     for body in [&too_few, &bad_sid, &bad_status] {
-        let status = post_entry(&hub, Some(&hub.token), body).await.status().as_u16();
+        let status = post_entry(&hub, Some(&hub.token), body)
+            .await
+            .status()
+            .as_u16();
         assert!(
             (400..500).contains(&status) && status != 404 && status != 405,
             "invalid payload must be a client validation error (400/422), got {status}"
@@ -519,8 +599,14 @@ async fn ac8_skip_row_hidden_from_browse_and_search() {
         resp.status()
     );
 
-    assert!(!has_date(&my_pending(&hub, &date).await, &date), "skip clears pending");
-    assert!(my_entries(&hub).await.is_empty(), "skip never appears in browse");
+    assert!(
+        !has_date(&my_pending(&hub, &date).await, &date),
+        "skip clears pending"
+    );
+    assert!(
+        my_entries(&hub).await.is_empty(),
+        "skip never appears in browse"
+    );
 
     // Skip must not surface in journal search for its own project's content.
     let body: Value = get(
@@ -550,7 +636,13 @@ async fn ac9_default_scope_returns_messages_and_journal() {
     let date = ymd(days_ago(3));
     let tag = hub.machine_id.simple().to_string();
     let term = format!("zqterm{}", &tag[..10]);
-    let sid = ingest_session(&hub, "s1", &format!("{date}T10:00:00Z"), &format!("about {term} today")).await;
+    let sid = ingest_session(
+        &hub,
+        "s1",
+        &format!("{date}T10:00:00Z"),
+        &format!("about {term} today"),
+    )
+    .await;
 
     let body = entry_body(
         &date,
@@ -560,7 +652,12 @@ async fn ac9_default_scope_returns_messages_and_journal() {
         &["a", "b", "c"],
         &[sid],
     );
-    assert!((200..300).contains(&post_entry(&hub, Some(&hub.token), &body).await.status().as_u16()));
+    assert!((200..300).contains(
+        &post_entry(&hub, Some(&hub.token), &body)
+            .await
+            .status()
+            .as_u16()
+    ));
 
     let resp = get(
         &hub,
@@ -573,14 +670,20 @@ async fn ac9_default_scope_returns_messages_and_journal() {
     let body: Value = resp.json().await.unwrap();
 
     // Existing message results are still present, unchanged shape.
-    let results = body["results"].as_array().expect("results array must exist");
+    let results = body["results"]
+        .as_array()
+        .expect("results array must exist");
     assert!(
-        results.iter().any(|r| r["session_id"].as_str() == Some("s1")),
+        results
+            .iter()
+            .any(|r| r["session_id"].as_str() == Some("s1")),
         "message hit for the seeded term must be present"
     );
 
     // Additive journal block.
-    let journal = body["journal"].as_array().expect("journal array must exist at default scope");
+    let journal = body["journal"]
+        .as_array()
+        .expect("journal array must exist at default scope");
     let hit = journal
         .iter()
         .find(|h| h["project_path"].as_str() == Some(hub.project.as_str()))
@@ -598,7 +701,13 @@ async fn ac10_scope_messages_and_journal() {
     let date = ymd(days_ago(3));
     let tag = hub.machine_id.simple().to_string();
     let term = format!("zqterm{}", &tag[..10]);
-    let sid = ingest_session(&hub, "s1", &format!("{date}T10:00:00Z"), &format!("msg {term}")).await;
+    let sid = ingest_session(
+        &hub,
+        "s1",
+        &format!("{date}T10:00:00Z"),
+        &format!("msg {term}"),
+    )
+    .await;
     let body = entry_body(
         &date,
         &hub.project,
@@ -607,22 +716,38 @@ async fn ac10_scope_messages_and_journal() {
         &["a", "b", "c"],
         &[sid],
     );
-    assert!((200..300).contains(&post_entry(&hub, Some(&hub.token), &body).await.status().as_u16()));
+    assert!((200..300).contains(
+        &post_entry(&hub, Some(&hub.token), &body)
+            .await
+            .status()
+            .as_u16()
+    ));
 
     // scope=messages: no journal key, message hit still present.
     let m: Value = get(
         &hub,
         "/v1/search",
-        &[("q", &term), ("scope", "messages"), ("machine", &hub.hostname)],
+        &[
+            ("q", &term),
+            ("scope", "messages"),
+            ("machine", &hub.hostname),
+        ],
         Some(&hub.token),
     )
     .await
     .json()
     .await
     .unwrap();
-    assert!(m.get("journal").is_none(), "scope=messages must omit the journal key: {m}");
     assert!(
-        m["results"].as_array().unwrap().iter().any(|r| r["session_id"].as_str() == Some("s1")),
+        m.get("journal").is_none(),
+        "scope=messages must omit the journal key: {m}"
+    );
+    assert!(
+        m["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["session_id"].as_str() == Some("s1")),
         "scope=messages still returns message hits"
     );
 
@@ -630,23 +755,34 @@ async fn ac10_scope_messages_and_journal() {
     let j: Value = get(
         &hub,
         "/v1/search",
-        &[("q", &term), ("scope", "journal"), ("machine", &hub.hostname)],
+        &[
+            ("q", &term),
+            ("scope", "journal"),
+            ("machine", &hub.hostname),
+        ],
         Some(&hub.token),
     )
     .await
     .json()
     .await
     .unwrap();
-    let journal = j["journal"].as_array().expect("scope=journal must carry a journal array");
+    let journal = j["journal"]
+        .as_array()
+        .expect("scope=journal must carry a journal array");
     assert!(
-        journal.iter().any(|h| h["project_path"].as_str() == Some(hub.project.as_str())),
+        journal
+            .iter()
+            .any(|h| h["project_path"].as_str() == Some(hub.project.as_str())),
         "scope=journal returns the entry hit"
     );
     let no_message_hits = match j.get("results") {
         None => true,
         Some(r) => r.as_array().is_some_and(Vec::is_empty),
     };
-    assert!(no_message_hits, "scope=journal must report no message hits: {j}");
+    assert!(
+        no_message_hits,
+        "scope=journal must report no message hits: {j}"
+    );
 }
 
 /// AC11: reads require a bearer; the write endpoint requires a valid machine
@@ -676,7 +812,9 @@ async fn ac11_auth_is_enforced() {
         "POST without a token must be 401"
     );
     assert_eq!(
-        post_entry(&hub, Some("not-a-real-token"), &body).await.status(),
+        post_entry(&hub, Some("not-a-real-token"), &body)
+            .await
+            .status(),
         401,
         "POST with an invalid token must be 401"
     );

@@ -328,25 +328,26 @@ pub async fn ingest(
         .await?;
     }
 
-    // Session ingest watermark for journal dirty-detection. Two problems this
-    // fixes: (1) the session upsert / aggregate UPDATE above leave `updated_at`
-    // at transaction-start `now()` (or don't touch it at all for a message-only
-    // ingest of an already-archived session); (2) `now()` is transaction-start
-    // time, so an ingest that begins before a journal-entry POST but commits
-    // after it would carry a stale `updated_at < generated_at` and the group
-    // would look clean despite data landing after the entry. Stamping
-    // `clock_timestamp()` (statement wall-clock) as the LAST write before commit
-    // makes the watermark track write order and sit as close to commit as
-    // possible, matching the `clock_timestamp()` `generated_at` on the journal
-    // side. Only sessions that gained messages are bumped (genuine new data);
-    // runtime query (not `query!`) so the offline build needs no `.sqlx`
-    // metadata.
+    // Journal dirty-detection watermark. Only sessions that actually gained
+    // messages are stamped (`touched_sessions`), so replaying an already-fully-
+    // archived batch is a no-op for journal purposes: the session upsert above
+    // may bump `updated_at`, but `ingest_xid` — the value pending compares —
+    // stays put. Dirtiness is transaction-VISIBILITY, not wall-clock: pending
+    // checks `NOT pg_visible_in_snapshot(ingest_xid, generated_snapshot)`, so
+    // an ingest that commits after an entry's snapshot was taken is dirty by
+    // construction, however the timestamps interleave. `updated_at` is bumped
+    // alongside for human observability only. Runtime query (not `query!`): the
+    // offline build has no `.sqlx` metadata for new statements.
     if !touched_sessions.is_empty() {
         let touched: Vec<i64> = touched_sessions.iter().copied().collect();
-        sqlx::query("UPDATE sessions SET updated_at = clock_timestamp() WHERE id = ANY($1)")
-            .bind(&touched)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE sessions
+             SET updated_at = clock_timestamp(), ingest_xid = pg_current_xact_id()
+             WHERE id = ANY($1)",
+        )
+        .bind(&touched)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;

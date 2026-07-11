@@ -47,12 +47,17 @@ pub struct PendingParams {
 }
 
 /// One pending `(entry_date, project_path)` group, carrying the surrogate
-/// session ids the distiller needs (so it takes no second lookup).
+/// session ids the distiller needs (so it takes no second lookup) and the
+/// `as_of` snapshot to echo back in the entry POST: storing the snapshot taken
+/// *before* the distiller reads any transcript makes dirty-detection cover the
+/// whole read-generate-POST window (data committing anywhere inside it is not
+/// visible in `as_of` → the group stays dirty).
 #[derive(Debug, Serialize, FromRow)]
 pub struct PendingGroup {
     pub entry_date: NaiveDate,
     pub project_path: String,
     pub session_ids: Vec<i64>,
+    pub as_of: String,
 }
 
 fn parse_date(s: Option<&str>, which: &str) -> Result<Option<NaiveDate>, HubError> {
@@ -65,10 +70,11 @@ fn parse_date(s: Option<&str>, which: &str) -> Result<Option<NaiveDate>, HubErro
 }
 
 /// Data-derived work list. A group is pending when it has archived sessions but
-/// no journal row, **or** when a session for it was ingested after the row's
-/// `generated_at` (dirty — compared against `sessions.updated_at`, which is
-/// bumped at ingest time even for old, late-arriving messages). Groups on the
-/// still-open logical day are excluded. Newest-first, honoring `from` + `limit`.
+/// no journal row, **or** when a session's `ingest_xid` is not visible in the
+/// row's `generated_snapshot` (dirty): that ingest committed after the entry's
+/// snapshot was taken, so the entry cannot have seen its data — commit-order
+/// exact, immune to wall-clock interleaving. Groups on the still-open logical
+/// day are excluded. Newest-first, honoring `from` + `limit`.
 pub async fn pending(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -85,13 +91,14 @@ pub async fn pending(
                     AT TIME ZONE 'UTC')::date        AS entry_date,
                 p.project_path                       AS project_path,
                 array_agg(s.id ORDER BY s.id)        AS session_ids,
-                max(s.updated_at)                    AS latest_ingest
+                array_agg(s.ingest_xid)              AS ingest_xids
             FROM sessions s
             JOIN projects p ON s.project_id = p.id
             WHERE s.first_message_time IS NOT NULL
             GROUP BY 1, 2
         )
-        SELECT g.entry_date, g.project_path, g.session_ids
+        SELECT g.entry_date, g.project_path, g.session_ids,
+               pg_current_snapshot()::text AS as_of
         FROM grp g
         LEFT JOIN journal_entries j
             ON j.entry_date = g.entry_date
@@ -99,7 +106,9 @@ pub async fn pending(
         WHERE g.entry_date
                 < ((now() - make_interval(hours => $1::int)) AT TIME ZONE 'UTC')::date
           AND ($2::date IS NULL OR g.entry_date >= $2)
-          AND (j.id IS NULL OR g.latest_ingest > j.generated_at)
+          AND (j.id IS NULL OR EXISTS (
+                SELECT 1 FROM unnest(g.ingest_xids) AS x
+                WHERE NOT pg_visible_in_snapshot(x, j.generated_snapshot)))
         ORDER BY g.entry_date DESC, g.project_path DESC
         LIMIT $3
         ",
@@ -135,6 +144,11 @@ pub struct EntryPayload {
     pub session_ids: Vec<i64>,
     #[serde(default)]
     pub model: Option<String>,
+    /// The `as_of` snapshot echoed from `GET /v1/journal/pending`. When set,
+    /// dirty-detection is anchored to the moment the distiller *read* the
+    /// group; when omitted (manual callers, tests) it defaults to POST time.
+    #[serde(default)]
+    pub as_of: Option<String>,
 }
 
 /// Build the flattened FTS text for an entry. Covers the prose (headline,
@@ -205,7 +219,7 @@ pub async fn create(
     // Session provenance is mandatory for BOTH statuses: an entry distills real
     // archived sessions, and a skip watermark must record which sessions it
     // judged. An empty set would let a caller clear pending with no drill-down
-    // provenance, so reject it — then verify every referenced id exists.
+    // provenance, so reject it.
     if payload.session_ids.is_empty() {
         return Err(HubError::BadRequest(
             "session_ids must reference at least one archived session".into(),
@@ -214,14 +228,54 @@ pub async fn create(
     let mut ids = payload.session_ids.clone();
     ids.sort_unstable();
     ids.dedup();
-    let found: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = ANY($1)")
-        .bind(&ids)
-        .fetch_one(&state.pool)
-        .await?;
-    if found != i64::try_from(ids.len()).unwrap_or(i64::MAX) {
+
+    // Provenance must be exact: every referenced session must BELONG to the
+    // posted (entry_date, project_path) group — same logical-day fold as the
+    // pending query — and the set must COVER the whole group. Membership stops
+    // a mismatched id (existing, but from another project/date) from clearing
+    // a group it never distilled; coverage stops a partial set from
+    // watermarking sessions it never saw. A group that grew between the
+    // distiller's pending read and this POST is therefore rejected — correct,
+    // since the group is dirty again anyway and re-distills next run.
+    let group_ids: Vec<i64> = sqlx::query_scalar(
+        r"
+        SELECT s.id
+        FROM sessions s
+        JOIN projects p ON s.project_id = p.id
+        WHERE p.project_path = $1
+          AND s.first_message_time IS NOT NULL
+          AND ((s.first_message_time - make_interval(hours => $2::int))
+                AT TIME ZONE 'UTC')::date = $3
+        ORDER BY s.id
+        ",
+    )
+    .bind(&payload.project_path)
+    .bind(DAY_START_HOUR)
+    .bind(payload.entry_date)
+    .fetch_all(&state.pool)
+    .await?;
+    if ids.iter().any(|id| !group_ids.contains(id)) {
         return Err(HubError::BadRequest(
-            "one or more referenced session ids do not exist".into(),
+            "one or more session ids do not belong to this (entry_date, project_path) group".into(),
         ));
+    }
+    if group_ids.iter().any(|id| !ids.contains(id)) {
+        return Err(HubError::BadRequest(
+            "incomplete provenance: session_ids must cover every archived session in the group"
+                .into(),
+        ));
+    }
+
+    // Validate the optional `as_of` snapshot before it reaches the INSERT (a
+    // bad cast inside the write would surface as a 500, not a client error).
+    if let Some(snap) = payload.as_of.as_deref() {
+        sqlx::query_scalar::<_, String>("SELECT ($1::pg_snapshot)::text")
+            .bind(snap)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|_| {
+                HubError::BadRequest("invalid `as_of` (expected a pg_snapshot string)".into())
+            })?;
     }
 
     // -- upsert ------------------------------------------------------------
@@ -244,28 +298,31 @@ pub async fn create(
         payload.open_questions.clone()
     };
 
-    // `generated_at` is stamped with `clock_timestamp()` (statement wall-clock),
-    // NOT `now()` (transaction-start): dirty-detection compares it against the
-    // session watermark, and a transaction-start timestamp would open a race
-    // where an ingest that starts before this POST but commits after it looks
-    // "clean". Statement-time watermarks on both sides make the comparison track
-    // write order, not transaction-start order. See the ingest-side bump.
+    // `generated_snapshot` anchors dirty-detection: sessions whose `ingest_xid`
+    // is not visible in it are dirty. The distiller echoes the `as_of` snapshot
+    // it received from the pending endpoint (taken BEFORE it read any
+    // transcript), so data committing anywhere in the read-generate-POST window
+    // keeps the group dirty; callers that omit it (tests, manual) anchor to
+    // POST time. `generated_at` stays as the human-facing timestamp.
     sqlx::query(
         r"
         INSERT INTO journal_entries
             (entry_date, project_path, status, headline, summary, topics,
-             open_questions, session_ids, model, generated_at, search_text)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(), $10)
+             open_questions, session_ids, model, generated_at, generated_snapshot,
+             search_text)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(),
+                coalesce($10::pg_snapshot, pg_current_snapshot()), $11)
         ON CONFLICT (entry_date, project_path)
-        DO UPDATE SET status         = excluded.status,
-                      headline        = excluded.headline,
-                      summary         = excluded.summary,
-                      topics          = excluded.topics,
-                      open_questions  = excluded.open_questions,
-                      session_ids     = excluded.session_ids,
-                      model           = excluded.model,
-                      generated_at    = clock_timestamp(),
-                      search_text     = excluded.search_text
+        DO UPDATE SET status             = excluded.status,
+                      headline           = excluded.headline,
+                      summary            = excluded.summary,
+                      topics             = excluded.topics,
+                      open_questions     = excluded.open_questions,
+                      session_ids        = excluded.session_ids,
+                      model              = excluded.model,
+                      generated_at       = clock_timestamp(),
+                      generated_snapshot = excluded.generated_snapshot,
+                      search_text        = excluded.search_text
         ",
     )
     .bind(payload.entry_date)
@@ -277,6 +334,7 @@ pub async fn create(
     .bind(&open_questions)
     .bind(&payload.session_ids)
     .bind(&payload.model)
+    .bind(&payload.as_of)
     .bind(search_text)
     .execute(&state.pool)
     .await?;
