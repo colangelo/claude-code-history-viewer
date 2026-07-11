@@ -205,7 +205,12 @@ equivalently.
   `hub.toml` are templates with `@HUB_TOKEN@` / `@DB_PASSWORD@` /
   `@M4M_TOKEN@` / `@AC_MBM5_TOKEN@` placeholders. The launcher renders them to
   `daemon.runtime.toml` / `hub.runtime.toml` (0600) and points
-  `DAEMON_CONFIG`/`HUB_CONFIG` there.
+  `DAEMON_CONFIG`/`HUB_CONFIG` there. Keep the `# TEMPLATE — do NOT put real
+  secrets here…` header comment at the top of both template files when
+  (re)deploying: a bare `hub_token` placeholder line reads like failed
+  substitution to anyone (or any agent) inspecting the file (relay 2026-07-11).
+  Caution: the launcher rejects renders still matching `@[A-Z_]*@`, so template
+  comments must not contain literal all-caps at-sign markers.
 - **OpenBao source of truth**: `kv/infra/cchv/pg1` (hub DB creds) and
   `kv/infra/cchv/hub-tokens` (`<host>_token`, `<host>_machine_id`). Read via
   AppRole `cchv-daemon` (policy `cchv-read`, token TTL 15m — fine, the token is
