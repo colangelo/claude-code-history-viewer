@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- dev.cchv.distiller — daily journal-entries distiller (docs/archive/deployment.md §3c).
+     Calendar job, NOT KeepAlive: the distiller is catch-up-based (work list derived
+     from hub data), so a missed tick is drained by the next run; launchd fires a
+     missed StartCalendarInterval once on wake. RunAtLoad adds login/boot catch-up. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.cchv.distiller</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/ac/.local/bin/cchv-distill</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CCHV_NONINTERACTIVE</key>
+        <string>1</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/Users/ac/.local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>300</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/cchv-distiller.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/cchv-distiller.err</string>
+</dict>
+</plist>

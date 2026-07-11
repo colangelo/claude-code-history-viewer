@@ -238,6 +238,48 @@ equivalently.
   `docs/secrets-standard.md`, then `launchctl unload/load` the job — the next
   launch re-renders.
 
+## 3c. Journal-entries distiller (`scripts/cchv-distill.py`)
+
+> Daily launchd job on the hub machine (m4m) that distills archived sessions
+> into per-(date, project) journal entries (openspec `journal-entries`,
+> issue #12). Catch-up-based: the work list is `GET /v1/journal/pending`
+> (missing or dirty groups), so sleep/downtime and late-arriving syncs only
+> delay entries. **Install only after the hub carries the journal endpoints**
+> (migration `0002_journal_entries.sql`).
+
+- **Install** (on m4m):
+
+  ```bash
+  install -m 755 scripts/cchv-distill.py ~/.local/bin/cchv-distill
+  cp scripts/dev.cchv.distiller.plist ~/Library/LaunchAgents/
+  launchctl load ~/Library/LaunchAgents/dev.cchv.distiller.plist
+  ```
+
+  Requires `uv` on PATH (PEP 723 script) and the `claude` CLI logged in
+  (Max plan — the distiller runs `claude -p`, model `haiku` by default).
+  Runs daily 05:30 + on load; logs `/tmp/cchv-distiller.{log,err}`.
+- **Secrets**: same bao-first chain as §3b — `$CCHV_HUB_TOKEN` override →
+  AppRole (`~/.config/cchv/bao-approle`) reading
+  `kv/infra/cchv/hub-tokens/<host>_token` → `op read` (attended only; never
+  prompts under launchd). The machine token authorizes both the reads and
+  `POST /v1/journal/entries`.
+- **Forward mode** (the launchd default) only processes groups newer than
+  `--horizon-days` (7). **Backfill is deliberate and bounded** — never
+  automatic:
+
+  ```bash
+  # newest-first, resumable; re-run to continue where the last chunk stopped
+  cchv-distill --backfill --limit 20
+  cchv-distill --backfill --from 2026-05-01 --limit 50
+  cchv-distill --dry-run            # inspect an entry without writing
+  ```
+
+  Chunk the historical sweep (9 months of archive) and check quota + entry
+  quality (`GET /v1/journal/entries`, `cchv-find` eval) between chunks.
+- **Failure semantics**: schema-invalid LLM output is rejected locally and the
+  group stays pending (retried next run); the hub validates independently.
+  Exit code 1 when any group failed — visible in `/tmp/cchv-distiller.err`.
+
 ## 4. Verify end-to-end
 
 ```bash
