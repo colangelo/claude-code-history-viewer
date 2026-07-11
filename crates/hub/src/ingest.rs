@@ -310,6 +310,21 @@ pub async fn ingest(
             touched_projects.insert(pid);
         }
     }
+    // Bump `updated_at` for sessions that gained messages. The aggregate UPDATE
+    // above refreshes counts/timestamps but NOT `updated_at`, and a message-only
+    // ingest (messages for a session already in the archive, with no session row
+    // in this batch) never runs the session upsert that would otherwise set it.
+    // Journal dirty-detection compares `sessions.updated_at` against an entry's
+    // `generated_at`, so a late message batch must move it forward to re-open the
+    // group. Runtime query (not the `query!` macro) so the offline build needs no
+    // regenerated `.sqlx` metadata.
+    if !touched_sessions.is_empty() {
+        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
+        sqlx::query("UPDATE sessions SET updated_at = now() WHERE id = ANY($1)")
+            .bind(&touched)
+            .execute(&mut *tx)
+            .await?;
+    }
     for project_pk in &touched_projects {
         sqlx::query!(
             r#"

@@ -21,7 +21,7 @@ CREATE TABLE journal_entries (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     entry_date      DATE        NOT NULL,
     project_path    TEXT        NOT NULL,
-    status          TEXT        NOT NULL,   -- 'entry' | 'skip'
+    status          TEXT        NOT NULL CHECK (status IN ('entry', 'skip')),
     headline        TEXT,                   -- one line (entry only)
     summary         TEXT,                   -- 2–5 sentences (entry only)
     topics          TEXT[]      NOT NULL DEFAULT '{}',   -- 3–8 for entries

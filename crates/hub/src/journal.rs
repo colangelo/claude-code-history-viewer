@@ -137,18 +137,23 @@ pub struct EntryPayload {
     pub model: Option<String>,
 }
 
-/// Build the flattened FTS text for an entry from its headline, summary,
-/// topics, and open questions.
+/// Build the flattened FTS text for an entry. Covers the prose (headline,
+/// summary, topics, and open questions) AND the entry's identifying fields —
+/// `entry_date`, `project_path`, and the session ids — so `/v1/search` can find
+/// a journal row by any of them, as the search contract requires.
 fn entry_search_text(p: &EntryPayload) -> String {
-    let mut parts: Vec<&str> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(p.entry_date.format("%Y-%m-%d").to_string());
+    parts.push(p.project_path.clone());
     if let Some(h) = &p.headline {
-        parts.push(h);
+        parts.push(h.clone());
     }
     if let Some(s) = &p.summary {
-        parts.push(s);
+        parts.push(s.clone());
     }
-    parts.extend(p.topics.iter().map(String::as_str));
-    parts.extend(p.open_questions.iter().map(String::as_str));
+    parts.extend(p.topics.iter().cloned());
+    parts.extend(p.open_questions.iter().cloned());
+    parts.extend(p.session_ids.iter().map(i64::to_string));
     parts.join(" ")
 }
 
@@ -191,20 +196,26 @@ pub async fn create(
         }
     }
 
-    // Referenced session ids must all exist (for either status).
-    if !payload.session_ids.is_empty() {
-        let mut ids = payload.session_ids.clone();
-        ids.sort_unstable();
-        ids.dedup();
-        let found: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = ANY($1)")
-            .bind(&ids)
-            .fetch_one(&state.pool)
-            .await?;
-        if found != i64::try_from(ids.len()).unwrap_or(i64::MAX) {
-            return Err(HubError::BadRequest(
-                "one or more referenced session ids do not exist".into(),
-            ));
-        }
+    // Session provenance is mandatory for BOTH statuses: an entry distills real
+    // archived sessions, and a skip watermark must record which sessions it
+    // judged. An empty set would let a caller clear pending with no drill-down
+    // provenance, so reject it — then verify every referenced id exists.
+    if payload.session_ids.is_empty() {
+        return Err(HubError::BadRequest(
+            "session_ids must reference at least one archived session".into(),
+        ));
+    }
+    let mut ids = payload.session_ids.clone();
+    ids.sort_unstable();
+    ids.dedup();
+    let found: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions WHERE id = ANY($1)")
+        .bind(&ids)
+        .fetch_one(&state.pool)
+        .await?;
+    if found != i64::try_from(ids.len()).unwrap_or(i64::MAX) {
+        return Err(HubError::BadRequest(
+            "one or more referenced session ids do not exist".into(),
+        ));
     }
 
     // -- upsert ------------------------------------------------------------
