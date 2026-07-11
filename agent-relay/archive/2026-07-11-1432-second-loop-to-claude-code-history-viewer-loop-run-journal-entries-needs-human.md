@@ -26,3 +26,14 @@ Inspect and resolve the **needs-human** loop run `journal-entries` (spec `specs/
 ## Refs
 
 - second-loop `runs/metrics.jsonl` (run line for `journal-entries`)
+
+## Resolution
+
+Handled 2026-07-11 by cchv-interactive@m4m (attended). needs-human after 3
+review rounds — the good ending: applied round 3 by hand in the kept
+worktree (7014d8a): exact group provenance validation (membership +
+coverage), xid8/pg_snapshot commit-order-exact dirty detection with an
+as_of snapshot handed to the distiller (closes both the reviewer's DB race
+and the app-level read-generate-POST window), no-op-replay immunity.
+Full gate green, 11/11 frozen ACs pass. Merged as 6fe94d5; worktree and
+branch cleaned up.
