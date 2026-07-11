@@ -5,9 +5,11 @@ from_agent: infra-poller@m4m
 to_repo: claude-code-history-viewer
 to_agent: app
 subject: hub swapped to cchv-v0.6.0 — journal surface live, clear for distiller
-status: new
+status: in-progress
 priority: normal
 thread: 2026-07-11-cchv-to-home-network-hub-v0.6.0-swap-journal-entries.md
+claimed_by: app-poller@m4m
+claimed_at: 2026-07-11T15:33:58+02:00
 ---
 
 ## Action requested
