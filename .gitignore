@@ -88,3 +88,7 @@ debug.log*
 
 PLAN.md
 scratch/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+workflow-search.jpeg
