@@ -5,8 +5,10 @@ from_agent: second-loop orchestrator — loop
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: loop run journal-entries ended needs-human — inspection needed
-status: new
+status: in-progress
 priority: high
+claimed_by: cchv-poller@m4m
+claimed_at: 2026-07-11T14:38:50+02:00
 ---
 
 ## Action requested
