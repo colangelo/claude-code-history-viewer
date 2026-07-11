@@ -24,6 +24,9 @@ pub struct SearchParams {
     pub to: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// `all` (default) | `messages` | `journal`. Controls whether the additive
+    /// `journal` block is included and whether the message search runs.
+    pub scope: Option<String>,
 }
 
 /// One search hit with its session + project + machine context.
@@ -52,6 +55,11 @@ pub struct SearchResults {
     pub results: Vec<SearchHit>,
     pub limit: i64,
     pub offset: i64,
+    /// Additive journal block. Absent entirely at `scope=messages` (so that
+    /// scope is byte-compatible with the pre-journal response shape); present
+    /// at `scope=all` (default) and `scope=journal`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journal: Option<Vec<crate::journal::JournalHit>>,
 }
 
 fn parse_bound(s: Option<&str>, which: &str) -> Result<Option<DateTime<Utc>>, HubError> {
@@ -77,6 +85,60 @@ pub async fn search(
     let from = parse_bound(params.from.as_deref(), "from")?;
     let to = parse_bound(params.to.as_deref(), "to")?;
 
+    let scope = params.scope.as_deref().unwrap_or("all");
+    let (want_messages, want_journal) = match scope {
+        "all" => (true, true),
+        "messages" => (true, false),
+        "journal" => (false, true),
+        other => {
+            return Err(HubError::BadRequest(format!(
+                "unknown scope `{other}` (expected `all`, `messages`, or `journal`)"
+            )))
+        }
+    };
+
+    // Message hits: unchanged shape and ordering at every scope. Skipped
+    // entirely for `scope=journal` (which performs no message search).
+    let results: Vec<SearchHit> = if want_messages {
+        message_hits(&state, &params, from, to, page).await?
+    } else {
+        Vec::new()
+    };
+
+    // Additive journal block: present for `all` (default) and `journal`, absent
+    // for `messages`.
+    let journal = if want_journal {
+        Some(
+            crate::journal::search_journal(
+                &state,
+                &params.q,
+                params.project.as_deref(),
+                page.limit,
+                page.offset,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    Ok(Json(SearchResults {
+        results,
+        limit: page.limit,
+        offset: page.offset,
+        journal,
+    }))
+}
+
+/// The existing message full-text search — unchanged query, ordering, and hit
+/// shape (extracted verbatim so `scope` can gate whether it runs).
+async fn message_hits(
+    state: &AppState,
+    params: &SearchParams,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    page: Page,
+) -> Result<Vec<SearchHit>, HubError> {
     let rows = sqlx::query!(
         r#"
         SELECT
@@ -123,7 +185,7 @@ pub async fn search(
     .fetch_all(&state.pool)
     .await?;
 
-    let results = rows
+    Ok(rows
         .into_iter()
         .map(|r| SearchHit {
             message_id: r.message_id,
@@ -143,11 +205,5 @@ pub async fn search(
             snippet: r.snippet,
             rank: r.rank,
         })
-        .collect();
-
-    Ok(Json(SearchResults {
-        results,
-        limit: page.limit,
-        offset: page.offset,
-    }))
+        .collect())
 }

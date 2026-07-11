@@ -328,6 +328,28 @@ pub async fn ingest(
         .await?;
     }
 
+    // Journal dirty-detection watermark. Only sessions that actually gained
+    // messages are stamped (`touched_sessions`), so replaying an already-fully-
+    // archived batch is a no-op for journal purposes: the session upsert above
+    // may bump `updated_at`, but `ingest_xid` — the value pending compares —
+    // stays put. Dirtiness is transaction-VISIBILITY, not wall-clock: pending
+    // checks `NOT pg_visible_in_snapshot(ingest_xid, generated_snapshot)`, so
+    // an ingest that commits after an entry's snapshot was taken is dirty by
+    // construction, however the timestamps interleave. `updated_at` is bumped
+    // alongside for human observability only. Runtime query (not `query!`): the
+    // offline build has no `.sqlx` metadata for new statements.
+    if !touched_sessions.is_empty() {
+        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
+        sqlx::query(
+            "UPDATE sessions
+             SET updated_at = clock_timestamp(), ingest_xid = pg_current_xact_id()
+             WHERE id = ANY($1)",
+        )
+        .bind(&touched)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     tx.commit().await?;
     Ok(Json(resp))
 }
