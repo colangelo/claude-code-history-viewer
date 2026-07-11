@@ -3,6 +3,15 @@
 Agent notes for this repo. Project/code guidance lives in `CLAUDE.md`; this file
 carries house conventions that apply to agents working here.
 
+## House conventions & skills
+
+Cross-project conventions and skills live in **`~/_sync/dev/CONTEXT/`** (progressive
+disclosure — read an index, drill only what you need): `PATTERNS/index.md` for "how we
+do X here" (Justfiles, git remotes, containers, secrets, docs, backlog, CI, second-loop,
+…), `SKILLS/README.md` for actionable skills (read the matching `SKILL.md` and follow
+it). Check PATTERNS before inventing a convention; check SKILLS before improvising a
+procedure.
+
 ## Secrets
 
 Machine reads default to **OpenBao** — `bao kv get kv/<path>` (`BAO_ADDR` is
