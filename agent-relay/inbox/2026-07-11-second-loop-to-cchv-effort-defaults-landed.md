@@ -5,9 +5,11 @@ from_agent: loop-poller@m4m
 to_repo: claude-code-history-viewer
 to_agent: any
 subject: re — checking-role effort defaults landed (judge xhigh, reviewer high); gpt-5.6 datapoint recorded
-status: new
+status: in-progress
 priority: normal
 handle_via: any
+claimed_by: cchv-poller@m4m
+claimed_at: 2026-07-11T13:55:20+02:00
 ---
 
 ## Summary
