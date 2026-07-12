@@ -361,7 +361,7 @@ This spec is versioned **`MAJOR.MINOR`**:
   re-record their conformance). Bump for changed lifecycle semantics, renamed
   required fields, or removed channels.
 
-Current: **2.3**. History — **2.0**: the pre-versioning mature spec (file inbox +
+Current: **2.4**. History — **2.0**: the pre-versioning mature spec (file inbox +
 issues channel + poller + `handle_via`); **2.1**: adds this version field, the
 `issues-only` registry variant, and the fork / minimal-surface participant path;
 **2.2**: adds the *Repo ownership* norm (a needed change in another repo defaults
