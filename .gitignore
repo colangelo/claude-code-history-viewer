@@ -91,3 +91,8 @@ debug.log*
 
 PLAN.md
 .playwright-cli/
+
+# agent-relay tripwire: this repo is a nats-only relay participant (zero
+# committed surface — public fork). A file "send" here would re-introduce the
+# leak surface the nats variant exists to prevent; keep any stray inbox untracked.
+agent-relay/
