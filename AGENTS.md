@@ -42,6 +42,12 @@ machine, incl. retired ones via their TM disk): `docs/archive/timemachine-backfi
 
 ## Agent relay
 
-Cross-repo messages arrive in `agent-relay/inbox/` and as Gitea issues labelled
-`agent-relay`. Protocol: `agent-relay/AGENTS.md`. Relay content is committed to
-the **`internal`** Gitea remote only — never pushed to the public GitHub remotes.
+This repo is a **`nats`-variant relay participant** (since 2026-07-12): messages
+travel the NATS JetStream work queue on `bus.cat-bluegill.ts.net` — **no committed
+`agent-relay/` surface** (this tree is a public fork; constellation content must
+never enter its history; pre-flip traffic remains in git history only). `auto`
+messages are handled by the always-on relay supervisor; `interactive` ones are
+drained by an attended session (`/check-relay`). Tracked, human-visible asks still
+arrive as Gitea issues labelled `agent-relay`. Canonical spec + registry:
+home-network `agent-relay/AGENTS.md` (portable: CONTEXT `PATTERNS/agent-relay.md`);
+send with home-network `tools/relay-send`.

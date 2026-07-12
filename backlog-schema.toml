@@ -4,7 +4,8 @@
 #
 # "Done" = closed, never a label. `agent-relay`/`agent-blocked` are a SEPARATE
 # channel (declared `reserved` in the general schema) — a backlog item is never
-# `agent-relay`. See agent-relay/AGENTS.md.
+# `agent-relay`. Spec: home-network agent-relay/AGENTS.md (this repo is a
+# nats-variant participant — no committed relay surface; see AGENTS.md §Agent relay).
 #
 # NOTE: upstream-facing work (contributions to jhlee0409/claude-code-history-
 # viewer) is tracked here with `area/upstream`; the public GitHub issue tracker
