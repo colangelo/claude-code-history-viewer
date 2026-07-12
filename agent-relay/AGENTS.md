@@ -1,6 +1,6 @@
 # Agent relay protocol
 
-**Spec version 2.1** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
+**Spec version 2.2** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
 Repos record the version they conform to in their
 `CONTEXT/PROJECTS/<repo>.md` → `## Conformance` block.
 
@@ -46,6 +46,36 @@ inbox, reachable only via the issues channel; see below), or `—` (not reachabl
 **home-network's (infra)** — like the poller. Other repos propose changes via a relay
 message/issue to home-network; infra lands the canonical wording and syncs every copy.
 (Unowned "keep in sync when editing" is exactly how drift starts at 6+ participants.)
+
+## Repo ownership — a needed change elsewhere is a relay signal, not an edit
+
+Each repo is owned by its own agent. Working in repo A and finding that repo B needs
+a change is, by default, a **signal to send a relay message — not to edit repo B
+yourself**. Unless the cross-repo edit is a conscious decision (the user directed it,
+or a standard explicitly assigns you that surface):
+
+1. **Look the target repo up** in the project catalog
+   (`~/_sync/dev/CONTEXT/PROJECTS/index.md`).
+2. **Not in the catalog** → **stop**; suggest onboarding it (the `onboard-repo`
+   skill) rather than editing a repo the constellation doesn't know.
+3. **In the catalog and a relay participant** (registry above) → **send a relay
+   message** (file inbox or `agent-relay` issue) describing the ask, and let that
+   repo's own agent land the change.
+4. **In the catalog but not a relay participant** → surface it to the user; propose
+   relay onboarding if the need looks recurring.
+
+**Sanctioned exceptions** — cross-repo writes that *are* the protocol or an assigned
+surface, not violations of it:
+
+- Writing a message file into another repo's `agent-relay/inbox/` (plus that commit
+  & push) — that *is* the relay.
+- home-network (infra) syncing this spec + registry into every participant's copy.
+- A surface a house standard explicitly assigns cross-repo to a role.
+
+Rationale: the owner agent has the repo's context (conventions, in-flight work,
+backlog) that a passing agent lacks; silent foreign edits are how conflicting
+half-understandings land. The relay exists precisely so the ask travels instead of
+the edit.
 
 ## Onboarding a participant
 
@@ -261,9 +291,11 @@ This spec is versioned **`MAJOR.MINOR`**:
   re-record their conformance). Bump for changed lifecycle semantics, renamed
   required fields, or removed channels.
 
-Current: **2.1**. History — **2.0**: the pre-versioning mature spec (file inbox +
+Current: **2.2**. History — **2.0**: the pre-versioning mature spec (file inbox +
 issues channel + poller + `handle_via`); **2.1**: adds this version field, the
-`issues-only` registry variant, and the fork / minimal-surface participant path.
+`issues-only` registry variant, and the fork / minimal-surface participant path;
+**2.2**: adds the *Repo ownership* norm (a needed change in another repo defaults
+to a relay message, with the catalog-lookup procedure and sanctioned exceptions).
 
 Repos record which version they conform to in `CONTEXT/PROJECTS/<repo>.md` →
 `## Conformance` (format defined in the onboard-repo skill).
