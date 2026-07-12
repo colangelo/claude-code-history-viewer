@@ -1,6 +1,6 @@
 # Agent relay protocol
 
-**Spec version 2.3** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
+**Spec version 2.4** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
 Repos record the version they conform to in their
 `CONTEXT/PROJECTS/<repo>.md` → `## Conformance` block.
 
@@ -24,10 +24,10 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 
 | Repo | Role | Local path | Inbox | Gitea |
 |------|------|-----------|-------|-------|
-| `home-network` | infra | `/Users/ac/_sync/ac-devops/_projects/Infra/home-network` | `agent-relay/inbox/` | `ac/home-network` |
+| `home-network` | infra | `/Users/ac/_sync/ac-devops/_projects/Infra/home-network` | `nats · agent-relay/inbox/` | `ac/home-network` |
 | `siai` | ci | `/Users/ac/_sync/ac-devops/_projects/AI/siai` | `agent-relay/inbox/` | `ac/siai` |
 | `direction` | app | `/Users/ac/_sync/Carlo/Projects/direction` | `agent-relay/inbox/` | `ac/direction` |
-| `macos-setup` | dev-env | `/Users/ac/_sync/dev/macos-setup` | `agent-relay/inbox/` | `ac/macos-setup` |
+| `macos-setup` | dev-env | `/Users/ac/_sync/dev/macos-setup` | `nats · agent-relay/inbox/` | `ac/macos-setup` |
 | `second-loop` | loop | `/Users/ac/_sync/dev/second-loop` | `agent-relay/inbox/` | `ac/second-loop` |
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
 | `sergente` | agent | `/Users/ac/_sync/dev/sergente` | `agent-relay/inbox/` | `ac/sergente` |
@@ -41,7 +41,15 @@ the recipient pulls).
 The **Inbox** column is the participant's channel variant: `agent-relay/inbox/`
 (file mailbox, the default), **`issues-only`** (fork / minimal-surface — no committed
 inbox, reachable only via the issues channel; see below), **`nats`** (broker transport,
-zero committed surface — see *NATS channel*; pilot), or `—` (not reachable).
+zero committed surface — see *NATS channel*), or `—` (not reachable). A `·`-separated
+list means the repo **receives on every listed channel, primary first** — senders
+default to the primary; any listed channel is acceptable. `home-network` and
+`macos-setup` are deliberately multi-channel receive-all (nats-primary): infra is the
+bootstrap/break-glass destination (a relay-transport bug report must be able to arrive
+on an *older* transport), and macos-setup repairs the workstation NATS clients (that
+ask can't require the broken client). The issues channel is additionally available for
+every participant regardless of this column (it's the tracked-asks channel, not a
+transport variant).
 
 **Ownership**: the registry above and the cross-repo sync of this spec are
 **home-network's (infra)** — like the poller. Other repos propose changes via a relay
@@ -333,11 +341,14 @@ once with `just relay-env` in home-network; source `kv/agents/bus-relay` in Open
     consumer next RELAY interactive-<repo> --timeout 2s   # creds from ~/.config/agent-relay/env
   ```
 
-**Routing rule during the pilot:** a `nats`-variant repo (registry Inbox = `nats`)
-MUST be addressed via NATS — it has no file inbox. Any other participant MAY also be
+**Routing rule:** send to the recipient's **primary** (leftmost) registry channel by
+default; any channel the recipient lists is acceptable. A repo listing only `nats`
+MUST be addressed via NATS (it has no file inbox). Any other participant MAY also be
 addressed via NATS (the supervisor serves every registry repo); its file inbox and
 the issues channel keep working unchanged. The issues channel remains the right
-place for tracked, human-visible asks regardless of variant.
+place for tracked, human-visible asks regardless of variant. Fallback is legitimate:
+if the primary transport is down or your client is broken, use the recipient's next
+listed channel — that is exactly why infra and macos-setup stay multi-channel.
 
 ## Versioning
 
@@ -357,7 +368,10 @@ issues channel + poller + `handle_via`); **2.1**: adds this version field, the
 to a relay message, with the catalog-lookup procedure and sanctioned exceptions);
 **2.3**: adds the *NATS channel* (broker transport on `bus`, delivery-as-claim,
 `RELAY_AUDIT` trail, `relay-send`/supervisor tooling) and the `nats` registry
-variant — pilot: `mozeidon-z`.
+variant — pilot: `mozeidon-z`; **2.4**: multi-channel Inbox values (`·`-separated,
+primary first) with the send-to-primary routing rule — `home-network` and
+`macos-setup` flip to nats-primary receive-all (bootstrap/break-glass rationale
+recorded at the registry).
 
 Repos record which version they conform to in `CONTEXT/PROJECTS/<repo>.md` →
 `## Conformance` (format defined in the onboard-repo skill).
