@@ -26,7 +26,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 |------|------|-----------|-------|-------|
 | `home-network` | infra | `/Users/ac/_sync/ac-devops/_projects/Infra/home-network` | `nats · agent-relay/inbox/` | `ac/home-network` |
 | `siai` | ci | `/Users/ac/_sync/ac-devops/_projects/AI/siai` | `agent-relay/inbox/` | `ac/siai` |
-| `direction` | app | `/Users/ac/_sync/Carlo/Projects/direction` | `agent-relay/inbox/` | `ac/direction` |
+| `direction` | app | `/Users/ac/_sync/Carlo/Projects/direction` | `nats · agent-relay/inbox/` | `ac/direction` |
 | `macos-setup` | dev-env | `/Users/ac/_sync/dev/macos-setup` | `nats · agent-relay/inbox/` | `ac/macos-setup` |
 | `second-loop` | loop | `/Users/ac/_sync/dev/second-loop` | `agent-relay/inbox/` | `ac/second-loop` |
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
@@ -47,7 +47,9 @@ default to the primary; any listed channel is acceptable. `home-network` and
 `macos-setup` are deliberately multi-channel receive-all (nats-primary): infra is the
 bootstrap/break-glass destination (a relay-transport bug report must be able to arrive
 on an *older* transport), and macos-setup repairs the workstation NATS clients (that
-ask can't require the broken client). The issues channel is additionally available for
+ask can't require the broken client). `direction` is nats-primary with its file inbox
+kept as fallback (existing senders stay valid; flipped 2026-07-12 at ac's request).
+The issues channel is additionally available for
 every participant regardless of this column (it's the tracked-asks channel, not a
 transport variant).
 
