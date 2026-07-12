@@ -32,6 +32,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
 | `sergente` | agent | `/Users/ac/_sync/dev/sergente` | `agent-relay/inbox/` | `ac/sergente` |
 | `herdr` | app | `/Users/ac/_sync/dev/herdr` | `issues-only` | `AC-forks/herdr` |
+| `mozeidon-z` | app | `/Users/ac/_sync/ac-devops/_projects/AI/firefox-ai/mozeidon` | `agent-relay/inbox/` | `A-Layer/mozeidon-z` |
 
 All repos are local checkouts under the same user, so a sender writes to the
 recipient's path directly. Across machines, the inbox travels via Gitea (commit + push;
