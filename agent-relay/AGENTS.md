@@ -1,6 +1,6 @@
 # Agent relay protocol
 
-**Spec version 2.2** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
+**Spec version 2.3** — versioned `MAJOR.MINOR` (see [Versioning](#versioning)).
 Repos record the version they conform to in their
 `CONTEXT/PROJECTS/<repo>.md` → `## Conformance` block.
 
@@ -32,7 +32,7 @@ repos (no human courier). Each participating repo has an `agent-relay/` with an
 | `claude-code-history-viewer` | app | `/Users/ac/_sync/dev/claude-code-history-viewer` | `agent-relay/inbox/` | `ac/claude-code-history-viewer` |
 | `sergente` | agent | `/Users/ac/_sync/dev/sergente` | `agent-relay/inbox/` | `ac/sergente` |
 | `herdr` | app | `/Users/ac/_sync/dev/herdr` | `issues-only` | `AC-forks/herdr` |
-| `mozeidon-z` | app | `/Users/ac/_sync/ac-devops/_projects/AI/firefox-ai/mozeidon` | `agent-relay/inbox/` | `A-Layer/mozeidon-z` |
+| `mozeidon-z` | app | `/Users/ac/_sync/ac-devops/_projects/AI/firefox-ai/mozeidon` | `nats` | `A-Layer/mozeidon-z` |
 
 All repos are local checkouts under the same user, so a sender writes to the
 recipient's path directly. Across machines, the inbox travels via Gitea (commit + push;
@@ -40,7 +40,8 @@ the recipient pulls).
 
 The **Inbox** column is the participant's channel variant: `agent-relay/inbox/`
 (file mailbox, the default), **`issues-only`** (fork / minimal-surface — no committed
-inbox, reachable only via the issues channel; see below), or `—` (not reachable).
+inbox, reachable only via the issues channel; see below), **`nats`** (broker transport,
+zero committed surface — see *NATS channel*; pilot), or `—` (not reachable).
 
 **Ownership**: the registry above and the cross-repo sync of this spec are
 **home-network's (infra)** — like the poller. Other repos propose changes via a relay
@@ -280,6 +281,64 @@ poller wakes a handler on, so tagging a roadmap item with it would make the poll
 `agent-relay` for a concrete cross-repo ask you want handled **now**. (A genuine ask may of
 course *also* be a backlog item — give it both label families if so.)
 
+## NATS channel — broker transport, zero committed surface (PILOT)
+
+The third channel: the same message schema carried over the **NATS JetStream work
+queue** on `bus.cat-bluegill.ts.net` instead of committed files. A `nats`-variant
+participant commits **no `agent-relay/` directory at all** — participation is its
+registry row here plus workstation creds. This is the variant for repos whose tree
+is (partly) public: nothing about the constellation ever enters their history.
+Design: home-network `docs/2026-07-08-agent-relay-nats-jetstream-design.md` ·
+infra: `hosts/configs/proxmox1/bus.md` · pilot participant: `mozeidon-z`.
+
+**Semantics (differences from the file channel):**
+
+- **Delivery IS the claim.** The `RELAY` stream has work-queue retention: the server
+  hands each message to exactly one handler; there is no status field to edit, no
+  claim commit, no cross-machine pull-lag race. The lease is the consumer's `AckWait`
+  (extended by working-acks during long runs); a crashed handler's message
+  **redelivers automatically** (max 4 deliveries, then it alarms via ntfy).
+- **No archive step.** `RELAY_AUDIT` (180d) is the durable trail: senders publish a
+  full-copy `sent` event, handlers an `outcome` event. Never store the only copy of
+  anything in `RELAY` itself — an acked work-queue message is gone.
+- **`handle_via` is structural**, not a convention: `auto` messages go to subject
+  `relay.msg.<repo>.auto` (bound by the always-on supervisor); `interactive` ones to
+  `relay.msg.<repo>.interactive`, bound only by per-repo `interactive-<repo>`
+  consumers that an **attended** session drains. A headless handler physically
+  cannot receive them.
+
+**Send** (any participant, to any registry repo):
+
+```bash
+~/_sync/ac-devops/_projects/Infra/home-network/tools/relay-send \
+  --to <repo> --subject "<one line>" [--class auto|interactive] \
+  [--priority low|normal|high] [--thread <msg-id>] [--body "<text>"]   # or body on stdin
+```
+
+Body = the same `## Action requested / ## Context / ## Refs` structure. `--from` is
+derived from your cwd via the registry. Creds: `~/.config/agent-relay/env` (render
+once with `just relay-env` in home-network; source `kv/agents/bus-relay` in OpenBao).
+
+**Receive:**
+
+- `auto` — handled by the **relay-supervisor** (launchd `dev.agent-relay.supervisor`
+  on the always-on Macs; home-network `tools/relay-supervisor.py`): wakes on delivery
+  (no polling), runs `claude -p` in the recipient repo's checkout, acks/naks/terms,
+  audits. Repos are resolved from the registry table above — onboarding a repo needs
+  no supervisor change.
+- `interactive` — an attended session in repo `<repo>` drains its own consumer:
+
+  ```bash
+  nats --server "$NATS_URL" --user "$NATS_USER" --password "$NATS_PASSWORD" \
+    consumer next RELAY interactive-<repo> --timeout 2s   # creds from ~/.config/agent-relay/env
+  ```
+
+**Routing rule during the pilot:** a `nats`-variant repo (registry Inbox = `nats`)
+MUST be addressed via NATS — it has no file inbox. Any other participant MAY also be
+addressed via NATS (the supervisor serves every registry repo); its file inbox and
+the issues channel keep working unchanged. The issues channel remains the right
+place for tracked, human-visible asks regardless of variant.
+
 ## Versioning
 
 This spec is versioned **`MAJOR.MINOR`**:
@@ -291,11 +350,14 @@ This spec is versioned **`MAJOR.MINOR`**:
   re-record their conformance). Bump for changed lifecycle semantics, renamed
   required fields, or removed channels.
 
-Current: **2.2**. History — **2.0**: the pre-versioning mature spec (file inbox +
+Current: **2.3**. History — **2.0**: the pre-versioning mature spec (file inbox +
 issues channel + poller + `handle_via`); **2.1**: adds this version field, the
 `issues-only` registry variant, and the fork / minimal-surface participant path;
 **2.2**: adds the *Repo ownership* norm (a needed change in another repo defaults
-to a relay message, with the catalog-lookup procedure and sanctioned exceptions).
+to a relay message, with the catalog-lookup procedure and sanctioned exceptions);
+**2.3**: adds the *NATS channel* (broker transport on `bus`, delivery-as-claim,
+`RELAY_AUDIT` trail, `relay-send`/supervisor tooling) and the `nats` registry
+variant — pilot: `mozeidon-z`.
 
 Repos record which version they conform to in `CONTEXT/PROJECTS/<repo>.md` →
 `## Conformance` (format defined in the onboard-repo skill).
