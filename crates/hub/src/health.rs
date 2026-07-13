@@ -40,6 +40,14 @@ pub struct IngestHealthParams {
     /// Axum's query-extraction rejection, so it goes through `HubError` like
     /// every other validation failure in this crate.
     pub stale_after_secs: Option<String>,
+    /// Comma-separated hostnames to drop from the alert verdict (e.g. a
+    /// decommissioning machine whose dead daemon is expected). Excluded
+    /// machines are still reported for observability but never flip the
+    /// endpoint to 503. Matching is case-insensitive and tolerant of the mDNS
+    /// `.local` suffix (so `ac-mbp` matches the stored `ac-mbp.local`). Keeping
+    /// this a query param leaves the monitoring policy in Gatus's check config —
+    /// no hub redeploy to change the set.
+    pub exclude: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +57,10 @@ pub struct IngestMachineHealth {
     pub last_seen: DateTime<Utc>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub stale: bool,
+    /// True when this machine's `hostname` is in the `exclude` set — its
+    /// `stale` flag is still computed and reported, but it does not count
+    /// toward the endpoint's overall stale/503 verdict.
+    pub excluded: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,6 +82,33 @@ fn parse_stale_after_secs(raw: Option<&str>) -> Result<i64, HubError> {
     }
 }
 
+/// Normalizes a hostname for exclude-set matching: trimmed, lowercased, with a
+/// single trailing `.local` (mDNS) suffix stripped. The archive stores mDNS
+/// names (`ac-mbp.local`), but operators — and the relay/docs — refer to the
+/// machine as `ac-mbp`; normalizing both the stored hostname and each exclude
+/// entry the same way lets `?exclude=ac-mbp` match `ac-mbp.local` without the
+/// operator needing to know the suffix.
+fn normalize_host(h: &str) -> String {
+    let h = h.trim().to_ascii_lowercase();
+    match h.strip_suffix(".local") {
+        Some(stripped) => stripped.to_string(),
+        None => h,
+    }
+}
+
+/// Parses the `exclude` query param into a normalized hostname set (see
+/// `normalize_host`). Empty entries are dropped so `?exclude=` or trailing
+/// commas are harmless.
+fn parse_exclude(raw: Option<&str>) -> std::collections::HashSet<String> {
+    raw.map(|s| {
+        s.split(',')
+            .map(normalize_host)
+            .filter(|h| !h.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// Staleness is judged on `machines.last_seen` alone (the daemon's
 /// ingest-upsert heartbeat) — never on message recency, so an idle machine
 /// with no new coding sessions doesn't page anyone.
@@ -78,6 +117,7 @@ pub async fn healthz_ingest(
     Query(params): Query<IngestHealthParams>,
 ) -> Result<(StatusCode, Json<IngestHealthResponse>), HubError> {
     let stale_after_secs = parse_stale_after_secs(params.stale_after_secs.as_deref())?;
+    let exclude = parse_exclude(params.exclude.as_deref());
 
     let rows = sqlx::query!(
         r#"
@@ -104,13 +144,17 @@ pub async fn healthz_ingest(
         .into_iter()
         .map(|r| {
             let stale = now - r.last_seen > threshold;
-            any_stale |= stale;
+            let excluded = exclude.contains(&normalize_host(&r.hostname));
+            // Excluded machines report their real `stale` flag but never
+            // contribute to the overall alert verdict.
+            any_stale |= stale && !excluded;
             IngestMachineHealth {
                 machine_id: r.machine_id,
                 hostname: r.hostname,
                 last_seen: r.last_seen,
                 last_message_at: r.last_message_at,
                 stale,
+                excluded,
             }
         })
         .collect();

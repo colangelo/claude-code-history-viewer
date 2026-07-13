@@ -348,6 +348,66 @@ async fn ac4_zero_messages_reports_null_last_message_at_and_not_stale() {
 }
 
 #[tokio::test]
+async fn ac6_excluded_hostname_stays_stale_but_does_not_alert() {
+    let excluded_id = Uuid::new_v4();
+    let hub = spawn(&[excluded_id]).await;
+    // Stored with the mDNS `.local` suffix, exactly as the real archive records
+    // machines (`ac-mbp.local`), so the exclude-by-bare-name path below is what
+    // production actually exercises.
+    let batch = sample_batch(excluded_id, "host-decomm.local", "sess-ac6", vec![]);
+    assert_eq!(ingest(&hub, excluded_id, &batch).await.status(), 200);
+    backdate_3h(&hub, excluded_id).await;
+
+    // Baseline at the default threshold: our backdated machine reports
+    // `stale:true`, `excluded:false`, and (alone, as in AC2/AC3) forces the
+    // global 503. Collect EVERY stale hostname the shared db reports — ours
+    // plus any accumulated pollution — so the exclusion below is exhaustive.
+    let resp = get_ingest_health(&hub, None).await;
+    assert_eq!(resp.status(), 503);
+    let body: Value = resp.json().await.expect("parse json body");
+    let entry = find_machine(&body, excluded_id);
+    assert_eq!(entry["stale"], true);
+    assert_eq!(entry["excluded"], false);
+
+    let stale_hosts: Vec<String> = body["machines"]
+        .as_array()
+        .expect("machines array")
+        .iter()
+        .filter(|m| m["stale"].as_bool() == Some(true))
+        .map(|m| m["hostname"].as_str().expect("hostname").to_string())
+        .collect();
+    assert!(
+        stale_hosts.iter().any(|h| h == "host-decomm.local"),
+        "our backdated machine must be in the stale set"
+    );
+
+    // Excluding every currently-stale hostname by its BARE name — `.local`
+    // suffix stripped AND upper-cased — removes them ALL from the alert verdict
+    // at the SAME default threshold, so the endpoint flips to 200 "ok". This
+    // proves (a) exclusion, not a raised threshold, is what silences the alert,
+    // and (b) matching is both case- and mDNS-suffix-insensitive, i.e.
+    // `exclude=host-decomm` matches the stored `host-decomm.local` — the exact
+    // ergonomics the operator relies on to pass `exclude=ac-mbp`. Each excluded
+    // machine still reports its real `stale` flag alongside `excluded:true`.
+    let exclude = stale_hosts
+        .iter()
+        .map(|h| {
+            h.strip_suffix(".local")
+                .unwrap_or(h)
+                .to_ascii_uppercase()
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let resp = get_ingest_health(&hub, Some(&format!("exclude={exclude}"))).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.expect("parse json body");
+    assert_eq!(body["status"], "ok");
+    let entry = find_machine(&body, excluded_id);
+    assert_eq!(entry["stale"], true); // real staleness still visible
+    assert_eq!(entry["excluded"], true);
+}
+
+#[tokio::test]
 async fn ac5_no_auth_header_required() {
     let machine_id = Uuid::new_v4();
     let hub = spawn(&[machine_id]).await;
