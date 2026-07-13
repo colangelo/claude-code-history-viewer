@@ -25,6 +25,17 @@ Add **`GET /v1/healthz/ingest`** to the hub (`crates/hub`):
   hourly scan interval). A machine is stale when
   `now() - last_seen > stale_after_secs`. Non-numeric or non-positive values →
   **400**.
+- **Alert-set exclusion**: query param `exclude`, a comma-separated list of
+  hostnames. Matching is case-insensitive and tolerant of the mDNS `.local`
+  suffix (whitespace/empty entries ignored), so `exclude=ac-mbp` matches the
+  archive's stored `ac-mbp.local` — the operator need not know the suffix. An
+  excluded machine still appears in `machines` with its real `stale` flag and a
+  new `excluded:true`, but it **does not count toward the overall stale/503
+  verdict**. This is for decommissioning machines whose dead daemon is expected
+  (e.g. `ac-mbp`) — masking them here, rather than raising the threshold or
+  accepting 503, keeps the check able to still page on a *real* dead daemon on a
+  live machine. Keeping it a query param leaves the policy in Gatus's check
+  config, so changing the excluded set needs no hub redeploy.
 - Response: HTTP **200** with `{"status":"ok", ...}` when no machine is stale;
   HTTP **503** with `{"status":"stale", ...}` when at least one is. Body always
   includes `stale_after_secs` (the effective threshold) and the `machines`
@@ -54,3 +65,4 @@ isolation pattern).
 - (T2) `stale_after_secs` is honored: a machine backdated 3 hours is stale at the default (7200s) but not stale with `?stale_after_secs=14400`; a non-numeric or non-positive `stale_after_secs` returns 400.
 - (T2) Staleness ignores message recency: a machine whose `last_seen` is fresh but which has zero messages reports `last_message_at:null`, `stale:false`, and the endpoint returns 200.
 - (T2) The endpoint answers without any `Authorization` header — no 401/403 — matching the `/v1/healthz` policy.
+- (T2) `exclude` drops machines from the alert verdict: a stale machine stored as `host.local` whose bare hostname is passed in `exclude` (case- and `.local`-suffix-insensitively) still reports `stale:true` with `excluded:true`, and excluding every currently-stale hostname flips the endpoint from 503 to 200 `"ok"` at the same threshold.

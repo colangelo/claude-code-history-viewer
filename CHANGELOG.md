@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`GET /v1/healthz/ingest` gains an `exclude` query param** — a comma-separated hostname list dropped from the stale/503 alert verdict (each excluded machine still reports its real `stale` flag plus `excluded:true`). Matching is case-insensitive and mDNS-`.local`-suffix tolerant, so `exclude=ac-mbp` matches the archive's stored `ac-mbp.local`. Lets monitoring mask a decommissioning machine's expected-dead daemon (e.g. `ac-mbp`) without blinding the check to a real dead daemon on a live machine, and keeps the policy in the poller's check config so changing the set needs no hub redeploy.
 - **Cross-machine history archive (MVP)** — a Cargo workspace alongside the desktop app that extracts every machine's AI coding history into a central, searchable Postgres archive, directly solving Claude Code's 30-day local-history deletion. See [`docs/archive/deployment.md`](docs/archive/deployment.md).
   - `crates/history-core` — the desktop app's tauri-free parsers/models (incl. the Claude Code loader) extracted into a shared library, reused by both the app and the daemon.
   - `crates/hub` — an axum + sqlx service, the only component with DB credentials: bearer-authenticated `/v1/ingest` (idempotent upserts), `/v1/search` (Postgres full-text search), and browse endpoints. Migrations in `migrations/`; schema is pgvector-ready (a future `message_embeddings` side table) and stores both normalized and raw-fidelity records.
