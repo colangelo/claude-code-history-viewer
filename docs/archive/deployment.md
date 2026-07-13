@@ -139,6 +139,44 @@ hosting the URL is just the page's own origin.
 > vault `AC-DevOps` is the human vault + fallback), referenced by path/item title,
 > never committed.
 
+## 2b. House deployment: swapping the m4m hub binary
+
+> The always-on m4m hub is **not** deployed from the GitHub Release. The path is:
+> build locally → stage in `~/.config/cchv/staging/cchv-hub-<sha>` → relay
+> home-network (infra) → binary swap. **Do not `cp` a new binary over the live
+> one in place.** macOS caches the code signature per inode; overwriting in place
+> with a differently-linker-signed binary trips the kernel's signature check and
+> the process is killed on every spawn with `OS_REASON_CODESIGNING`. A hung
+> `launchctl kickstart -k` then wedges the job in `spawn scheduled`.
+
+Working sequence (validated on m4m 2026-07-13, thread 7938448b):
+
+```bash
+STAGED=~/.config/cchv/staging/cchv-hub-<sha>          # the new binary
+LIVE=/usr/local/bin/cchv-hub                          # whatever the plist ExecStart points at
+STAMP=$(date +%Y%m%d-%H%M)
+
+# 1. Back up the currently-live binary (to staging, timestamped).
+cp "$LIVE" ~/.config/cchv/staging/cchv-hub-preswap-$STAMP
+
+# 2. rm the old binary FIRST — do not cp over it (inode codesign cache).
+rm "$LIVE"
+
+# 3. cp the staged binary → a fresh inode.
+cp "$STAGED" "$LIVE"
+
+# 4. Re-sign ad-hoc (the kernel rejects the cached signature otherwise).
+codesign --force --sign - "$LIVE"
+
+# 5. bootout + bootstrap — NOT `kickstart -k` (which can wedge in
+#    "spawn scheduled"). If a prior kickstart hung, kill it first.
+launchctl bootout  gui/$(id -u)/dev.cchv.hub 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.hub.plist
+```
+
+Verify: `curl -s https://m4m.cat-bluegill.ts.net:8788/v1/healthz` → `{"status":"ok",…}`
+and the process is running clean (fresh pid, no respawn churn).
+
 ## 3. Sync daemon (on each machine)
 
 Build it:
