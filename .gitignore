@@ -96,3 +96,4 @@ PLAN.md
 # committed surface — public fork). A file "send" here would re-introduce the
 # leak surface the nats variant exists to prevent; keep any stray inbox untracked.
 agent-relay/
+.superpowers/
