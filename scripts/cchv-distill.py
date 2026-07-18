@@ -48,11 +48,19 @@ import requests
 # --- config -----------------------------------------------------------------
 
 DEFAULT_HUB_URL = "http://127.0.0.1:8790"  # hub is loopback-bound on m4m
-DEFAULT_MODEL = "haiku"  # claude CLI alias; pin a full id via --model if needed
+# Default backend is CLIProxyAPI (infra's aiproxy tailnet node): an HTTP call
+# instead of `claude -p`, which removes the shared-OAuth contention that used to
+# kill runs when an interactive Claude session was active (#13). `claude` stays
+# available as a fallback backend.
+DEFAULT_BACKEND = "aiproxy"  # aiproxy | claude
+DEFAULT_MODEL = "gpt-5.6-sol"  # aiproxy model id; for backend=claude use e.g. "haiku"
+DEFAULT_EFFORT = "low"  # reasoning_effort for aiproxy (none|minimal|low|medium|high|xhigh|max)
+DEFAULT_AIPROXY_URL = "https://aiproxy.cat-bluegill.ts.net"
 BAO_ADDR = os.environ.get("BAO_ADDR", "https://secrets.cat-bluegill.ts.net")
 APPROLE_FILE = Path.home() / ".config/cchv/bao-approle"
 PROMPT_BUDGET_CHARS = 120_000  # total transcript chars per LLM call
 CLAUDE_TIMEOUT_SECS = 300
+LLM_TIMEOUT_SECS = 300
 HTTP_TIMEOUT_SECS = 30
 
 
@@ -68,7 +76,8 @@ def non_interactive() -> bool:
 # --- token resolution (bao-first, mirrors scripts/cchv-launch.sh) ------------
 
 
-def bao_token() -> str | None:
+def bao_login() -> str | None:
+    """AppRole login → client token, or None (creds missing / tailnet DNS down)."""
     if not APPROLE_FILE.is_file():
         log(f"no AppRole creds at {APPROLE_FILE}")
         return None
@@ -88,18 +97,33 @@ def bao_token() -> str | None:
             timeout=10,
         )
         r.raise_for_status()
-        client_token = r.json()["auth"]["client_token"]
-        host = os.uname().nodename.split(".")[0]
+        return r.json()["auth"]["client_token"]
+    except (requests.RequestException, KeyError, OSError) as e:
+        log(f"bao login failed: {e}")
+        return None
+
+
+def bao_kv_field(client_token: str, path: str, field: str) -> str | None:
+    """Read one field from a bao KV v2 secret, or None (e.g. policy denies path)."""
+    try:
         r = requests.get(
-            f"{BAO_ADDR}/v1/kv/data/infra/cchv/hub-tokens",
+            f"{BAO_ADDR}/v1/kv/data/{path}",
             headers={"X-Vault-Token": client_token},
             timeout=10,
         )
         r.raise_for_status()
-        return r.json()["data"]["data"].get(f"{host}_token") or None
+        return r.json()["data"]["data"].get(field) or None
     except (requests.RequestException, KeyError, OSError) as e:
-        log(f"bao read failed: {e}")
+        log(f"bao read {path}/{field} failed: {e}")
         return None
+
+
+def bao_token() -> str | None:
+    client_token = bao_login()
+    if not client_token:
+        return None
+    host = os.uname().nodename.split(".")[0]
+    return bao_kv_field(client_token, "infra/cchv/hub-tokens", f"{host}_token")
 
 
 def op_token() -> str | None:
@@ -143,6 +167,37 @@ def resolve_token() -> str:
             log("bao/op unavailable — using last-known-good cached hub token")
             return cached
     log("FATAL: no hub token (env CCHV_HUB_TOKEN, bao, op, cache all unavailable)")
+    sys.exit(1)
+
+
+# CLIProxyAPI "agents" Bearer key (headless coding agents class), same
+# resolution shape as the hub token: env → bao → last-known-good 0600 cache.
+# NB the bao path `kv/infra/aiproxy/proxy-keys` is infra-owned; the cchv-daemon
+# AppRole needs read access to it (relay grant) for the headless bao read to
+# work — until then the cache floor (seeded from an attended read) carries it.
+AIPROXY_KEY_CACHE = Path.home() / ".config/cchv/distill-aiproxy-key"
+
+
+def resolve_aiproxy_key() -> str:
+    key = os.environ.get("CCHV_AIPROXY_KEY")
+    if not key:
+        client_token = bao_login()
+        if client_token:
+            key = bao_kv_field(client_token, "infra/aiproxy/proxy-keys", "agents")
+    if key:
+        try:
+            AIPROXY_KEY_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            AIPROXY_KEY_CACHE.write_text(key)
+            AIPROXY_KEY_CACHE.chmod(0o600)
+        except OSError as e:
+            log(f"could not cache aiproxy key: {e}")
+        return key
+    if AIPROXY_KEY_CACHE.is_file():
+        cached = AIPROXY_KEY_CACHE.read_text().strip()
+        if cached:
+            log("bao unavailable/denied — using last-known-good cached aiproxy key")
+            return cached
+    log("FATAL: no aiproxy key (env CCHV_AIPROXY_KEY, bao, cache all unavailable)")
     sys.exit(1)
 
 
@@ -280,10 +335,38 @@ sessions, only automated health checks), respond instead with:
 """
 
 
-def generate(model: str, entry_date: str, project: str, transcript: str) -> dict:
-    prompt = PROMPT_TEMPLATE.format(
-        entry_date=entry_date, project=project, transcript=transcript
+@dataclass
+class LLM:
+    backend: str  # "aiproxy" | "claude"
+    model: str
+    effort: str
+    aiproxy_url: str = DEFAULT_AIPROXY_URL
+    aiproxy_key: str | None = None
+
+
+def _aiproxy_generate(llm: LLM, prompt: str) -> str:
+    """One OpenAI-compatible chat completion via CLIProxyAPI → raw content str."""
+    r = requests.post(
+        f"{llm.aiproxy_url}/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {llm.aiproxy_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": llm.model,
+            "reasoning_effort": llm.effort,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        timeout=LLM_TIMEOUT_SECS,
     )
+    if r.status_code >= 400:
+        raise RuntimeError(f"aiproxy {r.status_code}: {r.text[:400]}")
+    return r.json()["choices"][0]["message"]["content"]
+
+
+def _claude_generate(model: str, prompt: str) -> str:
+    """One `claude -p` call → raw result str (fallback backend)."""
+
     def run_claude() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["claude", "-p", "--model", model, "--output-format", "json"],
@@ -315,16 +398,24 @@ def generate(model: str, entry_date: str, project: str, transcript: str) -> dict
         ) from e
     if wrapper.get("is_error"):
         raise RuntimeError(f"claude -p returned an error result: {str(wrapper)[:400]}")
-    raw = wrapper.get("result", "")
+    return wrapper.get("result", "")
+
+
+def generate(llm: LLM, entry_date: str, project: str, transcript: str) -> dict:
+    prompt = PROMPT_TEMPLATE.format(
+        entry_date=entry_date, project=project, transcript=transcript
+    )
+    if llm.backend == "aiproxy":
+        raw = _aiproxy_generate(llm, prompt)
+    else:
+        raw = _claude_generate(llm.model, prompt)
     # tolerate stray code fences despite the instruction
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
     try:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise RuntimeError(
-            f"model result is not entry JSON (result[:300]={raw[:300]!r}, "
-            f"stop_reason={wrapper.get('stop_reason')!r}, "
-            f"num_turns={wrapper.get('num_turns')!r})"
+            f"{llm.backend} result is not entry JSON (result[:300]={raw[:300]!r})"
         ) from e
 
 
@@ -357,7 +448,7 @@ def validate(entry: dict) -> str | None:
 # --- main ---------------------------------------------------------------------
 
 
-def process_group(hub: Hub, group: dict, model: str, dry_run: bool) -> bool:
+def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
     entry_date = group["entry_date"]
     project_path = group["project_path"]
     session_ids = group["session_ids"]
@@ -368,7 +459,7 @@ def process_group(hub: Hub, group: dict, model: str, dry_run: bool) -> bool:
     if not transcript.strip():
         entry = {"status": "skip", "skip_reason": "no textual content in sessions"}
     else:
-        entry = generate(model, entry_date, project_path, transcript)
+        entry = generate(llm, entry_date, project_path, transcript)
 
     if err := validate(entry):
         log(f"REJECTED {label}: {err} — leaving pending")
@@ -387,7 +478,7 @@ def process_group(hub: Hub, group: dict, model: str, dry_run: bool) -> bool:
         "topics": entry.get("topics") or [],
         "open_questions": entry.get("open_questions") or [],
         "session_ids": session_ids,
-        "model": model,
+        "model": llm.model,
     }
     if dry_run:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -403,7 +494,14 @@ def main() -> int:
         description="cchv-distill — journal-entries distiller for the cchv archive hub"
     )
     ap.add_argument("--hub-url", default=os.environ.get("CCHV_HUB_URL", DEFAULT_HUB_URL))
+    ap.add_argument("--backend", choices=["aiproxy", "claude"],
+                    default=os.environ.get("CCHV_LLM_BACKEND", DEFAULT_BACKEND),
+                    help="LLM backend (default aiproxy: CLIProxyAPI HTTP, no claude -p contention)")
     ap.add_argument("--model", default=os.environ.get("CCHV_DISTILL_MODEL", DEFAULT_MODEL))
+    ap.add_argument("--effort", default=os.environ.get("CCHV_DISTILL_EFFORT", DEFAULT_EFFORT),
+                    help="reasoning_effort for the aiproxy backend (default low)")
+    ap.add_argument("--aiproxy-url",
+                    default=os.environ.get("CCHV_AIPROXY_URL", DEFAULT_AIPROXY_URL))
     ap.add_argument("--horizon-days", type=int, default=7,
                     help="forward mode: only process groups newer than this (default 7)")
     ap.add_argument("--backfill", action="store_true",
@@ -427,6 +525,13 @@ def main() -> int:
         from_date = (date.today() - timedelta(days=args.horizon_days)).isoformat()
         limit = args.limit or 50
 
+    llm = LLM(backend=args.backend, model=args.model, effort=args.effort,
+              aiproxy_url=args.aiproxy_url)
+    if llm.backend == "aiproxy":
+        llm.aiproxy_key = resolve_aiproxy_key()
+    log(f"backend={llm.backend} model={llm.model}"
+        + (f" effort={llm.effort}" if llm.backend == "aiproxy" else ""))
+
     hub = Hub(args.hub_url, resolve_token())
     try:
         groups = hub.pending(from_date, limit)
@@ -442,7 +547,7 @@ def main() -> int:
     failures = 0
     for group in groups:
         try:
-            if not process_group(hub, group, args.model, args.dry_run):
+            if not process_group(hub, group, llm, args.dry_run):
                 failures += 1
         except (RuntimeError, requests.RequestException, subprocess.TimeoutExpired,
                 json.JSONDecodeError, KeyError) as e:
