@@ -293,14 +293,25 @@ equivalently.
   launchctl load ~/Library/LaunchAgents/dev.cchv.distiller.plist
   ```
 
-  Requires `uv` on PATH (PEP 723 script) and the `claude` CLI logged in
-  (Max plan — the distiller runs `claude -p`, model `haiku` by default).
-  Runs daily 05:30 + on load; logs `/tmp/cchv-distiller.{log,err}`.
-- **Secrets**: same bao-first chain as §3b — `$CCHV_HUB_TOKEN` override →
-  AppRole (`~/.config/cchv/bao-approle`) reading
-  `kv/infra/cchv/hub-tokens/<host>_token` → `op read` (attended only; never
-  prompts under launchd). The machine token authorizes both the reads and
-  `POST /v1/journal/entries`.
+  Requires `uv` on PATH (PEP 723 script). **LLM backend (default `aiproxy`):**
+  an OpenAI-compatible HTTP call to infra's CLIProxyAPI node
+  (`https://aiproxy.cat-bluegill.ts.net`, model **`gpt-5.6-sol`**,
+  `reasoning_effort=low`) — no `claude -p`, so no shared-OAuth contention (the
+  old #13 failure mode when an interactive Claude session ran concurrently).
+  `--backend claude` keeps `claude -p` (needs the `claude` CLI + `zsh -lc`
+  `CLAUDE_CONFIG_DIR`) as a fallback. Runs daily 05:30 + on load; logs
+  `/tmp/cchv-distiller.{log,err}`.
+- **Secrets** (both same env → bao → 0600-cache floor shape):
+  - **Hub token** — `$CCHV_HUB_TOKEN` → AppRole reading
+    `kv/infra/cchv/hub-tokens/<host>_token` → `~/.config/cchv/distill-hub-token`
+    cache. Authorizes the hub reads + `POST /v1/journal/entries`.
+  - **aiproxy key** (backend=aiproxy) — `$CCHV_AIPROXY_KEY` → AppRole reading
+    `kv/infra/aiproxy/proxy-keys` field `agents` → `distill-aiproxy-key` cache.
+    NB `kv/infra/aiproxy/*` is infra-owned; the `cchv-daemon` AppRole needs a
+    read grant on it (relay 2026-07-19) for the headless bao read — until then
+    it runs off the seeded cache floor.
+  - `op read` is the attended-only fallback (skipped under launchd,
+    `CCHV_NONINTERACTIVE=1`, so it can't storm Touch-ID).
 - **Forward mode** (the launchd default) only processes groups newer than
   `--horizon-days` (7). **Backfill is deliberate and bounded** — never
   automatic:
