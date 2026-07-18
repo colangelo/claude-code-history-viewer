@@ -204,7 +204,7 @@ export const MessageContentDisplay: React.FC<MessageContentDisplayProps> = ({
         <div className="max-w-[85%] md:max-w-md lg:max-w-lg bg-accent text-accent-foreground rounded-2xl px-4 py-3 relative group shadow-sm">
           <div className={cn(
             "whitespace-pre-wrap break-words",
-            layout.bodyText
+            layout.messageText
           )}>
             {searchQuery ? (
               <HighlightedText
@@ -261,7 +261,7 @@ export const MessageContentDisplay: React.FC<MessageContentDisplayProps> = ({
         <div className="max-w-[95%] md:max-w-2xl bg-secondary text-secondary-foreground rounded-2xl px-4 py-3 relative group shadow-sm border border-border">
           {/* 검색 중일 때는 plain text로 렌더링 (성능 + 하이라이팅) */}
           {searchQuery ? (
-            <div className={`whitespace-pre-wrap break-words ${layout.bodyText}`}>
+            <div className={`whitespace-pre-wrap break-words ${layout.messageText}`}>
               <HighlightedText
                 text={content}
                 searchQuery={searchQuery}
@@ -271,7 +271,7 @@ export const MessageContentDisplay: React.FC<MessageContentDisplayProps> = ({
             </div>
           ) : (
             <div className={cn(
-              layout.prose,
+              layout.messageProse,
               "prose-headings:text-foreground prose-p:text-foreground prose-a:text-accent",
               "prose-code:text-foreground prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded",
               "prose-pre:bg-card prose-pre:text-foreground prose-pre:border prose-pre:border-border",

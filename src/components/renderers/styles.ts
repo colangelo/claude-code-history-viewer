@@ -217,14 +217,20 @@ export const layout = {
   iconSize: "w-4 h-4",
   /** Small icon size (for status indicators) */
   iconSizeSmall: "w-3 h-3",
-  /** Title text style */
-  titleText: "text-px12 font-medium",
+  /** Tool-card header title style — explicit 13px medium, subordinate to
+   *  conversation content (14px) but above metadata. */
+  titleText: "text-px13 font-medium",
+  /** Conversation message text — 14px with relaxed leading. Outranks tool
+   *  chrome so message content reads as the primary layer. */
+  messageText: "text-px14 leading-relaxed",
   /** Body text style */
   bodyText: "text-px12",
   /** Small/meta text style */
   smallText: "text-px12",
   /** Monospace text */
   monoText: "text-px12 font-mono",
+  /** Tool identifier badge — 11px monospace, the smallest tier of the scale. */
+  toolId: "text-px11 font-mono",
   /** Standard border radius */
   rounded: "rounded-md",
   /** Code block max height */
@@ -233,8 +239,11 @@ export const layout = {
   contentMaxHeight: "max-h-96",
   /** Command/code block with horizontal scroll */
   commandOverflow: "overflow-x-auto whitespace-pre-wrap break-words",
-  /** Prose/markdown style */
+  /** Prose/markdown style (tool chrome — kept at the compact `prose-xs` tier) */
   prose: "prose prose-xs max-w-none dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/80 prose-a:text-info prose-code:text-accent prose-code:bg-muted prose-pre:bg-muted prose-pre:text-foreground",
+  /** Conversation-content prose — 14px (`prose-sm`) so message markdown reads
+   *  at the same size as plain message text, above tool chrome. */
+  messageProse: "prose prose-sm max-w-none leading-relaxed dark:prose-invert prose-headings:text-foreground prose-p:text-foreground/80 prose-a:text-info prose-code:text-accent prose-code:bg-muted prose-pre:bg-muted prose-pre:text-foreground",
 } as const;
 
 /**

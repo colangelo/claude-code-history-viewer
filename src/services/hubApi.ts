@@ -92,6 +92,40 @@ export interface HubSearchHit {
   rank: number;
 }
 
+/**
+ * Row shape of `GET /v1/journal/entries` (crates/hub/src/journal.rs
+ * `JournalEntry`). One distilled `(entry_date, project_path)` entry.
+ */
+export interface JournalEntry {
+  entry_date: string;
+  project_path: string;
+  status: string;
+  headline: string | null;
+  summary: string | null;
+  topics: string[];
+  open_questions: string[];
+  session_ids: number[];
+  model: string | null;
+  generated_at: string;
+}
+
+/**
+ * A journal hit inside the `journal` block of `GET /v1/search`
+ * (crates/hub/src/journal.rs `JournalHit`) — a `JournalEntry` plus its
+ * independent full-text rank.
+ */
+export interface JournalSearchHit extends Omit<JournalEntry, "status"> {
+  rank: number;
+}
+
+export interface HubJournalOptions {
+  project?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface HubListOptions {
   machine?: string;
   provider?: string;
@@ -208,6 +242,57 @@ export const hubApi = {
     const totalCountHeader = res.headers.get("x-total-count");
     const totalCount = totalCountHeader !== null ? Number(totalCountHeader) : messages.length;
     return { messages, totalCount };
+  },
+
+  /**
+   * `GET /v1/journal/entries` — distilled per-day journal entries, newest-first,
+   * filterable by project and inclusive `from`/`to` date bounds, paginated.
+   */
+  async journalEntries(
+    config: HubConfig,
+    options?: HubJournalOptions
+  ): Promise<JournalEntry[]> {
+    const url = hubUrl(config, "/v1/journal/entries", {
+      project: options?.project,
+      from: options?.from,
+      to: options?.to,
+      limit: options?.limit,
+      offset: options?.offset,
+    });
+    const res = await hubGet(url, config);
+    const data = (await res.json()) as
+      | JournalEntry[]
+      | { entries?: JournalEntry[]; results?: JournalEntry[] };
+    if (Array.isArray(data)) return data;
+    return data.entries ?? data.results ?? [];
+  },
+
+  /**
+   * The `journal` block of `GET /v1/search` (present at the default `scope=all`).
+   * Kept separate from {@link search} so that method's array return stays
+   * byte-compatible with existing callers; absence of the block yields `[]`.
+   */
+  async journalSearch(
+    config: HubConfig,
+    query: string,
+    options?: HubSearchOptions
+  ): Promise<JournalSearchHit[]> {
+    const url = hubUrl(config, "/v1/search", {
+      q: query,
+      machine: options?.machine,
+      provider: options?.provider,
+      project: options?.project,
+      from: options?.from,
+      to: options?.to,
+      limit: options?.limit,
+      offset: options?.offset,
+    });
+    const res = await hubGet(url, config);
+    const data = (await res.json()) as
+      | HubSearchHit[]
+      | { journal?: JournalSearchHit[] };
+    if (Array.isArray(data)) return [];
+    return data.journal ?? [];
   },
 
   /** `GET /v1/search` — Postgres websearch full-text query over the archive. */
