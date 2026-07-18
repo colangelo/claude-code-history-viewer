@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-06T02:07:25.068Z
- * 총 키 개수: 1847
+ * 생성 시간: 2026-07-18T18:15:55.756Z
+ * 총 키 개수: 1867
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (552개)
+ * settings namespace의 번역 키 (572개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -674,6 +674,26 @@ export type SettingsKeys =
   | 'settings.archiveHub.browser.sessions.messageCountUnit'
   | 'settings.archiveHub.browser.sessions.title'
   | 'settings.archiveHub.description'
+  | 'settings.archiveHub.journal.clearDate'
+  | 'settings.archiveHub.journal.collapse'
+  | 'settings.archiveHub.journal.datePickerLabel'
+  | 'settings.archiveHub.journal.empty'
+  | 'settings.archiveHub.journal.error'
+  | 'settings.archiveHub.journal.expand'
+  | 'settings.archiveHub.journal.filterAll'
+  | 'settings.archiveHub.journal.loadMore'
+  | 'settings.archiveHub.journal.loading'
+  | 'settings.archiveHub.journal.openQuestions'
+  | 'settings.archiveHub.journal.projectFilterLabel'
+  | 'settings.archiveHub.journal.relative.today'
+  | 'settings.archiveHub.journal.relative.yesterday'
+  | 'settings.archiveHub.journal.searchSection'
+  | 'settings.archiveHub.journal.sessionCount'
+  | 'settings.archiveHub.journal.sessionMessages'
+  | 'settings.archiveHub.journal.sessions'
+  | 'settings.archiveHub.journal.tab.browse'
+  | 'settings.archiveHub.journal.tab.journal'
+  | 'settings.archiveHub.journal.tabsLabel'
   | 'settings.archiveHub.save'
   | 'settings.archiveHub.title'
   | 'settings.archiveHub.token'
@@ -3037,6 +3057,26 @@ export type TranslationKey =
   | 'settings.archiveHub.browser.sessions.messageCountUnit'
   | 'settings.archiveHub.browser.sessions.title'
   | 'settings.archiveHub.description'
+  | 'settings.archiveHub.journal.clearDate'
+  | 'settings.archiveHub.journal.collapse'
+  | 'settings.archiveHub.journal.datePickerLabel'
+  | 'settings.archiveHub.journal.empty'
+  | 'settings.archiveHub.journal.error'
+  | 'settings.archiveHub.journal.expand'
+  | 'settings.archiveHub.journal.filterAll'
+  | 'settings.archiveHub.journal.loadMore'
+  | 'settings.archiveHub.journal.loading'
+  | 'settings.archiveHub.journal.openQuestions'
+  | 'settings.archiveHub.journal.projectFilterLabel'
+  | 'settings.archiveHub.journal.relative.today'
+  | 'settings.archiveHub.journal.relative.yesterday'
+  | 'settings.archiveHub.journal.searchSection'
+  | 'settings.archiveHub.journal.sessionCount'
+  | 'settings.archiveHub.journal.sessionMessages'
+  | 'settings.archiveHub.journal.sessions'
+  | 'settings.archiveHub.journal.tab.browse'
+  | 'settings.archiveHub.journal.tab.journal'
+  | 'settings.archiveHub.journal.tabsLabel'
   | 'settings.archiveHub.save'
   | 'settings.archiveHub.title'
   | 'settings.archiveHub.token'

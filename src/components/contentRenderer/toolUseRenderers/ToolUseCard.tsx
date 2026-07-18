@@ -36,7 +36,7 @@ export const ToolUseCard = memo(function ToolUseCard({
             {toolId && (
               <code
                 className={cn(
-                  layout.monoText,
+                  layout.toolId,
                   "hidden md:inline px-2 py-0.5",
                   layout.rounded,
                   styles.badge,
@@ -51,7 +51,7 @@ export const ToolUseCard = memo(function ToolUseCard({
       />
       <Renderer.Content>
         {toolId && (
-          <code className={cn(layout.monoText, "block md:hidden mb-2 text-muted-foreground")}>
+          <code className={cn(layout.toolId, "block md:hidden mb-2 text-muted-foreground")}>
             {t("common.id")}: {toolId}
           </code>
         )}
