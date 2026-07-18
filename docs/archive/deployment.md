@@ -307,9 +307,10 @@ equivalently.
     cache. Authorizes the hub reads + `POST /v1/journal/entries`.
   - **aiproxy key** (backend=aiproxy) — `$CCHV_AIPROXY_KEY` → AppRole reading
     `kv/infra/aiproxy/proxy-keys` field `agents` → `distill-aiproxy-key` cache.
-    NB `kv/infra/aiproxy/*` is infra-owned; the `cchv-daemon` AppRole needs a
-    read grant on it (relay 2026-07-19) for the headless bao read — until then
-    it runs off the seeded cache floor.
+    `kv/infra/aiproxy/*` is infra-owned; the `cchv-daemon` AppRole was granted
+    read on it (home-network 38e48d8, `cchv-read` policy; relay 2026-07-19), so
+    the headless bao read now self-heals past key rotation. The cache floor
+    remains only as a bao/DNS-flake fallback, no longer the load-bearing path.
   - `op read` is the attended-only fallback (skipped under launchd,
     `CCHV_NONINTERACTIVE=1`, so it can't storm Touch-ID).
 - **Forward mode** (the launchd default) only processes groups newer than

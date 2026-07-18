@@ -172,9 +172,10 @@ def resolve_token() -> str:
 
 # CLIProxyAPI "agents" Bearer key (headless coding agents class), same
 # resolution shape as the hub token: env → bao → last-known-good 0600 cache.
-# NB the bao path `kv/infra/aiproxy/proxy-keys` is infra-owned; the cchv-daemon
-# AppRole needs read access to it (relay grant) for the headless bao read to
-# work — until then the cache floor (seeded from an attended read) carries it.
+# The bao path `kv/infra/aiproxy/proxy-keys` is infra-owned; the cchv-daemon
+# AppRole was granted read on it (home-network 38e48d8, cchv-read policy), so
+# the headless bao read below now self-heals past key rotation. The cache floor
+# stays only as a bao/DNS-flake fallback — no longer the load-bearing path.
 AIPROXY_KEY_CACHE = Path.home() / ".config/cchv/distill-aiproxy-key"
 
 
