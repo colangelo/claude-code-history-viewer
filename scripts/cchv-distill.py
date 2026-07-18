@@ -117,12 +117,33 @@ def op_token() -> str | None:
         return None
 
 
+# Last-known-good hub token, cached 0600 so a transient bao/DNS flake at the
+# nightly slot (op is skipped headless) doesn't FATAL the whole run — mirrors
+# cchv-launch.sh's last-known-good config floor. The hub token rotates rarely;
+# a stale cached token would just 401 (visible, retried next run), never worse
+# than the no-token FATAL it replaces.
+TOKEN_CACHE = Path.home() / ".config/cchv/distill-hub-token"
+
+
 def resolve_token() -> str:
     tok = os.environ.get("CCHV_HUB_TOKEN") or bao_token() or op_token()
-    if not tok:
-        log("FATAL: no hub token (env CCHV_HUB_TOKEN, bao, op all unavailable)")
-        sys.exit(1)
-    return tok
+    if tok:
+        try:
+            TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            TOKEN_CACHE.write_text(tok)
+            TOKEN_CACHE.chmod(0o600)
+        except OSError as e:
+            log(f"could not cache hub token: {e}")
+        return tok
+    # bao + op both unavailable (e.g. tailnet DNS down at wake): fall back to
+    # the last-known-good token so the catch-up run can still proceed.
+    if TOKEN_CACHE.is_file():
+        cached = TOKEN_CACHE.read_text().strip()
+        if cached:
+            log("bao/op unavailable — using last-known-good cached hub token")
+            return cached
+    log("FATAL: no hub token (env CCHV_HUB_TOKEN, bao, op, cache all unavailable)")
+    sys.exit(1)
 
 
 # --- hub client ---------------------------------------------------------------
