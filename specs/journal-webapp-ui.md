@@ -53,12 +53,17 @@ What to build (design decisions are final — locked with the user over mockups
 
 Constraints:
 
-- **Prior-run regression tests will need setup updates, not weakening:**
-  `crates/loop-evals/tests/archive-viewer-ui.eval.test.tsx` and
-  `src/test/ArchiveBrowser.test.tsx` render `ArchiveBrowser` and assert
-  Browse-pane content directly; with Journal as the default landing view they
-  must be updated to activate the Browse tab in setup first. Keep every
-  existing assertion intact — only the navigation setup may change.
+- **Tab affordances are fixed contract — do NOT modify the frozen prior eval.**
+  `crates/loop-evals/tests/archive-viewer-ui.eval.test.tsx` (a frozen eval from
+  a prior run) has already been made tab-tolerant on main: its setup clicks a
+  Browse tab if one exists. For that to keep passing, the tab buttons MUST carry
+  stable test ids — **`data-testid="archive-tab-journal"` and
+  `data-testid="archive-tab-browse"`** — and activating the Browse tab MUST show
+  the existing three panes with their current behavior. **The eval-writer must
+  not touch that file or any other prior frozen eval** (the loop firewall forbids
+  it; the previous run failed on exactly this). `src/test/ArchiveBrowser.test.tsx`
+  tests a DIFFERENT component (`ArchiveManager/ArchiveBrowser`, local snapshots)
+  and is unaffected.
 - Evals for THIS run: import only surfaces that exist today (`ArchiveBrowser`
   root via `@/`, `hubApi` module for `vi.spyOn`/mocks); never fetch a live
   server; missing-behavior must fail at runtime (element/query absent), not

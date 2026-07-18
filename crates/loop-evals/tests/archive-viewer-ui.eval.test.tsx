@@ -301,6 +301,18 @@ function messageRow(overrides: Partial<HubMessage>): HubMessage {
   };
 }
 
+/**
+ * Activate the Browse view if the archive browser presents Journal/Browse tabs.
+ * The journal-webapp-ui change makes Journal the default landing view; these
+ * AC8-AC11 assertions target the Browse panes, so they click into Browse first.
+ * Guarded so it is a no-op on the pre-tabs layout — this eval must pass both
+ * before that change (no tab → Browse is already the only view) and after it.
+ */
+function showBrowse() {
+  const browseTab = screen.queryByTestId("archive-tab-browse");
+  if (browseTab) fireEvent.click(browseTab);
+}
+
 describe("ArchiveBrowser", () => {
   it("AC8: renders archived projects with name and machine hostname", async () => {
     const projects = [
@@ -311,6 +323,7 @@ describe("ArchiveBrowser", () => {
     vi.spyOn(hubApi, "listSessions").mockResolvedValue([]);
 
     render(<ArchiveBrowser config={CFG} />);
+    showBrowse();
 
     await screen.findByText("alpha-project");
     await screen.findByText("beta-project");
@@ -334,6 +347,7 @@ describe("ArchiveBrowser", () => {
     vi.spyOn(hubApi, "listProjects").mockResolvedValue([target]);
 
     render(<ArchiveBrowser config={CFG} />);
+    showBrowse();
     await screen.findByText("alpha-project");
     fireEvent.click(screen.getByText("alpha-project"));
 
@@ -366,6 +380,7 @@ describe("ArchiveBrowser", () => {
     vi.spyOn(hubApi, "listSessions").mockResolvedValue([targetSession]);
 
     render(<ArchiveBrowser config={CFG} />);
+    showBrowse();
     await screen.findByText("alpha-project");
     fireEvent.click(screen.getByText("alpha-project"));
     await screen.findByText("paged session");
