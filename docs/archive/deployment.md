@@ -331,7 +331,15 @@ byte-identical CSS run on their side will ever stand in for the line.
 > `/tmp`" are each a claim whose depth is invisible in the report. `ls /tmp/*.png`
 > and `find /tmp -name '*.png'` are different sentences — the artifacts were one
 > directory down the whole time. Report the command, the way we now report the
-> hash, so the reader can see how deep the check actually went.
+> hash, so the reader can see how deep the check actually went. It is not only an
+> absence-reporting rule: twenty minutes later the other side ran
+> `ls -la /tmp/shot.py` → "No such file or directory" — correct output, wrong
+> question, with the real path (`/private/tmp/cchv-eyeball-v0110/shot.py`) already
+> in hand. **A shallow path check is a claim about a path, not about a file.**
+>
+> TCC generalizes too: `~/Documents`, `~/Desktop` and `~/Downloads` are all
+> blocked to an ssh/agent process on these Macs (sshd has no Full Disk Access).
+> `~/.local/share` is where agent artifacts go.
 
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
