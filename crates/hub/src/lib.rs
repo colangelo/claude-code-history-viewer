@@ -8,6 +8,7 @@ pub mod auth;
 pub mod browse;
 pub mod config;
 pub mod error;
+pub mod fts;
 pub mod health;
 pub mod identities;
 pub mod identity_filter;
@@ -133,8 +134,16 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
 /// Load config, connect to Postgres, apply migrations, and serve until shutdown.
 pub async fn run() -> anyhow::Result<()> {
     let config = HubConfig::load()?;
+    // Pool resilience (issue #17): keep warm connections so a transient DNS
+    // flake (MagicDNS at 03:30) can't 500 every read — established conns need
+    // no re-resolution; `test_before_acquire` (default on) pings them without
+    // DNS. `acquire_timeout` fails fast instead of piling 30s waits. This is
+    // mitigation, not cure: a flake outlasting the connection lifetime still
+    // bites on the next reconnect.
     let pool = PgPoolOptions::new()
         .max_connections(10)
+        .min_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(5))
         .connect(&config.database_url)
         .await?;
     MIGRATOR.run(&pool).await?;

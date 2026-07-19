@@ -51,6 +51,10 @@ pub struct SearchHit {
     pub model: Option<String>,
     pub snippet: String,
     pub rank: f32,
+    /// 0-based index of this message in its session's browse ordering
+    /// (`timestamp ASC NULLS LAST, seq ASC, id ASC`) — lets a client open the
+    /// page containing the hit instead of page 1 (issue #20).
+    pub position: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,8 +146,11 @@ pub async fn search(
     }))
 }
 
-/// The existing message full-text search — unchanged query, ordering, and hit
-/// shape (extracted verbatim so `scope` can gate whether it runs).
+/// The message full-text search. The `q` CTE combines the websearch parse
+/// with an optional prefix variant (issue #19, `fts::prefix_tsquery`) —
+/// OR-ing only ever ADDS hits, and the variant is absent for advanced-syntax
+/// queries so phrases/negation keep exact semantics. `position` locates the
+/// hit in its session's browse ordering (issue #20).
 async fn message_hits(
     state: &AppState,
     params: &SearchParams,
@@ -152,8 +159,15 @@ async fn message_hits(
     to: Option<DateTime<Utc>>,
     page: Page,
 ) -> Result<Vec<SearchHit>, HubError> {
+    let prefix = crate::fts::prefix_tsquery(&params.q);
     let rows = sqlx::query!(
         r#"
+        WITH q AS (
+            SELECT CASE
+                WHEN $10::text IS NULL THEN websearch_to_tsquery('simple', $1)
+                ELSE websearch_to_tsquery('simple', $1) || to_tsquery('simple', $10)
+            END AS tsq
+        )
         SELECT
             m.id              AS "message_id!",
             m.message_key     AS "message_key!",
@@ -170,14 +184,28 @@ async fn message_hits(
             m.role,
             m.model,
             ts_headline('simple', coalesce(m.search_text, ''),
-                        websearch_to_tsquery('simple', $1),
+                        q.tsq,
                         'MaxFragments=2, MinWords=3, MaxWords=14') AS "snippet!",
-            ts_rank(m.text_search, websearch_to_tsquery('simple', $1)) AS "rank!"
-        FROM messages m
+            ts_rank(m.text_search, q.tsq) AS "rank!",
+            (
+                SELECT count(*) FROM messages m2
+                WHERE m2.session_id = m.session_id
+                  AND (
+                    CASE WHEN m."timestamp" IS NULL
+                        THEN m2."timestamp" IS NOT NULL
+                             OR (m2."timestamp" IS NULL
+                                 AND (m2.seq, m2.id) < (m.seq, m.id))
+                        ELSE m2."timestamp" IS NOT NULL
+                             AND (m2."timestamp", m2.seq, m2.id)
+                                 < (m."timestamp", m.seq, m.id)
+                    END
+                  )
+            ) AS "position!"
+        FROM q, messages m
         JOIN sessions s   ON m.session_id = s.id
         LEFT JOIN projects p ON s.project_id = p.id
         JOIN machines mac ON m.machine_id = mac.machine_id
-        WHERE m.text_search @@ websearch_to_tsquery('simple', $1)
+        WHERE m.text_search @@ q.tsq
           AND ($2::text IS NULL OR m.provider = $2)
           AND ($3::text IS NULL OR mac.hostname = $3)
           AND ($4::text IS NULL OR p.name = $4 OR p.project_path = $4)
@@ -196,6 +224,7 @@ async fn message_hits(
         page.limit,
         page.offset,
         project_scope.paths.as_deref(),
+        prefix,
     )
     .fetch_all(&state.pool)
     .await?;
@@ -219,6 +248,7 @@ async fn message_hits(
             model: r.model,
             snippet: r.snippet,
             rank: r.rank,
+            position: r.position,
         })
         .collect())
 }

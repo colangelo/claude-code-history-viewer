@@ -449,14 +449,22 @@ pub async fn search_journal(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<JournalHit>, HubError> {
+    // Prefix variant for plain queries (issue #19) — see `fts::prefix_tsquery`.
+    let prefix = crate::fts::prefix_tsquery(q);
     let hits = sqlx::query_as::<_, JournalHit>(
         r"
+        WITH q AS (
+            SELECT CASE
+                WHEN $6::text IS NULL THEN websearch_to_tsquery('simple', $1)
+                ELSE websearch_to_tsquery('simple', $1) || to_tsquery('simple', $6)
+            END AS tsq
+        )
         SELECT entry_date, project_path, headline, summary, topics,
                open_questions, session_ids, model, generated_at,
-               ts_rank(text_search, websearch_to_tsquery('simple', $1)) AS rank
-        FROM journal_entries
+               ts_rank(text_search, q.tsq) AS rank
+        FROM q, journal_entries
         WHERE status = 'entry'
-          AND text_search @@ websearch_to_tsquery('simple', $1)
+          AND text_search @@ q.tsq
           AND ($2::text IS NULL OR project_path = $2)
           AND ($5::text[] IS NULL OR project_path = ANY($5))
         ORDER BY rank DESC, entry_date DESC, id DESC
@@ -468,6 +476,7 @@ pub async fn search_journal(
     .bind(limit)
     .bind(offset)
     .bind(scope.paths.as_deref())
+    .bind(prefix)
     .fetch_all(&state.pool)
     .await?;
 

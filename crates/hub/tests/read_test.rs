@@ -566,3 +566,170 @@ async fn paging_is_stable() {
     }
     assert_eq!(seen.len(), 5, "all five sessions paged exactly once");
 }
+
+// ---------------------------------------------------------------------------
+// issue #19 — FTS prefix matching for plain queries
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn search_prefix_matches_word_stems() {
+    let hub = spawn().await;
+    ingest(
+        &hub,
+        &batch(
+            &hub,
+            vec![proj("/w/stems", "stems")],
+            vec![sess("s-stems", "/w/stems")],
+            vec![msg(
+                "s-stems",
+                "k-stems-1",
+                0,
+                "2026-01-01T00:00:00Z",
+                "the distiller runs nightly",
+            )],
+        ),
+    )
+    .await;
+
+    // Whole-lexeme websearch alone would return nothing for `distill` —
+    // the prefix variant must find `distiller`.
+    let resp = get(
+        &hub,
+        "/v1/search",
+        &[("q", "distill"), ("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "prefix query must match `distiller`");
+    assert_eq!(results[0]["session_id"], "s-stems");
+
+    // Advanced websearch syntax disables the prefix variant: negation keeps
+    // exact whole-lexeme semantics, so `distill` alone matches nothing.
+    let resp = get(
+        &hub,
+        "/v1/search",
+        &[("q", "distill -nightly"), ("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["results"].as_array().unwrap().len(),
+        0,
+        "advanced syntax must keep exact websearch semantics"
+    );
+}
+
+#[tokio::test]
+async fn journal_search_prefix_matches_word_stems() {
+    let hub = spawn().await;
+    // Seed a journal entry directly (text_search is GENERATED from
+    // search_text); the POST path requires full session provenance which is
+    // irrelevant to FTS behavior.
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&test_db_url())
+        .await
+        .unwrap();
+    let project = format!("/w/journal-{}", hub.hostname);
+    sqlx::query(
+        "INSERT INTO journal_entries
+             (entry_date, project_path, status, headline, summary, model, search_text)
+         VALUES ('2026-01-02', $1, 'entry', 'Distiller hardening',
+                 'Hardened the distiller against DNS flakes.', 'test-model',
+                 'Distiller hardening. Hardened the distiller against DNS flakes.')",
+    )
+    .bind(&project)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let resp = get(
+        &hub,
+        "/v1/search",
+        &[
+            ("q", "distill"),
+            ("project", &project),
+            ("scope", "journal"),
+        ],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let journal = body["journal"].as_array().unwrap();
+    assert_eq!(
+        journal.len(),
+        1,
+        "journal prefix query must match `distiller`"
+    );
+    assert_eq!(journal[0]["project_path"], Value::String(project));
+}
+
+// ---------------------------------------------------------------------------
+// issue #20 — search hits carry their browse-order position
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn search_hits_carry_browse_order_position() {
+    let hub = spawn().await;
+    ingest(
+        &hub,
+        &batch(
+            &hub,
+            vec![proj("/w/pos", "pos")],
+            vec![sess("s-pos", "/w/pos")],
+            vec![
+                msg(
+                    "s-pos",
+                    "k-pos-0",
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    "alpha filler",
+                ),
+                msg("s-pos", "k-pos-1", 1, "2026-01-01T00:01:00Z", "beta filler"),
+                msg(
+                    "s-pos",
+                    "k-pos-2",
+                    2,
+                    "2026-01-01T00:02:00Z",
+                    "needle-zzq here",
+                ),
+            ],
+        ),
+    )
+    .await;
+
+    let resp = get(
+        &hub,
+        "/v1/search",
+        &[("q", "needle-zzq"), ("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    // Third message in browse ordering (timestamp ASC) → 0-based position 2.
+    assert_eq!(results[0]["position"], 2);
+
+    // Sanity: the position indexes into the browse messages listing.
+    let session_pk = results[0]["session_pk"].as_i64().unwrap();
+    let resp = get(
+        &hub,
+        &format!("/v1/sessions/{session_pk}/messages"),
+        &[],
+        Some(&hub.token),
+    )
+    .await;
+    let messages: Value = resp.json().await.unwrap();
+    assert_eq!(
+        messages.as_array().unwrap()[2]["message_key"],
+        results[0]["message_key"]
+    );
+}
