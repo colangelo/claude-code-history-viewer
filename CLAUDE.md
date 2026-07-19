@@ -178,7 +178,9 @@ git push origin  main && git push origin  cchv-v0.6.0
 
 Pushing a `cchv-v*` tag runs `.github/workflows/server-release.yml`, which
 publishes a GitHub Release with the static webapp bundle (`cchv-webapp.tar.gz`)
-and per-platform WebUI server binaries.
+only. The per-platform WebUI server binaries are **dispatch-only** (nothing
+consumes them today): `gh workflow run server-release.yml --ref cchv-vX.Y.Z`
+builds and attaches them to that tag's release on demand.
 
 The always-on **m4m hub is NOT deployed from that release**. The real path is:
 build locally → stage in `~/.config/cchv/staging/` → relay home-network (infra)
