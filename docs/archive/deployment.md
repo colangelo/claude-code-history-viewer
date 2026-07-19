@@ -339,6 +339,28 @@ equivalently.
   group stays pending (retried next run); the hub validates independently.
   Exit code 1 when any group failed — visible in `/tmp/cchv-distiller.err`.
 
+## 3d. Project identity (cchv-v0.10.0): rollout order
+
+The git-fingerprint identity feature (migration `0003`, `identity:<key>`
+filters, `/v1/identities` + aliases) is fully additive and order-independent,
+but the intended rollout is **hub first, then daemons**:
+
+1. **Hub**: swap per §2b. Migration `0003` auto-runs at startup (nullable
+   columns + `project_identity_aliases` table — existing rows stay valid with
+   NULL fingerprints; a rollback binary simply ignores them).
+2. **Daemons** (m4m, ac-mbm5): swap per §3. No config change — the next scan
+   pass captures git fingerprints for every live project dir (guarded,
+   5s-timeboxed `git` subprocesses; failures degrade to no-fingerprint) and
+   the normal upsert backfills the columns. Old daemons against the new hub
+   (and vice versa) keep working: absent facts never clobber stored ones.
+3. **Webapp**: ships in the same release bundle; the identity-grouped sidebar
+   and worktree toggle appear once the hub exposes the new fields.
+
+Moved-away paths archived before fingerprinting exist can't be fingerprinted
+retroactively — link them from the webapp (orphan-path suggestions on the
+identity's member panel create a reversible alias; nothing rewrites archived
+rows).
+
 ## 4. Verify end-to-end
 
 ```bash
@@ -348,6 +370,12 @@ HOST=http://<tailnet-host>:8787
 
 curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/projects" | jq '.[0]'
 curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/search?q=refactor" | jq '.results[0]'
+
+# Project identity (after 3d): fingerprints + identity grouping
+curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/projects" \
+  | jq '[.[] | select(.identity_key != null)] | length'   # fingerprinted rows
+curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/identities" \
+  | jq '.[0] | {identity_key, display_name, members: [.members[].project_path]}'
 ```
 
 ## Notes & current limitations
