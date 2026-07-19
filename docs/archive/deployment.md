@@ -591,9 +591,23 @@ curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/identities" \
 - **Incremental sync (MVP):** a changed session file is re-parsed in full and
   re-sent; the hub's idempotent ingest drops duplicates. Byte-offset
   "parse only new lines" and `notify`-based watching are planned optimizations.
-- **pgvector / semantic search and an MCP context server** are future phases;
-  the schema already reserves a `message_embeddings` side table so they land
-  without a breaking migration. **pg1 disk envelope for the embeddings backfill**
+- **Semantic search (pgvector) = the recommended next retrieval lever; MCP context
+  server = OPTIONAL (de-scoped 2026-07-19).** The schema already reserves a
+  `message_embeddings` side table so embeddings land without a breaking migration.
+  **Why semantic search:** a 2026-07-19 recall spot-check of cchv-find over the live
+  archive found keyword recall strong (6/6 known journal entries via exact terms) but
+  **paraphrase/semantic recall ~0/6** — the hub's `websearch_to_tsquery('simple', …)`
+  does no stemming (`deploying`≠`deployed`, confirmed: `deploying`→1 hit vs `deployed`→10)
+  and AND-s terms, so natural-language "I vaguely remember we discussed X" queries return
+  nothing or common-word noise. **Scope it journal-first:** the ~92 distilled journal
+  entries are a tiny, high-signal, human-phrased corpus — embedding *them* (cheap) fixes
+  the "what did we do about X" misses directly; message-level embeddings (100k+ rows) are
+  a bigger, later phase only if journal-level proves insufficient. **MCP context server:**
+  its intended job — an agent pulling archive context as native tools — is already
+  delivered by the hub read API + the `cchv-find` skill (journal-first retrieval), so it
+  is now optional; build it only if a **non-Claude-Code MCP client** (Desktop/Cursor/…)
+  needs the archive. A useful MCP server would also want semantic search underneath it —
+  the transport isn't the lever, retrieval quality is. **pg1 disk envelope for the embeddings backfill**
   (infra note, home-network relay 2026-07-19, `hosts/configs/proxmox1/pg1.md`):
   the pg1 data disk was pre-grown 32 → 48 GB online, so there is now **~24 GB
   free**. pgvector **0.8.5** is installed and **`halfvec` is verified working**.
