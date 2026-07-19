@@ -8,9 +8,16 @@
  * with provenance (machine hostname) visible.
  */
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Loader2, X } from "lucide-react";
+import { ChevronLeft, GitBranch, Loader2, X } from "lucide-react";
 import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
 import { MessageContentDisplay } from "@/components/messageRenderer";
 import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
@@ -21,6 +28,15 @@ import { getProviderLabel } from "@/utils/providers";
 import { ArchiveRenderContext } from "@/contexts/ArchiveRenderContext";
 import { JournalView } from "./JournalView";
 import {
+  aliasKeyByPath,
+  groupProjects,
+  type ProjectGroup,
+} from "./projectGrouping";
+import {
+  loadShowWorktrees,
+  storeShowWorktrees,
+} from "./worktreeVisibilityStorage";
+import {
   formatArchiveHash,
   parseArchiveHash,
   type ArchiveRoute,
@@ -28,11 +44,13 @@ import {
 import {
   hubApi,
   hubMessageToClaudeMessage,
+  identityProjectFilter,
   type HubConfig,
-  type HubProject,
-  type HubSession,
+  type HubIdentity,
   type HubMessage,
+  type HubProject,
   type HubSearchHit,
+  type HubSession,
   type JournalSearchHit,
 } from "../../services/hubApi";
 
@@ -133,9 +151,28 @@ export function ArchiveBrowser({
   );
 
   const [projects, setProjects] = useState<HubProject[]>([]);
+  const [identities, setIdentities] = useState<HubIdentity[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
-  const [selectedProject, setSelectedProject] = useState<HubProject | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<ProjectGroup | null>(null);
+  const [showWorktrees, setShowWorktrees] = useState<boolean>(loadShowWorktrees);
+  const [aliasError, setAliasError] = useState<string | null>(null);
+
+  // Identity grouping of the sidebar/dropdown (spec: archive-journal-ui
+  // "Identity-grouped project surfaces"). Aliased dead paths fold into their
+  // identity's group so a moved repo appears once.
+  const projectGroups = useMemo(
+    () =>
+      groupProjects(projects, {
+        aliases: aliasKeyByPath(identities),
+        showWorktrees,
+      }),
+    [projects, identities, showWorktrees]
+  );
+  // The selected group's CURRENT incarnation (grouping recomputes on alias or
+  // toggle changes; selection is stable by key).
+  const activeGroup =
+    projectGroups.find((g) => g.key === selectedGroup?.key) ?? selectedGroup;
 
   const [sessions, setSessions] = useState<HubSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
@@ -197,17 +234,36 @@ export function ArchiveBrowser({
     };
   }, [config]);
 
+  // Identity metadata (aliases + suggestions) is additive and best-effort: a
+  // hub without /v1/identities simply yields ungrouped-by-alias behavior.
+  const refreshIdentities = useCallback(() => {
+    hubApi
+      .listIdentities(config)
+      .then(setIdentities)
+      .catch(() => {
+        setIdentities([]);
+      });
+  }, [config]);
+  useEffect(() => {
+    refreshIdentities();
+  }, [refreshIdentities]);
+
   const fetchSessionsFor = useCallback(
-    (project: HubProject) => {
+    (group: ProjectGroup, showWt: boolean) => {
       const generation = ++sessionsGenerationRef.current;
       setSessions([]);
       setSessionsError(null);
       setIsLoadingSessions(true);
+      // Identity groups query the hub's identity scope (server-side expansion
+      // to member + aliased paths); path groups keep the byte-exact path
+      // filter. Neither pins machine/provider — a group spans them.
       hubApi
         .listSessions(config, {
-          project: project.name ?? project.project_path,
-          machine: project.machine_hostname,
-          provider: project.provider,
+          project: group.identityKey
+            ? identityProjectFilter(group.identityKey)
+            : group.paths[0] ?? "",
+          include_worktrees:
+            group.identityKey && !showWt ? false : undefined,
         })
         .then((list) => {
           if (sessionsGenerationRef.current !== generation) return;
@@ -225,14 +281,14 @@ export function ArchiveBrowser({
     [config]
   );
 
-  // Select a project WITHOUT clearing the open session — pane sync for a
+  // Select a group WITHOUT clearing the open session — pane sync for a
   // session opened from Journal or a search hit.
   const syncProjectSelection = useCallback(
-    (project: HubProject) => {
-      setSelectedProject(project);
-      fetchSessionsFor(project);
+    (group: ProjectGroup) => {
+      setSelectedGroup(group);
+      fetchSessionsFor(group, showWorktrees);
     },
-    [fetchSessionsFor]
+    [fetchSessionsFor, showWorktrees]
   );
 
   const openSessionRef = useCallback(
@@ -258,22 +314,25 @@ export function ArchiveBrowser({
           if (messagesGenerationRef.current !== generation) return;
           setIsLoadingMessages(false);
         });
-      // Pane sync: only when the context pins exactly one known project —
-      // an ambiguous match (same path on several machines) syncs nothing.
+      // Pane sync: only when the context pins exactly one group — identity
+      // grouping makes this the common case (same path on several machines
+      // now folds into one group instead of being ambiguous).
       if (context?.project_path) {
-        const matches = projects.filter(
-          (p) =>
-            p.project_path === context.project_path &&
-            (context.machine_hostname == null ||
-              p.machine_hostname === context.machine_hostname) &&
-            (context.provider == null || p.provider === context.provider)
+        const matches = projectGroups.filter((g) =>
+          g.rows.some(
+            (p) =>
+              p.project_path === context.project_path &&
+              (context.machine_hostname == null ||
+                p.machine_hostname === context.machine_hostname) &&
+              (context.provider == null || p.provider === context.provider)
+          )
         );
-        if (matches.length === 1 && matches[0]!.id !== selectedProject?.id) {
+        if (matches.length === 1 && matches[0]!.key !== selectedGroup?.key) {
           syncProjectSelection(matches[0]!);
         }
       }
     },
-    [config, projects, selectedProject?.id, syncProjectSelection]
+    [config, projectGroups, selectedGroup?.key, syncProjectSelection]
   );
 
   // Open a session from the Journal view: switch to Browse and load messages
@@ -286,19 +345,69 @@ export function ArchiveBrowser({
     [openSessionRef]
   );
 
-  const handleSelectProject = useCallback(
-    (project: HubProject) => {
+  const handleSelectGroup = useCallback(
+    (group: ProjectGroup) => {
       // Invalidate any in-flight message fetch for the previously open
       // session — it belongs to a project we're navigating away from.
       ++messagesGenerationRef.current;
-      setSelectedProject(project);
+      setSelectedGroup(group);
+      setAliasError(null);
       setOpenSession(null);
       setMessages([]);
       setTotalCount(null);
       setMessagesError(null);
-      fetchSessionsFor(project);
+      fetchSessionsFor(group, showWorktrees);
     },
-    [fetchSessionsFor]
+    [fetchSessionsFor, showWorktrees]
+  );
+
+  const handleToggleWorktrees = useCallback(() => {
+    const next = !showWorktrees;
+    setShowWorktrees(next);
+    storeShowWorktrees(next);
+    // Identity-scoped sessions change with the toggle; refetch explicitly
+    // (path groups are unaffected by the param).
+    if (selectedGroup?.identityKey) {
+      fetchSessionsFor(selectedGroup, next);
+    }
+  }, [showWorktrees, selectedGroup, fetchSessionsFor]);
+
+  // Alias management: explicit user actions with visible error feedback.
+  const handleLinkAlias = useCallback(
+    (projectPath: string, identityKey: string) => {
+      setAliasError(null);
+      hubApi
+        .createAlias(config, projectPath, identityKey)
+        .then(() => {
+          refreshIdentities();
+          // The linked path's history joins the selected group's scope.
+          if (selectedGroup?.identityKey === identityKey) {
+            fetchSessionsFor(selectedGroup, showWorktrees);
+          }
+        })
+        .catch((err) => {
+          setAliasError(String(err));
+        });
+    },
+    [config, refreshIdentities, selectedGroup, fetchSessionsFor, showWorktrees]
+  );
+
+  const handleUnlinkAlias = useCallback(
+    (aliasId: number) => {
+      setAliasError(null);
+      hubApi
+        .deleteAlias(config, aliasId)
+        .then(() => {
+          refreshIdentities();
+          if (selectedGroup?.identityKey) {
+            fetchSessionsFor(selectedGroup, showWorktrees);
+          }
+        })
+        .catch((err) => {
+          setAliasError(String(err));
+        });
+    },
+    [config, refreshIdentities, selectedGroup, fetchSessionsFor, showWorktrees]
   );
 
   const handleLoadMore = useCallback(() => {
@@ -408,7 +517,7 @@ export function ArchiveBrowser({
   const handleBackToProjects = useCallback(() => {
     ++sessionsGenerationRef.current;
     ++messagesGenerationRef.current;
-    setSelectedProject(null);
+    setSelectedGroup(null);
     setSessions([]);
     setSessionsError(null);
     setOpenSession(null);
@@ -603,41 +712,61 @@ export function ArchiveBrowser({
         </ul>
       )}
 
-      {/* View switcher */}
-      <div
-        role="tablist"
-        aria-label={t("settings.archiveHub.journal.tabsLabel")}
-        className="flex items-center gap-1 shrink-0 border-b border-border/50"
-      >
+      {/* View switcher + worktree visibility toggle */}
+      <div className="flex items-center gap-1 shrink-0 border-b border-border/50">
+        <div
+          role="tablist"
+          aria-label={t("settings.archiveHub.journal.tabsLabel")}
+          className="flex items-center gap-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            data-testid="archive-tab-journal"
+            aria-selected={view === "journal"}
+            onClick={() => setView("journal")}
+            className={cn(
+              "px-3 py-2 text-px14 border-b-2 -mb-px",
+              view === "journal"
+                ? "border-accent text-foreground font-medium"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {t("settings.archiveHub.journal.tab.journal")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-testid="archive-tab-browse"
+            aria-selected={view === "browse"}
+            onClick={() => setView("browse")}
+            className={cn(
+              "px-3 py-2 text-px14 border-b-2 -mb-px",
+              view === "browse"
+                ? "border-accent text-foreground font-medium"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {t("settings.archiveHub.journal.tab.browse")}
+          </button>
+        </div>
         <button
           type="button"
-          role="tab"
-          data-testid="archive-tab-journal"
-          aria-selected={view === "journal"}
-          onClick={() => setView("journal")}
+          role="switch"
+          data-testid="worktree-toggle"
+          aria-checked={showWorktrees}
+          aria-label={t("settings.archiveHub.identity.showWorktrees")}
+          title={t("settings.archiveHub.identity.showWorktrees")}
+          onClick={handleToggleWorktrees}
           className={cn(
-            "px-3 py-2 text-px14 border-b-2 -mb-px",
-            view === "journal"
-              ? "border-accent text-foreground font-medium"
-              : "border-transparent text-muted-foreground hover:text-foreground"
+            "ml-auto flex items-center gap-1 rounded-md border px-2 py-1 text-px12",
+            showWorktrees
+              ? "border-border text-foreground"
+              : "border-border/50 text-muted-foreground line-through"
           )}
         >
-          {t("settings.archiveHub.journal.tab.journal")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          data-testid="archive-tab-browse"
-          aria-selected={view === "browse"}
-          onClick={() => setView("browse")}
-          className={cn(
-            "px-3 py-2 text-px14 border-b-2 -mb-px",
-            view === "browse"
-              ? "border-accent text-foreground font-medium"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          )}
-        >
-          {t("settings.archiveHub.journal.tab.browse")}
+          <GitBranch className="w-3 h-3" aria-hidden="true" />
+          {t("settings.archiveHub.identity.showWorktrees")}
         </button>
       </div>
 
@@ -646,17 +775,20 @@ export function ArchiveBrowser({
           config={config}
           anchorDate={anchorDate}
           anchorNonce={anchorNonce}
+          projectGroups={projectGroups}
+          showWorktrees={showWorktrees}
           onOpenSession={handleOpenSessionFromJournal}
           onDateChange={setJournalDate}
         />
       ) : (
         <div className="flex flex-1 min-h-0 gap-3">
-          {/* Projects pane. Below `md` the three panes stack: exactly one level
-              is visible (messages > sessions > projects) with back buttons. */}
+          {/* Projects pane: identity-grouped (one entry per repo identity,
+              members inspectable on selection). Below `md` the three panes
+              stack: exactly one level is visible with back buttons. */}
           <div
             className={cn(
               "w-full md:w-60 md:shrink-0 overflow-y-auto border border-border/50 rounded-md",
-              (selectedProject || openSession) && "hidden md:block"
+              (selectedGroup || openSession) && "hidden md:block"
             )}
           >
             <p className="px-2 py-1.5 text-px12 font-medium text-muted-foreground">
@@ -670,31 +802,143 @@ export function ArchiveBrowser({
             {projectsError && (
               <p className="px-2 py-1 text-px14 text-destructive">{projectsError}</p>
             )}
-            {!isLoadingProjects && !projectsError && projects.length === 0 && (
+            {!isLoadingProjects && !projectsError && projectGroups.length === 0 && (
               <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.projects.empty")}
               </p>
             )}
             <ul>
-              {projects.map((project) => (
-                <li key={project.id}>
-                  <button
-                    type="button"
-                    onClick={() => handleSelectProject(project)}
-                    className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
-                      selectedProject?.id === project.id ? "bg-accent/10" : ""
-                    }`}
-                  >
-                    <p className="truncate">{project.name ?? project.project_path}</p>
-                    <p className="text-px12 text-muted-foreground truncate">
-                      {project.machine_hostname}
-                      <span className="ml-1.5 rounded bg-muted px-1 py-px">
-                        {getProviderLabel(t, project.provider)}
-                      </span>
-                    </p>
-                  </button>
-                </li>
-              ))}
+              {projectGroups.map((group) => {
+                const isSelected = activeGroup?.key === group.key;
+                const identityInfo = group.identityKey
+                  ? identities.find((i) => i.identity_key === group.identityKey)
+                  : undefined;
+                const orphanSuggestions =
+                  identityInfo?.suggestions.filter(
+                    (s) => s.kind === "orphan_path" && s.project_path
+                  ) ?? [];
+                return (
+                  <li key={group.key}>
+                    <button
+                      type="button"
+                      data-testid="project-group"
+                      onClick={() => handleSelectGroup(group)}
+                      className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
+                        isSelected ? "bg-accent/10" : ""
+                      }`}
+                      title={group.paths.join("\n")}
+                    >
+                      <p className="truncate">
+                        {group.displayName}
+                        {group.disambiguator && (
+                          <span className="text-px12 text-muted-foreground">
+                            {" — "}
+                            {group.disambiguator}
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-px12 text-muted-foreground truncate">
+                        {group.machines.join(", ")}
+                        {group.providers.map((provider) => (
+                          <span
+                            key={provider}
+                            className="ml-1.5 rounded bg-muted px-1 py-px"
+                          >
+                            {getProviderLabel(t, provider)}
+                          </span>
+                        ))}
+                        {group.worktreePaths.length > 0 && (
+                          <span className="ml-1.5 rounded bg-info/10 text-info px-1 py-px">
+                            {t("settings.archiveHub.identity.worktree")}
+                          </span>
+                        )}
+                      </p>
+                    </button>
+                    {/* Member inspection: locations, worktree/linked labels,
+                        alias link/unlink affordances. */}
+                    {isSelected &&
+                      (group.paths.length > 1 ||
+                        orphanSuggestions.length > 0 ||
+                        (identityInfo?.aliases.length ?? 0) > 0 ||
+                        group.worktreePaths.length > 0) && (
+                        <div
+                          data-testid="identity-members"
+                          className="px-2 pb-2 space-y-1"
+                        >
+                          <p className="text-px11 uppercase tracking-wide text-muted-foreground">
+                            {t("settings.archiveHub.identity.locations")}
+                          </p>
+                          {group.paths.map((path) => {
+                            const alias = identityInfo?.aliases.find(
+                              (a) => a.project_path === path
+                            );
+                            return (
+                              <div
+                                key={path}
+                                className="flex items-center gap-1.5 text-px12 text-muted-foreground"
+                              >
+                                <span className="truncate" title={path}>
+                                  {path}
+                                </span>
+                                {group.worktreePaths.includes(path) && (
+                                  <span className="shrink-0 rounded bg-info/10 text-info px-1 py-px">
+                                    {t("settings.archiveHub.identity.worktree")}
+                                  </span>
+                                )}
+                                {alias && (
+                                  <>
+                                    <span className="shrink-0 rounded bg-muted px-1 py-px">
+                                      {t("settings.archiveHub.identity.linked")}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      data-testid="identity-unlink"
+                                      onClick={() => handleUnlinkAlias(alias.id)}
+                                      className="shrink-0 rounded border border-border px-1 py-px hover:bg-muted"
+                                    >
+                                      {t("settings.archiveHub.identity.unlink")}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {orphanSuggestions.map((suggestion) => (
+                            <div
+                              key={suggestion.project_path}
+                              className="flex items-center gap-1.5 text-px12 text-muted-foreground"
+                            >
+                              <span
+                                className="truncate"
+                                title={`${suggestion.project_path} — ${t(
+                                  "settings.archiveHub.identity.suggestionHint"
+                                )}`}
+                              >
+                                {suggestion.project_path}
+                              </span>
+                              <button
+                                type="button"
+                                data-testid="identity-link"
+                                onClick={() =>
+                                  handleLinkAlias(
+                                    suggestion.project_path!,
+                                    group.identityKey!
+                                  )
+                                }
+                                className="shrink-0 rounded border border-border px-1 py-px hover:bg-muted"
+                              >
+                                {t("settings.archiveHub.identity.link")}
+                              </button>
+                            </div>
+                          ))}
+                          {aliasError && (
+                            <p className="text-px12 text-destructive">{aliasError}</p>
+                          )}
+                        </div>
+                      )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
 
@@ -702,7 +946,7 @@ export function ArchiveBrowser({
           <div
             className={cn(
               "w-full md:w-80 md:shrink-0 overflow-y-auto border border-border/50 rounded-md",
-              (!selectedProject || openSession) && "hidden md:block"
+              (!selectedGroup || openSession) && "hidden md:block"
             )}
           >
             <div className="flex items-center gap-1 px-2 py-1.5">
@@ -719,12 +963,12 @@ export function ArchiveBrowser({
                 {t("settings.archiveHub.browser.sessions.title")}
               </p>
             </div>
-            {!selectedProject && (
+            {!selectedGroup && (
               <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.selectProject")}
               </p>
             )}
-            {selectedProject && isLoadingSessions && (
+            {selectedGroup && isLoadingSessions && (
               <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.sessions.loading")}
               </p>
@@ -732,7 +976,7 @@ export function ArchiveBrowser({
             {sessionsError && (
               <p className="px-2 py-1 text-px14 text-destructive">{sessionsError}</p>
             )}
-            {selectedProject &&
+            {selectedGroup &&
               !isLoadingSessions &&
               !sessionsError &&
               sessions.length === 0 && (
@@ -785,7 +1029,7 @@ export function ArchiveBrowser({
                   className="md:hidden flex items-center gap-0.5 shrink-0 text-px12 text-muted-foreground hover:text-foreground"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                  {selectedProject
+                  {selectedGroup
                     ? t("settings.archiveHub.browser.backToSessions")
                     : t("settings.archiveHub.browser.backToProjects")}
                 </button>

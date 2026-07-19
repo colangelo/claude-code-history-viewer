@@ -125,19 +125,40 @@ pub async fn ingest(
     // (provider, project_path) -> surrogate project id, for session linkage.
     let mut project_ids: HashMap<(String, String), i64> = HashMap::new();
     for p in &batch.projects {
+        // Fingerprint facts are validated/normalized hub-side (never trust the
+        // daemon's normalization) and COALESCE-guarded on update: a batch that
+        // omits them (old daemon, transient capture failure) never clobbers
+        // stored non-null facts.
+        let root_commit = p
+            .git_root_commit
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit()))
+            .map(str::to_ascii_lowercase);
+        let remote_url = p
+            .git_remote_url
+            .as_deref()
+            .and_then(archive_protocol::identity::normalize_remote_url);
         let row = sqlx::query!(
             r#"
             INSERT INTO projects
                 (machine_id, provider, project_path, name, storage_type,
-                 session_count, message_count, last_modified, updated_at)
+                 session_count, message_count, last_modified, updated_at,
+                 git_root_commit, git_remote_url, git_worktree, git_main_path)
             VALUES ($1, $2, $3, $4, $5,
-                    COALESCE($6, 0), COALESCE($7, 0), $8, now())
+                    COALESCE($6, 0), COALESCE($7, 0), $8, now(),
+                    $9, $10, COALESCE($11, false), $12)
             ON CONFLICT (machine_id, provider, project_path)
             DO UPDATE SET name = excluded.name,
                           storage_type = excluded.storage_type,
                           last_modified = excluded.last_modified,
-                          updated_at = now()
-            RETURNING id, (xmax = 0) AS "inserted!: bool"
+                          updated_at = now(),
+                          git_root_commit = COALESCE($9, projects.git_root_commit),
+                          git_remote_url = COALESCE($10, projects.git_remote_url),
+                          git_worktree = COALESCE($11, projects.git_worktree),
+                          git_main_path = COALESCE($12, projects.git_main_path)
+            RETURNING id, (xmax = 0) AS "inserted!: bool",
+                      git_root_commit, git_remote_url
             "#,
             token_machine,
             p.provider,
@@ -147,8 +168,26 @@ pub async fn ingest(
             p.session_count,
             p.message_count,
             parse_ts(p.last_modified.as_deref()),
+            root_commit.as_deref(),
+            remote_url.as_deref(),
+            p.git_is_worktree,
+            p.git_main_path.as_deref(),
         )
         .fetch_one(&mut *tx)
+        .await?;
+        // Identity key derives from the EFFECTIVE (post-COALESCE) facts, so a
+        // partial capture can't flap a project out of its group; always-set is
+        // self-healing and a no-op when the facts didn't change.
+        let identity_key = archive_protocol::identity::derive_identity_key(
+            row.git_root_commit.as_deref(),
+            row.git_remote_url.as_deref(),
+        );
+        sqlx::query!(
+            "UPDATE projects SET identity_key = $1 WHERE id = $2",
+            identity_key.as_deref(),
+            row.id,
+        )
+        .execute(&mut *tx)
         .await?;
         project_ids.insert((p.provider.clone(), p.project_path.clone()), row.id);
         if row.inserted {

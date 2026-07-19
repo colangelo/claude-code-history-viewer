@@ -576,5 +576,12 @@
   "settings.archiveHub.journal.projectFilterLabel": "プロジェクトで絞り込み",
   "settings.archiveHub.journal.datePickerLabel": "日付へ移動",
   "settings.archiveHub.journal.clearDate": "日付をクリア",
-  "settings.archiveHub.journal.searchSection": "ジャーナル"
+  "settings.archiveHub.journal.searchSection": "ジャーナル",
+  "settings.archiveHub.identity.showWorktrees": "ワークツリーを表示",
+  "settings.archiveHub.identity.worktree": "ワークツリー",
+  "settings.archiveHub.identity.linked": "リンク済み",
+  "settings.archiveHub.identity.link": "リンク",
+  "settings.archiveHub.identity.unlink": "リンク解除",
+  "settings.archiveHub.identity.locations": "場所",
+  "settings.archiveHub.identity.suggestionHint": "このプロジェクトの以前の場所の可能性"
 }

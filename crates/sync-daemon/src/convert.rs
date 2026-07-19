@@ -12,6 +12,8 @@ use archive_protocol::{IngestMessage, IngestProject, IngestSession};
 use history_core::models::{ClaudeMessage, ClaudeProject, ClaudeSession};
 use sha2::{Digest, Sha256};
 
+use crate::git_fingerprint::GitFingerprint;
+
 fn nonempty(s: &str) -> Option<String> {
     if s.is_empty() {
         None
@@ -134,7 +136,12 @@ pub fn to_ingest_session(
     }
 }
 
-pub fn to_ingest_project(provider: &str, project_path: &str, p: &ClaudeProject) -> IngestProject {
+pub fn to_ingest_project(
+    provider: &str,
+    project_path: &str,
+    p: &ClaudeProject,
+    git: Option<&GitFingerprint>,
+) -> IngestProject {
     IngestProject {
         provider: provider.to_string(),
         project_path: project_path.to_string(),
@@ -143,5 +150,9 @@ pub fn to_ingest_project(provider: &str, project_path: &str, p: &ClaudeProject) 
         session_count: i32::try_from(p.session_count).ok(),
         message_count: i32::try_from(p.message_count).ok(),
         last_modified: nonempty(&p.last_modified),
+        git_root_commit: git.and_then(|g| g.root_commit.clone()),
+        git_remote_url: git.and_then(|g| g.remote_url.clone()),
+        git_is_worktree: git.map(|g| g.is_worktree),
+        git_main_path: git.and_then(|g| g.main_path.clone()),
     }
 }

@@ -576,5 +576,12 @@
   "settings.archiveHub.journal.projectFilterLabel": "프로젝트로 필터",
   "settings.archiveHub.journal.datePickerLabel": "날짜로 이동",
   "settings.archiveHub.journal.clearDate": "날짜 지우기",
-  "settings.archiveHub.journal.searchSection": "저널"
+  "settings.archiveHub.journal.searchSection": "저널",
+  "settings.archiveHub.identity.showWorktrees": "워크트리 표시",
+  "settings.archiveHub.identity.worktree": "워크트리",
+  "settings.archiveHub.identity.linked": "연결됨",
+  "settings.archiveHub.identity.link": "연결",
+  "settings.archiveHub.identity.unlink": "연결 해제",
+  "settings.archiveHub.identity.locations": "위치",
+  "settings.archiveHub.identity.suggestionHint": "이 프로젝트의 이전 위치일 수 있음"
 }

@@ -69,6 +69,7 @@ fn proj(path: &str, name: &str) -> IngestProject {
         session_count: None,
         message_count: None,
         last_modified: None,
+        ..Default::default()
     }
 }
 

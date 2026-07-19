@@ -157,7 +157,7 @@ describe("ConnectGate", () => {
     );
     const { unmount } = render(<ConnectGate />);
     expect(screen.getByTestId("app-version").textContent).toMatch(
-      /^v\d+\.\d+\.\d+/
+      /^\(v\d+\.\d+\.\d+/
     );
     unmount();
 
@@ -169,7 +169,7 @@ describe("ConnectGate", () => {
       expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
     );
     expect(screen.getByTestId("app-version").textContent).toMatch(
-      /^v\d+\.\d+\.\d+/
+      /^\(v\d+\.\d+\.\d+/
     );
   });
 

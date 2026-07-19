@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod identity;
+
 /// A batch of history records pushed by one machine to `POST /v1/ingest`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestBatch {
@@ -36,7 +38,7 @@ pub struct MachineInfo {
 }
 
 /// A provider project/workspace, keyed by (provider, `project_path`) on this machine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IngestProject {
     pub provider: String,
     pub project_path: String,
@@ -50,6 +52,21 @@ pub struct IngestProject {
     pub message_count: Option<i32>,
     #[serde(default)]
     pub last_modified: Option<String>,
+    /// Git fingerprint facts (project-identity): full 40-hex root commit hash
+    /// (lexicographically smallest when the repo has several roots). Absent
+    /// when the path is not a git repo, the repo is shallow, or capture failed.
+    #[serde(default)]
+    pub git_root_commit: Option<String>,
+    /// Normalized `origin` URL (`host/path`, credentials stripped). The hub
+    /// re-normalizes defensively before deriving the identity key.
+    #[serde(default)]
+    pub git_remote_url: Option<String>,
+    /// True when the project dir is a linked `git worktree` of another checkout.
+    #[serde(default)]
+    pub git_is_worktree: Option<bool>,
+    /// For linked worktrees: the main checkout's path (labeling only).
+    #[serde(default)]
+    pub git_main_path: Option<String>,
 }
 
 /// A session, keyed by (provider, `session_id`) on this machine, linked to a

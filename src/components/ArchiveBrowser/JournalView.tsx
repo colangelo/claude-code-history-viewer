@@ -21,11 +21,13 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import {
   hubApi,
+  identityProjectFilter,
   type HubConfig,
   type HubSession,
   type JournalEntry,
 } from "../../services/hubApi";
 import { JournalEntryCard } from "./JournalEntryCard";
+import type { ProjectGroup } from "./projectGrouping";
 import { dayLabel, shortDayLabel } from "@/utils/journalFormat";
 import type { SessionOpenContext } from "./index";
 
@@ -38,6 +40,10 @@ interface JournalViewProps {
   anchorDate: string | null;
   /** Bumped whenever an anchor is (re)requested, even to the same date. */
   anchorNonce: number;
+  /** Identity grouping computed by the parent (drives the project filter). */
+  projectGroups: ProjectGroup[];
+  /** Worktree visibility (identity-scoped filters pass it to the hub). */
+  showWorktrees: boolean;
   /** Open a session in the Browse view (reuses the existing message path). */
   onOpenSession: (
     sessionId: number,
@@ -57,6 +63,8 @@ export function JournalView({
   config,
   anchorDate,
   anchorNonce,
+  projectGroups,
+  showWorktrees,
   onOpenSession,
   onDateChange,
 }: JournalViewProps) {
@@ -147,6 +155,10 @@ export function JournalView({
     if (anchorDate != null) setDate(anchorDate);
   }, [anchorDate, anchorNonce]);
 
+  // In identity scope the worktree toggle affects which member paths count.
+  const includeWorktrees =
+    projectFilter.startsWith("identity:") && !showWorktrees ? false : undefined;
+
   // Primary feed fetch: refetches (offset 0) on any config/date/filter change.
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -157,6 +169,7 @@ export function JournalView({
         from: date || undefined,
         to: date || undefined,
         project: projectFilter || undefined,
+        include_worktrees: includeWorktrees,
         limit: PAGE_SIZE,
         offset: 0,
       })
@@ -177,7 +190,7 @@ export function JournalView({
         if (generationRef.current !== generation) return;
         setIsLoading(false);
       });
-  }, [config, date, projectFilter, mergeProjectOptions, mergeKnownDates]);
+  }, [config, date, projectFilter, includeWorktrees, mergeProjectOptions, mergeKnownDates]);
 
   const handleLoadMore = useCallback(() => {
     if (isLoading) return;
@@ -188,6 +201,7 @@ export function JournalView({
         from: date || undefined,
         to: date || undefined,
         project: projectFilter || undefined,
+        include_worktrees: includeWorktrees,
         limit: PAGE_SIZE,
         offset: entries.length,
       })
@@ -206,7 +220,7 @@ export function JournalView({
         if (generationRef.current !== generation) return;
         setIsLoading(false);
       });
-  }, [config, date, projectFilter, entries.length, isLoading, mergeProjectOptions, mergeKnownDates]);
+  }, [config, date, projectFilter, includeWorktrees, entries.length, isLoading, mergeProjectOptions, mergeKnownDates]);
 
   const groups = useMemo<DayGroup[]>(() => {
     const map = new Map<string, JournalEntry[]>();
@@ -225,29 +239,48 @@ export function JournalView({
   // the currently-loaded groups — a date jump must not collapse them.
   const quickNavDates = knownDates;
 
-  // Filter options labelled by basename (Windows-tolerant split), with the
-  // parent segment appended only when basenames collide; sorted by label.
+  // Filter options: identity groups (one option per repo identity — a moved
+  // repo appears once, filtering via `identity:<key>` server-side expansion),
+  // plus plain path options for entry paths no group covers. Labels keep the
+  // basename + collision-disambiguator rule; sorted by label.
   const filterOptions = useMemo(() => {
     const basename = (p: string) =>
       p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+    const seenPaths = new Set(projectOptions);
+    const covered = new Set<string>();
+    const options: { value: string; label: string; title: string }[] = [];
+    for (const group of projectGroups) {
+      if (!group.paths.some((p) => seenPaths.has(p))) continue;
+      for (const p of group.paths) covered.add(p);
+      options.push({
+        value: group.identityKey
+          ? identityProjectFilter(group.identityKey)
+          : group.paths[0] ?? "",
+        label: group.disambiguator
+          ? `${group.displayName} — ${group.disambiguator}`
+          : group.displayName,
+        title: group.paths.join("\n"),
+      });
+    }
+    // Fallback for entry paths outside the (paginated) projects listing.
+    const uncovered = projectOptions.filter((p) => !covered.has(p));
     const counts = new Map<string, number>();
-    for (const p of projectOptions) {
+    for (const p of uncovered) {
       const b = basename(p);
       counts.set(b, (counts.get(b) ?? 0) + 1);
     }
-    return projectOptions
-      .map((p) => {
-        const parts = p.split(/[\\/]/).filter(Boolean);
-        const b = parts.pop() ?? p;
-        const parent = parts.pop();
-        return {
-          value: p,
-          label:
-            (counts.get(b) ?? 0) > 1 && parent ? `${b} — ${parent}` : b,
-        };
-      })
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [projectOptions]);
+    for (const p of uncovered) {
+      const parts = p.split(/[\\/]/).filter(Boolean);
+      const b = parts.pop() ?? p;
+      const parent = parts.pop();
+      options.push({
+        value: p,
+        label: (counts.get(b) ?? 0) > 1 && parent ? `${b} — ${parent}` : b,
+        title: p,
+      });
+    }
+    return options.sort((a, b) => a.label.localeCompare(b.label));
+  }, [projectOptions, projectGroups]);
 
   const dayHeader = (dateStr: string): string => {
     const label = dayLabel(dateStr);
@@ -295,7 +328,7 @@ export function JournalView({
             {t("settings.archiveHub.journal.filterAll")}
           </option>
           {filterOptions.map((option) => (
-            <option key={option.value} value={option.value} title={option.value}>
+            <option key={option.value} value={option.value} title={option.title}>
               {option.label}
             </option>
           ))}

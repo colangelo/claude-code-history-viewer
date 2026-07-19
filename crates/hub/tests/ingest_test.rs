@@ -90,6 +90,7 @@ fn sample_batch(machine_id: Uuid, session: &str, messages: Vec<IngestMessage>) -
             session_count: Some(1),
             message_count: Some(i32::try_from(messages.len()).unwrap_or(0)),
             last_modified: None,
+            ..Default::default()
         }],
         sessions: vec![IngestSession {
             provider: "claude".into(),
@@ -438,4 +439,194 @@ async fn oversized_search_text_is_clamped_not_rejected() {
     .expect("row must exist");
     assert!(stored.len() <= 512 * 1024, "search_text must be clamped");
     assert!(stored.starts_with("w0 w1 "), "head of text preserved");
+}
+
+// ---------------------------------------------------------------------------
+// project identity: fingerprint persistence + identity_key derivation
+// ---------------------------------------------------------------------------
+
+const ROOT: &str = "a3f0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8";
+
+fn fp_project(
+    path: &str,
+    root: Option<&str>,
+    remote: Option<&str>,
+    worktree: Option<bool>,
+) -> IngestProject {
+    IngestProject {
+        provider: "claude".into(),
+        project_path: path.into(),
+        name: Some("p".into()),
+        git_root_commit: root.map(Into::into),
+        git_remote_url: remote.map(Into::into),
+        git_is_worktree: worktree,
+        ..Default::default()
+    }
+}
+
+fn projects_only_batch(machine_id: Uuid, projects: Vec<IngestProject>) -> IngestBatch {
+    IngestBatch {
+        machine: MachineInfo {
+            machine_id,
+            hostname: "testbox".into(),
+            os: Some("macos".into()),
+        },
+        projects,
+        sessions: vec![],
+        messages: vec![],
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct IdentityRow {
+    git_root_commit: Option<String>,
+    git_remote_url: Option<String>,
+    identity_key: Option<String>,
+    git_worktree: bool,
+}
+
+async fn identity_row(hub: &TestHub, path: &str) -> IdentityRow {
+    sqlx::query_as::<_, IdentityRow>(
+        "SELECT git_root_commit, git_remote_url, identity_key, git_worktree
+         FROM projects WHERE machine_id = $1 AND project_path = $2",
+    )
+    .bind(hub.machine_id)
+    .bind(path)
+    .fetch_one(&hub.pool)
+    .await
+    .expect("project row exists")
+}
+
+#[tokio::test]
+async fn fingerprint_lands_and_derives_identity_key() {
+    let hub = spawn().await;
+    // Raw, credentialed remote: the hub must re-normalize before storing.
+    let batch = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project(
+            "/tmp/fp-proj",
+            Some(ROOT),
+            Some("https://user:tok3n@github.com/acme/foo.git"),
+            Some(true),
+        )],
+    );
+    assert_eq!(
+        post_ingest(&hub, Some(&hub.token), &batch).await.status(),
+        200
+    );
+
+    let row = identity_row(&hub, "/tmp/fp-proj").await;
+    assert_eq!(row.git_root_commit.as_deref(), Some(ROOT));
+    assert_eq!(row.git_remote_url.as_deref(), Some("github.com/acme/foo"));
+    assert_eq!(
+        row.identity_key.as_deref(),
+        Some(format!("g:{ROOT}|github.com/acme/foo").as_str())
+    );
+    assert!(row.git_worktree);
+}
+
+#[tokio::test]
+async fn absent_facts_never_clobber_stored_fingerprint() {
+    let hub = spawn().await;
+    let with_facts = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project(
+            "/tmp/fp-retain",
+            Some(ROOT),
+            Some("git@github.com:acme/foo.git"),
+            Some(false),
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &with_facts).await;
+
+    // Old daemon / transient capture failure: same project, no facts.
+    let without_facts = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project("/tmp/fp-retain", None, None, None)],
+    );
+    assert_eq!(
+        post_ingest(&hub, Some(&hub.token), &without_facts)
+            .await
+            .status(),
+        200
+    );
+
+    let row = identity_row(&hub, "/tmp/fp-retain").await;
+    assert_eq!(row.git_root_commit.as_deref(), Some(ROOT));
+    assert_eq!(row.git_remote_url.as_deref(), Some("github.com/acme/foo"));
+    assert_eq!(
+        row.identity_key.as_deref(),
+        Some(format!("g:{ROOT}|github.com/acme/foo").as_str())
+    );
+}
+
+#[tokio::test]
+async fn changed_remote_rederives_identity_key() {
+    let hub = spawn().await;
+    let before = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project(
+            "/tmp/fp-drift",
+            Some(ROOT),
+            Some("git@github.com:upstream/foo.git"),
+            None,
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &before).await;
+
+    // Remote drifted (repo re-pointed at the fork).
+    let after = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project(
+            "/tmp/fp-drift",
+            Some(ROOT),
+            Some("git@github.com:colangelo/foo.git"),
+            None,
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &after).await;
+
+    let row = identity_row(&hub, "/tmp/fp-drift").await;
+    assert_eq!(
+        row.identity_key.as_deref(),
+        Some(format!("g:{ROOT}|github.com/colangelo/foo").as_str())
+    );
+}
+
+#[tokio::test]
+async fn no_fingerprint_means_null_identity() {
+    let hub = spawn().await;
+    let batch = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project("/tmp/fp-none", None, None, None)],
+    );
+    assert_eq!(
+        post_ingest(&hub, Some(&hub.token), &batch).await.status(),
+        200
+    );
+
+    let row = identity_row(&hub, "/tmp/fp-none").await;
+    assert_eq!(row.git_root_commit, None);
+    assert_eq!(row.git_remote_url, None);
+    assert_eq!(row.identity_key, None);
+    assert!(!row.git_worktree);
+}
+
+#[tokio::test]
+async fn invalid_root_is_discarded_remote_only_key() {
+    let hub = spawn().await;
+    let batch = projects_only_batch(
+        hub.machine_id,
+        vec![fp_project(
+            "/tmp/fp-badroot",
+            Some("not-a-hash"),
+            Some("git@github.com:acme/foo.git"),
+            None,
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &batch).await;
+
+    let row = identity_row(&hub, "/tmp/fp-badroot").await;
+    assert_eq!(row.git_root_commit, None, "invalid root must not be stored");
+    assert_eq!(row.identity_key.as_deref(), Some("r:github.com/acme/foo"));
 }

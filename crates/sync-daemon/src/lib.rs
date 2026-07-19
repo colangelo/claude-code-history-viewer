@@ -10,6 +10,7 @@ pub mod client;
 pub mod config;
 pub mod convert;
 pub mod fs_atomic;
+pub mod git_fingerprint;
 pub mod identity;
 pub mod sync;
 pub mod watcher;
