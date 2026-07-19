@@ -245,6 +245,61 @@ async fn failed_delivery_is_not_checkpointed_and_resends() {
 
 #[tokio::test]
 #[serial]
+async fn a_session_failing_every_pass_is_deferred_then_retried_when_it_changes() {
+    let fx = fixture();
+    let file = two_message_session(&fx.home);
+
+    let hub = MockHub::default();
+    hub.fail_next(usize::MAX); // this session can never be delivered
+    let mut cp = Checkpoint::load(&fx.state_dir);
+
+    // The grace window retries at full cost, once per pass.
+    for pass in 1..=3 {
+        let stats = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+        assert_eq!(stats.errors, 1, "pass {pass} must still attempt delivery");
+        assert_eq!(
+            stats.sessions_deferred, 0,
+            "pass {pass} is inside the grace window"
+        );
+    }
+
+    // Past it, the session is skipped without an attempt.
+    let stats = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(stats.errors, 0, "a deferred session is not an error");
+    assert_eq!(
+        stats.sessions_deferred, 1,
+        "expected the session to back off"
+    );
+
+    // Touching the file resets the streak: it is attempted again immediately,
+    // and once the hub recovers it delivers and the failure record is cleared.
+    let mut content = std::fs::read_to_string(&file).unwrap();
+    content.push_str(&format!(
+        "{}\n",
+        user_line(
+            "u3",
+            "sess-1",
+            "2026-01-02T00:00:00Z",
+            "a third message",
+            "/Users/test/proj"
+        )
+    ));
+    std::fs::write(&file, content).unwrap();
+    hub.fail_next(0);
+    let stats = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(
+        stats.sessions_deferred, 0,
+        "an edited file must be retried now"
+    );
+    assert!(stats.sessions_synced >= 1);
+    assert!(
+        cp.failures.is_empty(),
+        "a success clears the failure streak"
+    );
+}
+
+#[tokio::test]
+#[serial]
 async fn machine_id_is_stable_across_restarts() {
     let fx = fixture();
     let id1 = Identity::load_or_create(&fx.state_dir).unwrap().machine_id;

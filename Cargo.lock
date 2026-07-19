@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "archive-protocol"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -883,7 +883,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "claude-code-history-viewer"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2552,7 +2552,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "history-core"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2679,7 +2679,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hub"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "archive-protocol",
@@ -3373,7 +3373,7 @@ dependencies = [
 
 [[package]]
 name = "loop-evals"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "archive-protocol",
@@ -6353,7 +6353,7 @@ dependencies = [
 
 [[package]]
 name = "sync-daemon"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "archive-protocol",

@@ -58,6 +58,9 @@ pub struct SyncStats {
     pub sessions_scanned: usize,
     pub sessions_synced: usize,
     pub sessions_skipped: usize,
+    /// Changed sessions not attempted this pass because they are inside a
+    /// delivery-failure backoff window (see `checkpoint::FailState`).
+    pub sessions_deferred: usize,
     pub messages_delivered: usize,
     pub errors: usize,
 }
@@ -137,6 +140,16 @@ pub async fn run_once<C: HubClient>(
                 continue;
             }
 
+            // A session that has failed delivery every pass is not worth paying
+            // the full retry ladder for on every pass; it waits out a widening
+            // backoff instead. Checked before parsing, so a deferred session
+            // costs a stat() and nothing more.
+            if let Some(remaining) = checkpoint.defer_remaining_secs(file, size, mtime, now_ms()) {
+                tracing::debug!(file = %file, retry_in_secs = remaining, "session deferred after repeated ingest failures");
+                stats.sessions_deferred += 1;
+                continue;
+            }
+
             let messages = match providers::load_messages(provider, file) {
                 Ok(m) => m,
                 Err(e) => {
@@ -191,6 +204,19 @@ pub async fn run_once<C: HubClient>(
                 }
                 stats.sessions_synced += 1;
             } else {
+                let streak = checkpoint.note_failure(file, size, mtime, now_ms());
+                if streak == crate::checkpoint::FAILURE_GRACE {
+                    // One loud line at the moment a session goes from "flaky" to
+                    // "chronically failing" — the per-pass skips are debug-level.
+                    tracing::warn!(
+                        file = %file,
+                        consecutive_failures = streak,
+                        "session entering ingest backoff; it will be retried on a widening schedule"
+                    );
+                }
+                if let Err(e) = checkpoint.save() {
+                    tracing::error!(error = %e, "checkpoint save failed");
+                }
                 stats.errors += 1;
             }
         }
