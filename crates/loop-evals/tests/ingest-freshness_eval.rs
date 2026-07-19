@@ -104,6 +104,7 @@ fn sample_batch(
             session_count: Some(1),
             message_count: Some(i32::try_from(messages.len()).unwrap_or(0)),
             last_modified: None,
+            ..Default::default()
         }],
         sessions: vec![IngestSession {
             provider: "claude".into(),
@@ -391,11 +392,7 @@ async fn ac6_excluded_hostname_stays_stale_but_does_not_alert() {
     // machine still reports its real `stale` flag alongside `excluded:true`.
     let exclude = stale_hosts
         .iter()
-        .map(|h| {
-            h.strip_suffix(".local")
-                .unwrap_or(h)
-                .to_ascii_uppercase()
-        })
+        .map(|h| h.strip_suffix(".local").unwrap_or(h).to_ascii_uppercase())
         .collect::<Vec<_>>()
         .join(",");
     let resp = get_ingest_health(&hub, Some(&format!("exclude={exclude}"))).await;

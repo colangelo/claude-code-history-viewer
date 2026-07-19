@@ -51,29 +51,34 @@ impl FromRequestParts<AppState> for AuthedMachine {
 /// the configured allow-list.
 const TAILSCALE_USER_LOGIN: &str = "tailscale-user-login";
 
-/// True iff the request carries a `Tailscale-User-Login` header matching the
-/// configured allow-list. Grants READ scope only — ingest never calls this.
-fn trusted_tailscale_identity(parts: &Parts, state: &AppState) -> bool {
+/// The trusted `Tailscale-User-Login` value when the request carries one that
+/// matches the configured allow-list. Grants READ scope only — ingest never
+/// calls this.
+fn trusted_tailscale_identity(parts: &Parts, state: &AppState) -> Option<String> {
     if state.trusted_identities.is_empty() {
-        return false;
+        return None;
     }
     parts
         .headers
         .get(TAILSCALE_USER_LOGIN)
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
-        .is_some_and(|login| {
+        .filter(|login| {
             state
                 .trusted_identities
                 .iter()
                 .any(|t| t.eq_ignore_ascii_case(login))
         })
+        .map(str::to_string)
 }
 
 /// Proof that the caller may read. Read endpoints query across all machines,
 /// so they need authentication but not a bound machine identity: a valid
 /// bearer token, or (opt-in) a trusted Tailscale serve identity header.
-pub struct Authenticated;
+///
+/// Carries the caller's principal (`machine:<uuid>` / `tailscale:<login>`)
+/// for audit trails on the few read-principal writes (identity aliases).
+pub struct Authenticated(pub String);
 
 impl FromRequestParts<AppState> for Authenticated {
     type Rejection = HubError;
@@ -82,10 +87,12 @@ impl FromRequestParts<AppState> for Authenticated {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        if resolve_machine(parts, state).is_ok() || trusted_tailscale_identity(parts, state) {
-            Ok(Authenticated)
-        } else {
-            Err(HubError::Unauthorized)
+        if let Ok(machine) = resolve_machine(parts, state) {
+            return Ok(Authenticated(format!("machine:{machine}")));
         }
+        if let Some(login) = trusted_tailscale_identity(parts, state) {
+            return Ok(Authenticated(format!("tailscale:{login}")));
+        }
+        Err(HubError::Unauthorized)
     }
 }

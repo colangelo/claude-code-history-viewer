@@ -128,7 +128,13 @@ export function ConnectGate() {
               className="text-px12 text-muted-foreground shrink-0"
               title={`cchv-v${__APP_VERSION__}`}
             >
-              v{__APP_VERSION__}
+              (v{__APP_VERSION__})
+            </span>
+            <span
+              className="text-px12 text-muted-foreground shrink-0"
+              aria-hidden="true"
+            >
+              –
             </span>
             <span
               className="text-px12 font-mono text-muted-foreground truncate"
@@ -166,7 +172,7 @@ export function ConnectGate() {
               className="text-px12 text-muted-foreground"
               title={`cchv-v${__APP_VERSION__}`}
             >
-              v{__APP_VERSION__}
+              (v{__APP_VERSION__})
             </span>
           </div>
           <p className="text-xs text-muted-foreground">{t("archive.web.subtitle")}</p>

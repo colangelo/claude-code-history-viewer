@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT s.id                 AS \"id!\",\n               s.provider           AS \"provider!\",\n               s.session_id         AS \"session_id!\",\n               s.summary,\n               s.file_path,\n               s.entrypoint,\n               s.message_count      AS \"message_count!\",\n               s.first_message_time,\n               s.last_message_time,\n               s.has_tool_use       AS \"has_tool_use!\",\n               s.has_errors         AS \"has_errors!\",\n               p.name               AS project_name,\n               p.project_path     AS \"project_path?\",\n               mac.hostname         AS \"machine_hostname!\"\n        FROM sessions s\n        LEFT JOIN projects p ON s.project_id = p.id\n        JOIN machines mac    ON s.machine_id = mac.machine_id\n        WHERE ($1::text IS NULL OR mac.hostname = $1)\n          AND ($2::text IS NULL OR s.provider = $2)\n          AND ($3::text IS NULL OR p.name = $3 OR p.project_path = $3)\n        ORDER BY s.last_message_time DESC NULLS LAST, s.id DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "query": "\n        SELECT s.id                 AS \"id!\",\n               s.provider           AS \"provider!\",\n               s.session_id         AS \"session_id!\",\n               s.summary,\n               s.file_path,\n               s.entrypoint,\n               s.message_count      AS \"message_count!\",\n               s.first_message_time,\n               s.last_message_time,\n               s.has_tool_use       AS \"has_tool_use!\",\n               s.has_errors         AS \"has_errors!\",\n               p.name               AS project_name,\n               p.project_path     AS \"project_path?\",\n               mac.hostname         AS \"machine_hostname!\"\n        FROM sessions s\n        LEFT JOIN projects p ON s.project_id = p.id\n        JOIN machines mac    ON s.machine_id = mac.machine_id\n        WHERE ($1::text IS NULL OR mac.hostname = $1)\n          AND ($2::text IS NULL OR s.provider = $2)\n          AND ($3::text IS NULL OR p.name = $3 OR p.project_path = $3)\n          AND ($6::text[] IS NULL OR p.project_path = ANY($6))\n        ORDER BY s.last_message_time DESC NULLS LAST, s.id DESC\n        LIMIT $4 OFFSET $5\n        ",
   "describe": {
     "columns": [
       {
@@ -80,7 +80,8 @@
         "Text",
         "Text",
         "Int8",
-        "Int8"
+        "Int8",
+        "TextArray"
       ]
     },
     "nullable": [
@@ -100,5 +101,5 @@
       false
     ]
   },
-  "hash": "4795e8e1eb845606a0ade871e2a40716bd86ea7320ef6b0994a030ca7fa481a5"
+  "hash": "f83970ea2d0cbae6ae2cd611daa4a4c4b010e55c75ed2c68fba595990221d5b2"
 }

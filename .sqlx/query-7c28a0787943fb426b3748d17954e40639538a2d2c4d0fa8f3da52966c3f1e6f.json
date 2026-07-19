@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO projects\n                (machine_id, provider, project_path, name, storage_type,\n                 session_count, message_count, last_modified, updated_at,\n                 git_root_commit, git_remote_url, git_worktree, git_main_path)\n            VALUES ($1, $2, $3, $4, $5,\n                    COALESCE($6, 0), COALESCE($7, 0), $8, now(),\n                    $9, $10, COALESCE($11, false), $12)\n            ON CONFLICT (machine_id, provider, project_path)\n            DO UPDATE SET name = excluded.name,\n                          storage_type = excluded.storage_type,\n                          last_modified = excluded.last_modified,\n                          updated_at = now(),\n                          git_root_commit = COALESCE($9, projects.git_root_commit),\n                          git_remote_url = COALESCE($10, projects.git_remote_url),\n                          git_worktree = COALESCE($11, projects.git_worktree),\n                          git_main_path = COALESCE($12, projects.git_main_path)\n            RETURNING id, (xmax = 0) AS \"inserted!: bool\",\n                      git_root_commit, git_remote_url\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "inserted!: bool",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "git_root_commit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "git_remote_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "7c28a0787943fb426b3748d17954e40639538a2d2c4d0fa8f3da52966c3f1e6f"
+}
