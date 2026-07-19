@@ -519,6 +519,11 @@ next scan pass —
 > construction. To confirm a specific rev, symbol-probe the installed file for a
 > string that rev introduced — never a payload field, never the webapp version
 > chip (static-only webapp deploys move the chip without touching a binary).
+>
+> Live instance as of 2026-07-19: m4m serves the `cchv-v0.10.7` webapp (chip reads
+> `0.10.7`) while `aa16b77` is staged-but-not-swapped on the daemon. The chip is
+> maximally misleading in exactly this state — it names a rev whose daemon half
+> is not running.
 
 ## 4. Verify end-to-end
 
