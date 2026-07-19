@@ -13,9 +13,9 @@
 
 ## 3. Hub schema + ingest
 
-- [ ] 3.1 `migrations/0003_project_identity.sql`: nullable `git_root_commit`/`git_remote_url`/`identity_key` TEXT + `git_worktree BOOLEAN NOT NULL DEFAULT false` on `projects`; index `projects_identity_key_idx`; `project_identity_aliases` (id, project_path UNIQUE, identity_key, created_by, created_at)
-- [ ] 3.2 Ingest upsert (`ingest.rs:128-159`): persist facts + hub-side re-normalize + derive `identity_key`; COALESCE semantics so absent facts never clobber stored non-nulls; re-derive on changed facts
-- [ ] 3.3 Ingest integration tests (runtime `sqlx::query*`, `SQLX_OFFLINE`-safe): fingerprint lands, absent-facts-retain, changed-remote re-derives, old-daemon payload (no fields) unchanged behavior
+- [x] 3.1 `migrations/0003_project_identity.sql`: nullable `git_root_commit`/`git_remote_url`/`identity_key` TEXT + `git_worktree BOOLEAN NOT NULL DEFAULT false` on `projects`; index `projects_identity_key_idx`; `project_identity_aliases` (id, project_path UNIQUE, identity_key, created_by, created_at)
+- [x] 3.2 Ingest upsert (`ingest.rs:128-159`): persist facts + hub-side re-normalize + derive `identity_key`; COALESCE semantics so absent facts never clobber stored non-nulls; re-derive on changed facts
+- [x] 3.3 Ingest integration tests (runtime `sqlx::query*`, `SQLX_OFFLINE`-safe): fingerprint lands, absent-facts-retain, changed-remote re-derives, old-daemon payload (no fields) unchanged behavior
 
 ## 4. Hub identity reads + filter expansion
 

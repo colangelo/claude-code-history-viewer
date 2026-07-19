@@ -104,6 +104,7 @@ fn sample_batch(
             session_count: Some(1),
             message_count: Some(i32::try_from(messages.len()).unwrap_or(0)),
             last_modified: None,
+            ..Default::default()
         }],
         sessions: vec![IngestSession {
             provider: "claude".into(),
