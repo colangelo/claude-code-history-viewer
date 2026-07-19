@@ -317,10 +317,21 @@ byte-identical CSS run on their side will ever stand in for the line.
 > re-shooting; the code can retire a missing screenshot that a rerun cannot.
 >
 > Two hygiene rules for those artifacts, both from the same thread: don't park
-> them in `/tmp` (reboot-volatile on macOS — re-shoot at look-time instead of
-> assuming they survived), and **never embed a hub token in the capture script**
-> — read it from `~/.config/cchv/` the way `journal_verify.py` does, so nothing
-> mode-644 in a shared path ever holds a live credential.
+> them in `/tmp` (reboot-volatile on macOS, and files untouched ~3 days get
+> pruned) — **copy them somewhere durable, don't assume they're gone**; and
+> **never embed a hub token in the capture script** — read it from
+> `~/.config/cchv/` the way `journal_verify.py` does, so nothing mode-644 in a
+> shared path ever holds a live credential. The v0.11.0 set now lives at
+> `~/.local/share/cchv/eyeball/v0.11.0/` on m4m (`~/Documents` is TCC-blocked to
+> an ssh/agent process), with a `README.md` recording the hashes and the fact
+> that its `-2-*-expanded.png` files are the same no-op misnomer.
+>
+> **Say the glob.** Both sides of that thread got the substance right and the
+> *scope* wrong, silently: "shot 2 is the expanded state" and "nothing is left in
+> `/tmp`" are each a claim whose depth is invisible in the report. `ls /tmp/*.png`
+> and `find /tmp -name '*.png'` are different sentences — the artifacts were one
+> directory down the whole time. Report the command, the way we now report the
+> hash, so the reader can see how deep the check actually went.
 
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
