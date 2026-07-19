@@ -98,6 +98,7 @@ pub async fn run_once<C: HubClient>(
         hostname: identity.hostname.clone(),
         os: Some(std::env::consts::OS.to_string()),
     };
+    let mut fp_cache = crate::git_fingerprint::FingerprintCache::default();
 
     for project in providers::scan_all_projects_except(exclude) {
         let Some(provider_str) = project.provider.clone() else {
@@ -120,7 +121,11 @@ pub async fn run_once<C: HubClient>(
                 continue;
             }
         };
-        let ing_project = to_ingest_project(&provider_str, &project_path, &project);
+        // Git fingerprint for project identity — memoized per pass because
+        // several providers usually map to the same directory.
+        let fingerprint = fp_cache.get(&project_path);
+        let ing_project =
+            to_ingest_project(&provider_str, &project_path, &project, fingerprint.as_ref());
 
         for session in &sessions {
             stats.sessions_scanned += 1;
