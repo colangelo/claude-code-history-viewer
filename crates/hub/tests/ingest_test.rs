@@ -358,6 +358,68 @@ async fn aggregates_update_on_reingest() {
     );
 }
 
+/// A project's aggregates roll up its sessions' stored counts rather than
+/// re-counting `messages` (see the note in `ingest.rs`). The case that rollup
+/// could plausibly get wrong is a batch that touches only ONE session of a
+/// multi-session project: the sessions this batch did not touch keep their
+/// previously-computed `message_count` and must still be summed in.
+#[tokio::test]
+async fn project_aggregates_sum_sessions_untouched_by_the_batch() {
+    let hub = spawn().await;
+
+    // Batch 1 — session A gains 2 messages. `sample_batch` puts every session
+    // under the same project (/tmp/proj), which is what makes this a rollup.
+    let b1 = sample_batch(
+        hub.machine_id,
+        "sess-a",
+        vec![
+            msg("sess-a", "a1", Some("ua1"), "2026-01-01T00:00:00Z", "one"),
+            msg("sess-a", "a2", Some("ua2"), "2026-01-01T00:01:00Z", "two"),
+        ],
+    );
+    post_ingest(&hub, Some(&hub.token), &b1).await;
+
+    // Batch 2 — session B gains 3 messages. Session A is absent from this batch,
+    // so it is never recomputed here; the project total must still include it.
+    let b2 = sample_batch(
+        hub.machine_id,
+        "sess-b",
+        vec![
+            msg("sess-b", "b1", Some("ub1"), "2026-01-02T00:00:00Z", "three"),
+            msg("sess-b", "b2", Some("ub2"), "2026-01-02T00:01:00Z", "four"),
+            msg("sess-b", "b3", Some("ub3"), "2026-01-02T00:02:00Z", "five"),
+        ],
+    );
+    post_ingest(&hub, Some(&hub.token), &b2).await;
+
+    let (sessions, messages): (i32, i32) = sqlx::query_as(
+        "SELECT session_count, message_count FROM projects
+         WHERE machine_id = $1 AND project_path = '/tmp/proj'",
+    )
+    .bind(hub.machine_id)
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(sessions, 2, "both sessions counted");
+    assert_eq!(
+        messages, 5,
+        "project total sums the untouched session (2) and the touched one (3)"
+    );
+
+    // Re-ingesting batch 1 inserts nothing new; the rollup must be idempotent
+    // and must not drop session B (which this batch does not mention).
+    post_ingest(&hub, Some(&hub.token), &b1).await;
+    let messages: i32 = sqlx::query_scalar(
+        "SELECT message_count FROM projects
+         WHERE machine_id = $1 AND project_path = '/tmp/proj'",
+    )
+    .bind(hub.machine_id)
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(messages, 5, "replaying an archived batch is a no-op");
+}
+
 #[tokio::test]
 async fn ingest_sanitizes_nul_characters() {
     let hub = spawn().await;
