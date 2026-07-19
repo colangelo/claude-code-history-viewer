@@ -512,6 +512,14 @@ Verify from any tailnet host: the machine's rows gain `identity_key` after the
 next scan pass —
 `curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/projects" | jq '[.[] | select(.identity_key != null)] | length'`.
 
+> **That endpoint check proves *this* rev is live, and nothing later.** Every rev
+> after it still serves `identity_key`, so a payload that carries a feature only
+> tells you the binary is *at least* the rev that added it. Most perf revs (e.g.
+> `aa16b77`'s daemon `search_text` clamp) are invisible to every response by
+> construction. To confirm a specific rev, symbol-probe the installed file for a
+> string that rev introduced — never a payload field, never the webapp version
+> chip (static-only webapp deploys move the chip without touching a binary).
+
 ## 4. Verify end-to-end
 
 ```bash
