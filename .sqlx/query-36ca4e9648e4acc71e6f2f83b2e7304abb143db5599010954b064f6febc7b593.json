@@ -1,0 +1,127 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH q AS (\n            SELECT CASE\n                WHEN $10::text IS NULL THEN websearch_to_tsquery('simple', $1)\n                ELSE websearch_to_tsquery('simple', $1) || to_tsquery('simple', $10)\n            END AS tsq\n        )\n        SELECT\n            m.id              AS \"message_id!\",\n            m.message_key     AS \"message_key!\",\n            m.uuid,\n            m.provider        AS \"provider!\",\n            m.session_id      AS \"session_pk!\",\n            s.session_id      AS \"session_id!\",\n            s.summary         AS session_summary,\n            p.name            AS project_name,\n            p.project_path     AS \"project_path?\",\n            mac.hostname      AS \"machine_hostname!\",\n            m.\"timestamp\",\n            m.type            AS message_type,\n            m.role,\n            m.model,\n            ts_headline('simple', coalesce(m.search_text, ''),\n                        q.tsq,\n                        'MaxFragments=2, MinWords=3, MaxWords=14') AS \"snippet!\",\n            ts_rank(m.text_search, q.tsq) AS \"rank!\",\n            (\n                SELECT count(*) FROM messages m2\n                WHERE m2.session_id = m.session_id\n                  AND (\n                    CASE WHEN m.\"timestamp\" IS NULL\n                        THEN m2.\"timestamp\" IS NOT NULL\n                             OR (m2.\"timestamp\" IS NULL\n                                 AND (m2.seq, m2.id) < (m.seq, m.id))\n                        ELSE m2.\"timestamp\" IS NOT NULL\n                             AND (m2.\"timestamp\", m2.seq, m2.id)\n                                 < (m.\"timestamp\", m.seq, m.id)\n                    END\n                  )\n            ) AS \"position!\"\n        FROM q, messages m\n        JOIN sessions s   ON m.session_id = s.id\n        LEFT JOIN projects p ON s.project_id = p.id\n        JOIN machines mac ON m.machine_id = mac.machine_id\n        WHERE m.text_search @@ q.tsq\n          AND ($2::text IS NULL OR m.provider = $2)\n          AND ($3::text IS NULL OR mac.hostname = $3)\n          AND ($4::text IS NULL OR p.name = $4 OR p.project_path = $4)\n          AND ($9::text[] IS NULL OR p.project_path = ANY($9))\n          AND ($5::timestamptz IS NULL OR m.\"timestamp\" >= $5)\n          AND ($6::timestamptz IS NULL OR m.\"timestamp\" <= $6)\n        ORDER BY \"rank!\" DESC, m.\"timestamp\" DESC NULLS LAST, m.id DESC\n        LIMIT $7 OFFSET $8\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_id!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "message_key!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "uuid",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "provider!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "session_pk!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "session_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "session_summary",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "project_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "project_path?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "machine_hostname!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "timestamp",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "message_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "role",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "model",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "snippet!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "rank!",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 16,
+        "name": "position!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Int8",
+        "Int8",
+        "TextArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "36ca4e9648e4acc71e6f2f83b2e7304abb143db5599010954b064f6febc7b593"
+}

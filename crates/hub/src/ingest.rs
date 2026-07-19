@@ -97,6 +97,16 @@ pub async fn ingest(
     State(state): State<AppState>,
     Json(mut batch): Json<IngestBatch>,
 ) -> Result<Json<IngestResponse>, HubError> {
+    // Ingest used to be entirely silent, so "the hub logged nothing" could not
+    // distinguish "the request never arrived" from "the request arrived and was
+    // slow" (2026-07-19 daemon retry-backlog investigation). Log both edges.
+    let started = std::time::Instant::now();
+    tracing::info!(
+        machine = %batch.machine.hostname,
+        sessions = batch.sessions.len(),
+        messages = batch.messages.len(),
+        "ingest start"
+    );
     sanitize_batch(&mut batch);
     // A machine may only ingest under its own (token-bound) identity.
     if batch.machine.machine_id != token_machine {
@@ -390,6 +400,11 @@ pub async fn ingest(
     }
 
     tx.commit().await?;
+    tracing::info!(
+        messages = batch.messages.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "ingest done"
+    );
     Ok(Json(resp))
 }
 
