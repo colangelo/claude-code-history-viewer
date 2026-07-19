@@ -297,7 +297,11 @@ holds a standing UNVERIFIED caveat on every v0.10.6+ deploy and words its own
 reports "deployed and asserted", never "verified" (home-network `809533b`); a
 byte-identical CSS run will never retire it, by design. So when a human has
 actually looked, send one relay line saying so — otherwise the caveat stands
-indefinitely while both sides believe the other closed it.
+indefinitely while both sides believe the other closed it. That is now a rule
+they read, not a courtesy we owe: `hosts/m4m.md` (home-network `9bf48c3`) gives
+their close exactly one trigger, an inbound line from an attended session here,
+and reads our silence as *still-owed*. So no deploy log, green check, or
+byte-identical CSS run on their side will ever stand in for the line.
 
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
