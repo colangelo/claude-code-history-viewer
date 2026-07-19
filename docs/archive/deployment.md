@@ -208,6 +208,17 @@ static bump.
 > idempotent re-deploy of the live `v0.10.3` (all assertions green); the
 > auto-rollback branch was exercised in a sandbox on m4m, not against prod.
 
+> **"Staged at `~/.config/cchv/staging/…`" means *on m4m*, not on your Mac.**
+> The recipe only ever looks at the hub host's filesystem. A tree staged on the
+> build machine is invisible to it, so it silently takes the
+> "nothing staged → stage from the GitHub Release" path and the
+> staged-vs-released tree diff becomes a **no-op assertion** — safe (the release
+> is the source of truth and exactly what gets deployed), but you did not get
+> the check you thought you got. Either drop the staging claim from the relay
+> and say "deploy the release for tag `cchv-vX.Y.Z`", or `scp -r` the tree to
+> `m4m:~/.config/cchv/staging/webapp-cchv-vX.Y.Z` first so the diff actually
+> fires. (Observed on the v0.10.4 deploy, 2026-07-19, thread 395b47ca.)
+
 Validated on m4m 2026-07-19 (`cchv-v0.10.3`, thread 3fe4b63f):
 
 ```bash
