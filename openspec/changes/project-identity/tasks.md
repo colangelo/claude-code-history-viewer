@@ -2,8 +2,8 @@
 
 ## 1. Protocol + shared derivation
 
-- [ ] 1.1 Add `git_root_commit`, `git_remote_url`, `git_is_worktree`, `git_main_path` optionals (`#[serde(default)]`) to `IngestProject` in `crates/protocol/src/lib.rs`
-- [ ] 1.2 Add `normalize_remote_url` (credential-strip, scp→host/path, lowercase host, strip `.git`/trailing slashes) and `derive_identity_key` (`g:<root>|<remote>` / `g:<root>` / `r:<remote>`) to `crates/protocol` with unit tests (https/scp/credentialed/`.git`/trailing-slash/uppercase-host cases)
+- [x] 1.1 Add `git_root_commit`, `git_remote_url`, `git_is_worktree`, `git_main_path` optionals (`#[serde(default)]`) to `IngestProject` in `crates/protocol/src/lib.rs`
+- [x] 1.2 Add `normalize_remote_url` (credential-strip, scp→host/path, lowercase host, strip `.git`/trailing slashes) and `derive_identity_key` (`g:<root>|<remote>` / `g:<root>` / `r:<remote>`) to `crates/protocol` with unit tests (https/scp/credentialed/`.git`/trailing-slash/uppercase-host cases)
 
 ## 2. Daemon fingerprint capture
 
