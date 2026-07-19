@@ -138,5 +138,8 @@
   "archive.web.connecting": "连接中...",
   "archive.web.connectFailed": "连接失败：{{error}}",
   "archive.web.storageHint": "中心 URL 和令牌仅保存在此浏览器（localStorage）中。",
-  "archive.web.disconnect": "断开连接"
+  "archive.web.disconnect": "断开连接",
+  "archive.web.fontSmaller": "减小字号",
+  "archive.web.fontLarger": "增大字号",
+  "archive.web.fontReset": "重置字号"
 }
