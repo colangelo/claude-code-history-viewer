@@ -586,5 +586,7 @@
   "settings.archiveHub.identity.link": "リンク",
   "settings.archiveHub.identity.unlink": "リンク解除",
   "settings.archiveHub.identity.locations": "場所",
+  "settings.archiveHub.identity.suggested": "候補",
+  "settings.archiveHub.identity.linkHint": "このパスの履歴をこのプロジェクトに統合します",
   "settings.archiveHub.identity.suggestionHint": "このプロジェクトの以前の場所の可能性"
 }

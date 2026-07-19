@@ -18,7 +18,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, GitBranch, Loader2, X } from "lucide-react";
+import { ChevronLeft, GitBranch, Link2, Loader2, X } from "lucide-react";
 import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
 import { MessageContentDisplay } from "@/components/messageRenderer";
 import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
@@ -1010,74 +1010,116 @@ export function ArchiveBrowser({
                         group.worktreePaths.length > 0) && (
                         <div
                           data-testid="identity-members"
-                          className="px-2 pb-2 space-y-1"
+                          className="px-2 pb-2 space-y-2"
                         >
-                          <p className="text-px11 uppercase tracking-wide text-muted-foreground">
-                            {t("settings.archiveHub.identity.locations")}
-                          </p>
-                          {group.paths.map((path) => {
-                            const alias = identityInfo?.aliases.find(
-                              (a) => a.project_path === path
-                            );
-                            return (
-                              <div
-                                key={path}
-                                className="flex items-center gap-1.5 text-px12 text-muted-foreground"
-                              >
-                                <span className="truncate" title={path}>
-                                  {path}
-                                </span>
-                                {group.worktreePaths.includes(path) && (
-                                  <span className="shrink-0 rounded bg-info/10 text-info px-1 py-px">
-                                    {t("settings.archiveHub.identity.worktree")}
-                                  </span>
+                          {/* Confirmed members: paths already in this
+                              identity's scope. Solid accent rail continues the
+                              selected row's accent wash. */}
+                          <div className="space-y-1">
+                            <p className="text-px11 font-medium uppercase tracking-wide text-accent">
+                              {t("settings.archiveHub.identity.locations")}
+                            </p>
+                            <div className="space-y-1 border-l-2 border-accent/40 pl-2">
+                              {group.paths.map((path) => {
+                                const alias = identityInfo?.aliases.find(
+                                  (a) => a.project_path === path
+                                );
+                                return (
+                                  <div
+                                    key={path}
+                                    className="flex items-center gap-1.5 text-px12 text-foreground/70"
+                                  >
+                                    <span className="truncate" title={path}>
+                                      {path}
+                                    </span>
+                                    {group.worktreePaths.includes(path) && (
+                                      <span className="shrink-0 rounded bg-info/10 text-info px-1 py-px">
+                                        {t(
+                                          "settings.archiveHub.identity.worktree"
+                                        )}
+                                      </span>
+                                    )}
+                                    {alias && (
+                                      <>
+                                        <span className="shrink-0 rounded border border-accent/30 bg-accent/10 px-1 py-px text-accent">
+                                          {t(
+                                            "settings.archiveHub.identity.linked"
+                                          )}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          data-testid="identity-unlink"
+                                          onClick={() =>
+                                            handleUnlinkAlias(alias.id)
+                                          }
+                                          className="shrink-0 rounded border border-border px-1 py-px text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                                        >
+                                          {t(
+                                            "settings.archiveHub.identity.unlink"
+                                          )}
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Link candidates: paths the hub suspects belong
+                              here but cannot prove by git fingerprint. Dashed
+                              rail + dimmer text so they never read as members
+                              until the user links them. */}
+                          {orphanSuggestions.length > 0 && (
+                            <div className="space-y-1">
+                              <p
+                                className="text-px11 font-medium uppercase tracking-wide text-muted-foreground"
+                                title={t(
+                                  "settings.archiveHub.identity.suggestionHint"
                                 )}
-                                {alias && (
-                                  <>
-                                    <span className="shrink-0 rounded border border-border bg-muted/50 px-1 py-px text-foreground/75">
-                                      {t("settings.archiveHub.identity.linked")}
+                              >
+                                {t("settings.archiveHub.identity.suggested")}
+                              </p>
+                              <div className="space-y-1 border-l-2 border-dashed border-border pl-2">
+                                {orphanSuggestions.map((suggestion) => (
+                                  <div
+                                    key={suggestion.project_path}
+                                    className="flex items-center gap-1.5 text-px12 text-muted-foreground/80"
+                                  >
+                                    <span
+                                      className="truncate"
+                                      title={`${suggestion.project_path} — ${t(
+                                        "settings.archiveHub.identity.suggestionHint"
+                                      )}`}
+                                    >
+                                      {suggestion.project_path}
                                     </span>
                                     <button
                                       type="button"
-                                      data-testid="identity-unlink"
-                                      onClick={() => handleUnlinkAlias(alias.id)}
-                                      className="shrink-0 rounded border border-border px-1 py-px hover:bg-muted"
+                                      data-testid="identity-link"
+                                      title={t(
+                                        "settings.archiveHub.identity.linkHint"
+                                      )}
+                                      onClick={() =>
+                                        handleLinkAlias(
+                                          suggestion.project_path!,
+                                          group.identityKey!
+                                        )
+                                      }
+                                      className="shrink-0 flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-1.5 py-px font-medium text-accent transition-colors hover:bg-accent hover:text-accent-foreground"
                                     >
-                                      {t("settings.archiveHub.identity.unlink")}
+                                      <Link2
+                                        className="w-3 h-3"
+                                        aria-hidden="true"
+                                      />
+                                      {t("settings.archiveHub.identity.link")}
                                     </button>
-                                  </>
-                                )}
+                                  </div>
+                                ))}
                               </div>
-                            );
-                          })}
-                          {orphanSuggestions.map((suggestion) => (
-                            <div
-                              key={suggestion.project_path}
-                              className="flex items-center gap-1.5 text-px12 text-muted-foreground"
-                            >
-                              <span
-                                className="truncate"
-                                title={`${suggestion.project_path} — ${t(
-                                  "settings.archiveHub.identity.suggestionHint"
-                                )}`}
-                              >
-                                {suggestion.project_path}
-                              </span>
-                              <button
-                                type="button"
-                                data-testid="identity-link"
-                                onClick={() =>
-                                  handleLinkAlias(
-                                    suggestion.project_path!,
-                                    group.identityKey!
-                                  )
-                                }
-                                className="shrink-0 rounded border border-border px-1 py-px hover:bg-muted"
-                              >
-                                {t("settings.archiveHub.identity.link")}
-                              </button>
                             </div>
-                          ))}
+                          )}
+
                           {aliasError && (
                             <p className="text-px12 text-destructive">{aliasError}</p>
                           )}

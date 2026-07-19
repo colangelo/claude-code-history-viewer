@@ -139,6 +139,7 @@
   "archive.web.connectFailed": "Connection failed: {{error}}",
   "archive.web.storageHint": "The hub URL and token are stored only in this browser (localStorage).",
   "archive.web.disconnect": "Disconnect",
+  "archive.web.fontSize": "Text size",
   "archive.web.fontSmaller": "Decrease text size",
   "archive.web.fontLarger": "Increase text size",
   "archive.web.fontReset": "Reset text size",

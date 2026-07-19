@@ -586,5 +586,7 @@
   "settings.archiveHub.identity.link": "Link",
   "settings.archiveHub.identity.unlink": "Unlink",
   "settings.archiveHub.identity.locations": "Locations",
+  "settings.archiveHub.identity.suggested": "Suggested",
+  "settings.archiveHub.identity.linkHint": "Fold this path's history into this project",
   "settings.archiveHub.identity.suggestionHint": "possible earlier location of this project"
 }
