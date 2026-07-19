@@ -118,3 +118,16 @@ Control labels SHALL be localized with accessible names.
 
 - **WHEN** the webapp is connected (same-origin or manual)
 - **THEN** the header shows the hub host it is connected to
+
+### Requirement: Tokenless manual connect
+
+The manual connect form SHALL accept an empty token: the probe then relies on
+host-side authentication (e.g. Tailscale serve identity headers), and a
+successful tokenless probe persists a valid empty-token config that restores
+on the next visit. A failed probe still shows the error and persists nothing.
+
+#### Scenario: Identity-authed hub without a token
+
+- **WHEN** the user submits only a hub URL and the host vouches for the probe
+- **THEN** the browser connects, and the stored config round-trips with an
+  empty token on reload
