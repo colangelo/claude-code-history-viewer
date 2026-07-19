@@ -556,6 +556,8 @@
   "settings.archiveHub.browser.messages.empty": "此工作階段沒有訊息",
   "settings.archiveHub.browser.messages.loadMore": "載入更多",
   "settings.archiveHub.browser.messages.progress": "{{loaded}} / {{total}} 則訊息",
+  "settings.archiveHub.browser.messages.loadEarlier": "載入更早的訊息",
+  "settings.archiveHub.browser.messages.progressRange": "第 {{from}}–{{to}} 則，共 {{total}} 則",
   "settings.archiveHub.journal.tab.journal": "日誌",
   "settings.archiveHub.journal.tab.browse": "瀏覽",
   "settings.archiveHub.journal.tabsLabel": "封存檢視",

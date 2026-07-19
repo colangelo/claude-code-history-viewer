@@ -25,8 +25,8 @@ export function loadStoredHubConfig(): HubConfig | null {
       parsed.v === 1 &&
       typeof parsed.url === "string" &&
       parsed.url.length > 0 &&
-      typeof parsed.token === "string" &&
-      parsed.token.length > 0
+      // Empty token is valid since #21: identity-authed hubs need none.
+      typeof parsed.token === "string"
     ) {
       return { url: parsed.url, token: parsed.token };
     }

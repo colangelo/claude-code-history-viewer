@@ -132,7 +132,7 @@
   "archive.web.subtitle": "다른 기기에서 아카이브된 대화 기록을 탐색하고 검색하려면 cchv 아카이브 허브에 연결하세요.",
   "archive.web.urlLabel": "허브 URL",
   "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
-  "archive.web.tokenLabel": "베어러 토큰",
+  "archive.web.tokenLabel": "읽기 토큰 (선택)",
   "archive.web.tokenPlaceholder": "읽기 전용 토큰",
   "archive.web.connect": "연결",
   "archive.web.connecting": "연결 중...",

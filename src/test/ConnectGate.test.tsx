@@ -173,6 +173,37 @@ describe("ConnectGate", () => {
     );
   });
 
+  it("connects without a token when the host vouches (identity auth)", async () => {
+    mockHubApi.listProjects
+      .mockRejectedValueOnce(new Error("401")) // same-origin auto-probe
+      .mockResolvedValueOnce([]); // manual tokenless connect
+    render(<ConnectGate />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
+    );
+    fillAndSubmit("https://hub.tailnet:8788", "");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("archive-browser")).toHaveTextContent(
+        "https://hub.tailnet:8788"
+      )
+    );
+    expect(mockHubApi.listProjects).toHaveBeenLastCalledWith(
+      { url: "https://hub.tailnet:8788", token: "" },
+      { limit: 1 }
+    );
+    // Empty token persists and round-trips as a valid stored config.
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
+      v: 1,
+      url: "https://hub.tailnet:8788",
+      token: "",
+    });
+    expect(loadStoredHubConfig()).toEqual({
+      url: "https://hub.tailnet:8788",
+      token: "",
+    });
+  });
+
   it("ignores malformed or wrong-version stored payloads", () => {
     localStorage.setItem(STORAGE_KEY, "not json");
     expect(loadStoredHubConfig()).toBeNull();

@@ -556,6 +556,8 @@
   "settings.archiveHub.browser.messages.empty": "No messages in this session",
   "settings.archiveHub.browser.messages.loadMore": "Load more",
   "settings.archiveHub.browser.messages.progress": "{{loaded}} of {{total}} messages",
+  "settings.archiveHub.browser.messages.loadEarlier": "Load earlier",
+  "settings.archiveHub.browser.messages.progressRange": "{{from}}–{{to}} of {{total}} messages",
   "settings.archiveHub.journal.tab.journal": "Journal",
   "settings.archiveHub.journal.tab.browse": "Browse",
   "settings.archiveHub.journal.tabsLabel": "Archive views",

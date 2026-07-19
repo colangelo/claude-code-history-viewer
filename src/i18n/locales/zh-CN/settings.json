@@ -556,6 +556,8 @@
   "settings.archiveHub.browser.messages.empty": "此会话中没有消息",
   "settings.archiveHub.browser.messages.loadMore": "加载更多",
   "settings.archiveHub.browser.messages.progress": "{{loaded}} / {{total}} 条消息",
+  "settings.archiveHub.browser.messages.loadEarlier": "加载更早的消息",
+  "settings.archiveHub.browser.messages.progressRange": "第 {{from}}–{{to}} 条，共 {{total}} 条",
   "settings.archiveHub.journal.tab.journal": "日志",
   "settings.archiveHub.journal.tab.browse": "浏览",
   "settings.archiveHub.journal.tabsLabel": "归档视图",

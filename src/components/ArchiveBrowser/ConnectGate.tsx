@@ -78,12 +78,15 @@ export function ConnectGate() {
   const handleSubmit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
+      // Token optional (issue #21): an identity-authed hub (Tailscale serve)
+      // vouches for the request itself, so an empty token can still probe OK.
       const candidate: HubConfig = { url: url.trim(), token: token.trim() };
-      if (!candidate.url || !candidate.token) return;
+      if (!candidate.url) return;
       setConnecting(true);
       setError(null);
       try {
-        // Authenticated probe: validates URL, reachability AND token.
+        // Authenticated probe: validates URL, reachability AND credentials
+        // (bearer token, or host-side identity when the token is empty).
         await hubApi.listProjects(candidate, { limit: 1 });
         storeHubConfig(candidate);
         setConfig(candidate);
@@ -200,7 +203,6 @@ export function ConnectGate() {
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder={t("archive.web.tokenPlaceholder")}
-            required
           />
         </div>
         {error != null && (

@@ -135,6 +135,13 @@ export interface HubSearchHit {
   timestamp: string | null;
   snippet: string;
   rank: number;
+  /** Hub message pk of the hit (present since cchv-v0.10.1). */
+  message_id?: number;
+  uuid?: string | null;
+  /** 0-based index of the hit in its session's browse ordering (since
+   * cchv-v0.10.1) — lets the client open the page containing the match.
+   * Absent on older hubs → the client falls back to page 1. */
+  position?: number;
 }
 
 /**
