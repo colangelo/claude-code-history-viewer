@@ -9,6 +9,8 @@ pub mod browse;
 pub mod config;
 pub mod error;
 pub mod health;
+pub mod identities;
+pub mod identity_filter;
 pub mod ingest;
 pub mod journal;
 pub mod pagination;
@@ -16,9 +18,9 @@ pub mod search;
 pub mod state;
 
 use axum::extract::DefaultBodyLimit;
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderName, HeaderValue};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
@@ -77,7 +79,9 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers([AUTHORIZATION])
+        // CONTENT_TYPE: the alias POST sends application/json, which is not
+        // preflight-safelisted once the request also carries Authorization.
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
         .expose_headers([HeaderName::from_static("x-total-count")]);
 
     let mut router = Router::new()
@@ -92,7 +96,13 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         )
         .route("/v1/projects", get(browse::list_projects))
         .route("/v1/sessions", get(browse::list_sessions))
-        .route("/v1/sessions/{id}/messages", get(browse::session_messages));
+        .route("/v1/sessions/{id}/messages", get(browse::session_messages))
+        .route("/v1/identities", get(identities::list))
+        .route("/v1/identities/aliases", post(identities::create_alias))
+        .route(
+            "/v1/identities/aliases/{id}",
+            delete(identities::delete_alias),
+        );
 
     if let Some(dir) = static_dir {
         // Content-hashed assets: cache hard, never revalidate.

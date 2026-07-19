@@ -17,8 +17,11 @@ pub struct SearchParams {
     pub provider: Option<String>,
     /// Machine hostname filter.
     pub machine: Option<String>,
-    /// Project name or path filter.
+    /// Project name or path filter, or `identity:<key>` for server-side
+    /// expansion to the identity's member + aliased paths.
     pub project: Option<String>,
+    /// In identity scope: `false` excludes worktree-only member paths.
+    pub include_worktrees: Option<bool>,
     /// RFC 3339 lower/upper timestamp bounds.
     pub from: Option<String>,
     pub to: Option<String>,
@@ -97,10 +100,19 @@ pub async fn search(
         }
     };
 
+    // Resolve the project filter once (plain vs `identity:<key>` expansion)
+    // and share it between the message and journal legs.
+    let project_scope = crate::identity_filter::resolve_project_scope(
+        &state.pool,
+        params.project.as_deref(),
+        params.include_worktrees.unwrap_or(true),
+    )
+    .await?;
+
     // Message hits: unchanged shape and ordering at every scope. Skipped
     // entirely for `scope=journal` (which performs no message search).
     let results: Vec<SearchHit> = if want_messages {
-        message_hits(&state, &params, from, to, page).await?
+        message_hits(&state, &params, &project_scope, from, to, page).await?
     } else {
         Vec::new()
     };
@@ -112,7 +124,7 @@ pub async fn search(
             crate::journal::search_journal(
                 &state,
                 &params.q,
-                params.project.as_deref(),
+                &project_scope,
                 page.limit,
                 page.offset,
             )
@@ -135,6 +147,7 @@ pub async fn search(
 async fn message_hits(
     state: &AppState,
     params: &SearchParams,
+    project_scope: &crate::identity_filter::ProjectScope,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
     page: Page,
@@ -168,6 +181,7 @@ async fn message_hits(
           AND ($2::text IS NULL OR m.provider = $2)
           AND ($3::text IS NULL OR mac.hostname = $3)
           AND ($4::text IS NULL OR p.name = $4 OR p.project_path = $4)
+          AND ($9::text[] IS NULL OR p.project_path = ANY($9))
           AND ($5::timestamptz IS NULL OR m."timestamp" >= $5)
           AND ($6::timestamptz IS NULL OR m."timestamp" <= $6)
         ORDER BY "rank!" DESC, m."timestamp" DESC NULLS LAST, m.id DESC
@@ -176,11 +190,12 @@ async fn message_hits(
         params.q,
         params.provider,
         params.machine,
-        params.project,
+        project_scope.plain,
         from,
         to,
         page.limit,
         page.offset,
+        project_scope.paths.as_deref(),
     )
     .fetch_all(&state.pool)
     .await?;

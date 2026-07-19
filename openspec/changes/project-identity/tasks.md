@@ -19,11 +19,11 @@
 
 ## 4. Hub identity reads + filter expansion
 
-- [ ] 4.1 Shared filter helper: parse `project` param — `identity:<key>` → member-path set (`projects.identity_key = key` ∪ `project_identity_aliases`), honoring `include_worktrees=false` (exclude path only when all its rows for the key are worktrees); plain values byte-compatible
-- [ ] 4.2 Apply to `/v1/sessions` (`browse.rs:111`) and `/v1/search` (`search.rs:76`); expose `identity_key` + `git_worktree` on `/v1/projects` rows (`browse.rs:42`)
-- [ ] 4.3 Apply to `/v1/journal/entries` (`journal.rs:377`) and journal search (`journal.rs:433`); `/v1/journal/pending` and POST untouched
-- [ ] 4.4 `GET /v1/identities` (members: path/providers/machines/worktree/last-activity; alias paths; suggestions: basename-match orphans + shared-root "related"); `POST /v1/identities/aliases` + `DELETE /v1/identities/aliases/{id}` on `Authenticated`, `created_by` audit
-- [ ] 4.5 Integration tests: identity expansion on all four read endpoints, alias create→included→delete→excluded round trip, worktree exclusion, fork (same root, different remote) never grouped, `identity:` reserved-prefix behavior, plain-filter byte-compat
+- [x] 4.1 Shared filter helper: parse `project` param — `identity:<key>` → member-path set (`projects.identity_key = key` ∪ `project_identity_aliases`), honoring `include_worktrees=false` (exclude path only when all its rows for the key are worktrees); plain values byte-compatible
+- [x] 4.2 Apply to `/v1/sessions` (`browse.rs:111`) and `/v1/search` (`search.rs:76`); expose `identity_key` + `git_worktree` on `/v1/projects` rows (`browse.rs:42`)
+- [x] 4.3 Apply to `/v1/journal/entries` (`journal.rs:377`) and journal search (`journal.rs:433`); `/v1/journal/pending` and POST untouched
+- [x] 4.4 `GET /v1/identities` (members: path/providers/machines/worktree/last-activity; alias paths; suggestions: basename-match orphans + shared-root "related"); `POST /v1/identities/aliases` + `DELETE /v1/identities/aliases/{id}` on `Authenticated`, `created_by` audit
+- [x] 4.5 Integration tests: identity expansion on all four read endpoints, alias create→included→delete→excluded round trip, worktree exclusion, fork (same root, different remote) never grouped, `identity:` reserved-prefix behavior, plain-filter byte-compat
 
 ## 5. Webapp
 

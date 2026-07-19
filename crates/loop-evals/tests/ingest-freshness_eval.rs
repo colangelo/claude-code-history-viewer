@@ -392,11 +392,7 @@ async fn ac6_excluded_hostname_stays_stale_but_does_not_alert() {
     // machine still reports its real `stale` flag alongside `excluded:true`.
     let exclude = stale_hosts
         .iter()
-        .map(|h| {
-            h.strip_suffix(".local")
-                .unwrap_or(h)
-                .to_ascii_uppercase()
-        })
+        .map(|h| h.strip_suffix(".local").unwrap_or(h).to_ascii_uppercase())
         .collect::<Vec<_>>()
         .join(",");
     let resp = get_ingest_health(&hub, Some(&format!("exclude={exclude}"))).await;
