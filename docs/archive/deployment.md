@@ -117,6 +117,15 @@ same-origin, so no CORS or mixed-content concerns:
 just archive-web-build        # in the cchv repo → dist-archive/
 ```
 
+> **Deploy-request verify rule (house deployment).** When relaying a webapp swap
+> to home-network (infra), quote the asset content-hash (`assets/archive-<hash>.js`)
+> **only from the immutable released CI artifact** — never from a local `dist-archive/`
+> build dir. Local rebuilds are not bit-reproducible, so a hash read from the build
+> dir can go stale against the released tarball (this is how a stale `Cqi5MIOj` +
+> `cac62595` pair got quoted once, costing a confirm round-trip). Corollary: a
+> tarball sha1 is not reproducible either — use the content-hash from the release as
+> authoritative, not the tarball checksum.
+
 Then either add to `hub.toml`:
 
 ```toml
