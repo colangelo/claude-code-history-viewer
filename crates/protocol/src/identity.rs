@@ -62,10 +62,9 @@ pub fn normalize_remote_url(raw: &str) -> Option<String> {
                     && port.bytes().all(|b| b.is_ascii_digit())
                 {
                     // `host:port/path` (already-normalized form).
-                    match after_colon.find('/') {
-                        Some(idx) => (&authority_and_path[..c + 1 + idx], &after_colon[idx + 1..]),
-                        None => return None, // host:port with no path
-                    }
+                    // `?` = host:port with no path → no transferable identity.
+                    let idx = after_colon.find('/')?;
+                    (&authority_and_path[..c + 1 + idx], &after_colon[idx + 1..])
                 } else {
                     // scp-like: path starts after the colon.
                     (before, after_colon)

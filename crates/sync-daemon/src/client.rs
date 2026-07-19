@@ -57,6 +57,14 @@ fn backoff(attempt: u32) -> Duration {
 
 impl HubClient for ReqwestHubClient {
     async fn ingest(&self, batch: &IngestBatch) -> anyhow::Result<IngestResponse> {
+        // Named on every retry warning so a session that eventually fails can be
+        // traced back through the retries that preceded it.
+        let sid = batch
+            .sessions
+            .first()
+            .map(|s| s.session_id.as_str())
+            .unwrap_or("");
+        let messages = batch.messages.len();
         let mut attempt = 0u32;
         loop {
             attempt += 1;
@@ -76,20 +84,25 @@ impl HubClient for ReqwestHubClient {
                 Ok(resp) if resp.status().is_client_error() => {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
-                    anyhow::bail!("hub rejected batch ({status}): {body}");
+                    anyhow::bail!("hub rejected batch ({status}) [session {sid}]: {body}");
                 }
                 // 5xx or transport error — retry with backoff.
                 Ok(resp) => {
                     if attempt > self.max_retries {
-                        anyhow::bail!("hub error {} after {attempt} attempts", resp.status());
+                        anyhow::bail!(
+                            "hub error {} after {attempt} attempts [session {sid}]",
+                            resp.status()
+                        );
                     }
-                    tracing::warn!(status = %resp.status(), attempt, "ingest retry");
+                    tracing::warn!(status = %resp.status(), attempt, session_id = %sid, messages, "ingest retry");
                 }
                 Err(e) => {
                     if attempt > self.max_retries {
-                        return Err(anyhow::anyhow!(e).context("ingest failed after retries"));
+                        return Err(anyhow::anyhow!(e).context(format!(
+                            "ingest failed after retries [session {sid}, {messages} messages]"
+                        )));
                     }
-                    tracing::warn!(error = %e, attempt, "ingest retry");
+                    tracing::warn!(error = %e, attempt, session_id = %sid, messages, "ingest retry");
                 }
             }
             tokio::time::sleep(backoff(attempt)).await;
