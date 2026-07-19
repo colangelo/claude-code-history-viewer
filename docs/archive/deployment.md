@@ -292,6 +292,13 @@ unchanged CSS means the outstanding eyeball item is still the same one, changed
 CSS means a fresh look is owed. Currently owed: the rose topic chips
 (`cchv-v0.10.6`, `bb40c41`) in a real window.
 
+Closing that item is **ours to announce, not theirs to infer.** The infra side
+holds a standing UNVERIFIED caveat on every v0.10.6+ deploy and words its own
+reports "deployed and asserted", never "verified" (home-network `809533b`); a
+byte-identical CSS run will never retire it, by design. So when a human has
+actually looked, send one relay line saying so — otherwise the caveat stands
+indefinitely while both sides believe the other closed it.
+
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
 > tailnet ingress via `tailscale serve` on `:8788`. A failing loopback `:8787`
