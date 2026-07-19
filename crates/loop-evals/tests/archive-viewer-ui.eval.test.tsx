@@ -417,7 +417,13 @@ describe("ArchiveBrowser", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("archive-load-more")).not.toBeInTheDocument()
     );
-  });
+    // PAGE_SIZE is 200, so exercising load-more means rendering 250 rows
+    // through the real ArchivedMessage renderers: ~4.5s when this file runs
+    // alone. Under the full suite the parallel workers contend and that has
+    // been measured past 20s, so the headroom here is deliberate rather than
+    // fitted to one observation. Scoped to this test instead of raising
+    // testTimeout globally, so a genuine hang anywhere else still fails fast.
+  }, 60000);
 
   it("AC11: search renders hit snippet/hostname and activating opens its session", async () => {
     const hit: HubSearchHit = {
