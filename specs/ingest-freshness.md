@@ -17,10 +17,17 @@ Add **`GET /v1/healthz/ingest`** to the hub (`crates/hub`):
   `messages.created_at` for that machine, RFC 3339 or null when the machine
   has no messages), and a boolean `stale`.
 - **Staleness is judged on `machines.last_seen` ONLY** — the daemon upserts
-  `last_seen = now()` on every ingest (even empty-delta passes touch it via the
+  `last_seen = now()` on ingest (even empty-delta passes touch it via the
   machine upsert), so it is a daemon-liveness heartbeat. `last_message_at` is
   exposed for observability but never alerted on: an idle machine (no new
   coding sessions) must not page anyone.
+- **`last_seen` has 60-second write granularity.** The machine upsert's
+  `DO UPDATE` is guarded (`machines.last_seen < now() - interval '60 seconds'`,
+  plus any hostname/os change) because an unconditional bump made this 3-row
+  table the archive's hottest write — one HOT update per ingest request. So
+  `last_seen` may lag a live daemon by up to 60 s; the 7200 s default threshold
+  absorbs that with 120× headroom. Any future threshold must stay comfortably
+  above the coalescing window.
 - Threshold: query param `stale_after_secs`, default **7200** (2× the daemons'
   hourly scan interval). A machine is stale when
   `now() - last_seen > stale_after_secs`. Non-numeric or non-positive values →
