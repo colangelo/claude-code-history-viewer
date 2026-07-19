@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-19T11:20:48.640Z
- * 총 키 개수: 1882
+ * 생성 시간: 2026-07-19T13:08:40.925Z
+ * 총 키 개수: 1883
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (587개)
+ * settings namespace의 번역 키 (588개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -690,6 +690,7 @@ export type SettingsKeys =
   | 'settings.archiveHub.identity.worktree'
   | 'settings.archiveHub.journal.clearDate'
   | 'settings.archiveHub.journal.collapse'
+  | 'settings.archiveHub.journal.dateNavTitle'
   | 'settings.archiveHub.journal.datePickerLabel'
   | 'settings.archiveHub.journal.empty'
   | 'settings.archiveHub.journal.error'
@@ -3088,6 +3089,7 @@ export type TranslationKey =
   | 'settings.archiveHub.identity.worktree'
   | 'settings.archiveHub.journal.clearDate'
   | 'settings.archiveHub.journal.collapse'
+  | 'settings.archiveHub.journal.dateNavTitle'
   | 'settings.archiveHub.journal.datePickerLabel'
   | 'settings.archiveHub.journal.empty'
   | 'settings.archiveHub.journal.error'

@@ -28,6 +28,7 @@ import {
 } from "../../services/hubApi";
 import { JournalEntryCard } from "./JournalEntryCard";
 import type { ProjectGroup } from "./projectGrouping";
+import { cn } from "@/lib/utils";
 import { dayLabel, shortDayLabel } from "@/utils/journalFormat";
 import type { SessionOpenContext } from "./index";
 
@@ -297,9 +298,41 @@ export function JournalView({
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 gap-2 w-full max-w-4xl mx-auto">
+    <div className="flex flex-1 min-h-0 gap-6 w-full">
+      {/* Wide screens: the quick-nav dates become a left timeline rail beside
+          the reading column — the flank space works instead of sitting empty.
+          Below xl the horizontal pills row (further down) takes over. */}
+      {quickNavDates.length > 0 && (
+        <nav
+          aria-label={t("settings.archiveHub.journal.dateNavTitle")}
+          className="hidden xl:block w-52 shrink-0 overflow-y-auto py-1"
+        >
+          <p className="px-2 text-px12 font-medium text-muted-foreground uppercase tracking-wide">
+            {t("settings.archiveHub.journal.dateNavTitle")}
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {quickNavDates.map((d) => (
+              <li key={d}>
+                <button
+                  type="button"
+                  data-testid="journal-date-rail-item"
+                  onClick={() => setDate(d)}
+                  className={cn(
+                    "w-full text-left rounded px-2 py-1 text-px13 hover:bg-muted",
+                    date === d && "bg-accent/10 font-medium"
+                  )}
+                >
+                  {dayHeader(d)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
+
+      <div className="flex flex-col flex-1 min-h-0 gap-2">
       {/* Controls: date picker, project filter, quick-nav pills */}
-      <div className="flex flex-wrap items-center gap-2 shrink-0">
+      <div className="w-full max-w-4xl mx-auto flex flex-wrap items-center gap-2 shrink-0">
         <input
           type="date"
           data-testid="journal-date-picker"
@@ -336,7 +369,7 @@ export function JournalView({
       </div>
 
       {quickNavDates.length > 0 && (
-        <div className="flex flex-wrap gap-1 shrink-0">
+        <div className="w-full max-w-4xl mx-auto flex flex-wrap gap-1 shrink-0 xl:hidden">
           {quickNavDates.map((d) => (
             <button
               key={d}
@@ -352,8 +385,11 @@ export function JournalView({
         </div>
       )}
 
-      {/* Feed */}
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">
+      {/* Feed: the SCROLL CONTAINER spans full width (scrollbar at the
+          viewport edge, not floating mid-screen); the content centers inside
+          it at reading measure. */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="w-full max-w-4xl mx-auto space-y-4 pb-2">
         {isLoading && entries.length === 0 && (
           <p className="text-px14 text-muted-foreground flex items-center gap-1.5">
             <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
@@ -427,6 +463,8 @@ export function JournalView({
             )}
           </button>
         )}
+        </div>
+      </div>
       </div>
     </div>
   );

@@ -578,6 +578,7 @@
   "settings.archiveHub.journal.projectFilterLabel": "プロジェクトで絞り込み",
   "settings.archiveHub.journal.datePickerLabel": "日付へ移動",
   "settings.archiveHub.journal.clearDate": "日付をクリア",
+  "settings.archiveHub.journal.dateNavTitle": "日付へ移動",
   "settings.archiveHub.journal.searchSection": "ジャーナル",
   "settings.archiveHub.identity.showWorktrees": "ワークツリーを表示",
   "settings.archiveHub.identity.worktree": "ワークツリー",
