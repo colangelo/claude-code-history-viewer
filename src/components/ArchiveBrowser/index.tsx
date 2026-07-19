@@ -17,7 +17,14 @@ import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
 import { cn } from "@/lib/utils";
 import { formatCount, humanizeTimestamp } from "@/utils/journalFormat";
 import { renderSnippet } from "@/utils/searchSnippet";
+import { getProviderLabel } from "@/utils/providers";
+import { ArchiveRenderContext } from "@/contexts/ArchiveRenderContext";
 import { JournalView } from "./JournalView";
+import {
+  formatArchiveHash,
+  parseArchiveHash,
+  type ArchiveRoute,
+} from "./archiveRoute";
 import {
   hubApi,
   hubMessageToClaudeMessage,
@@ -32,6 +39,10 @@ import {
 export interface ArchiveBrowserProps {
   /** Hub connection; callers normally derive this from user settings. */
   config: HubConfig;
+  /** Own `location.hash` as routable state (#/journal/…, #/browse/session/…).
+   * Only the standalone webapp turns this on — embedded in the desktop/WebUI
+   * the browser owns the URL and the hash must be left alone. */
+  enableHashRoutes?: boolean;
 }
 
 /** Hub's max page size (`crates/hub/src/pagination.rs::MAX_LIMIT`). */
@@ -42,6 +53,31 @@ type ArchiveView = "journal" | "browse";
 interface OpenSession {
   ref: number | string;
   label: string;
+}
+
+/** Optional project context for a session opened from Journal or a search
+ * hit — used to sync the Browse panes (select the project, load its
+ * sessions) so the surrounding lists match what's open. */
+export interface SessionOpenContext {
+  project_path?: string | null;
+  machine_hostname?: string | null;
+  provider?: string | null;
+}
+
+/** Localized role label for the message gutter; unknown roles pass through. */
+function roleLabel(role: string, t: (key: string) => string): string {
+  switch (role) {
+    case "user":
+      return t("navigator.role.user");
+    case "assistant":
+      return t("navigator.role.assistant");
+    case "system":
+      return t("navigator.role.system");
+    case "summary":
+      return t("navigator.role.summary");
+    default:
+      return role;
+  }
 }
 
 /** Renders one archived message via the existing content renderers, keeping
@@ -65,14 +101,36 @@ function ArchivedMessage({ row, sessionId }: { row: HubMessage; sessionId: strin
   );
 }
 
-export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
+export function ArchiveBrowser({
+  config,
+  enableHashRoutes = false,
+}: ArchiveBrowserProps) {
   const { t } = useTranslation();
 
-  const [view, setView] = useState<ArchiveView>("journal");
-  // Anchor requested from a journal search hit; `nonce` re-triggers a jump even
-  // when the date is unchanged.
-  const [anchorDate, setAnchorDate] = useState<string | null>(null);
+  // Deep link (#/journal/<date>, #/browse/session/<ref>, #/search/<q>)
+  // parsed once before first render; state initializers consume it and a
+  // mount effect triggers the fetches it implies.
+  const initialRouteRef = useRef(
+    enableHashRoutes ? parseArchiveHash(window.location.hash) : null
+  );
+
+  const [view, setView] = useState<ArchiveView>(
+    initialRouteRef.current?.kind === "browse" ? "browse" : "journal"
+  );
+  // Anchor requested from a journal search hit or an inbound route; `nonce`
+  // re-triggers a jump even when the date is unchanged. "" clears the filter.
+  const [anchorDate, setAnchorDate] = useState<string | null>(
+    initialRouteRef.current?.kind === "journal"
+      ? initialRouteRef.current.date
+      : null
+  );
   const [anchorNonce, setAnchorNonce] = useState(0);
+  // Mirror of JournalView's date filter — only feeds the hash writer.
+  const [journalDate, setJournalDate] = useState<string>(
+    initialRouteRef.current?.kind === "journal"
+      ? (initialRouteRef.current.date ?? "")
+      : ""
+  );
 
   const [projects, setProjects] = useState<HubProject[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
@@ -89,7 +147,11 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(
+    initialRouteRef.current?.kind === "search"
+      ? initialRouteRef.current.query
+      : ""
+  );
   const [searchHits, setSearchHits] = useState<HubSearchHit[] | null>(null);
   const [journalHits, setJournalHits] = useState<JournalSearchHit[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -101,6 +163,19 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
   const sessionsGenerationRef = useRef(0);
   const messagesGenerationRef = useRef(0);
   const searchGenerationRef = useRef(0);
+
+  // Hash writes we initiated — the hashchange listener must ignore them or
+  // every state-driven write would bounce back as a route application.
+  const selfHashRef = useRef<string | null>(null);
+  const writeHash = useCallback(
+    (hash: string) => {
+      if (!enableHashRoutes) return;
+      if (window.location.hash === hash) return;
+      selfHashRef.current = hash;
+      window.location.hash = hash;
+    },
+    [enableHashRoutes]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -122,53 +197,9 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
     };
   }, [config]);
 
-  const openSessionRef = useCallback(
-    (ref: number | string, label: string) => {
-      const generation = ++messagesGenerationRef.current;
-      setOpenSession({ ref, label });
-      setMessages([]);
-      setTotalCount(null);
-      setMessagesError(null);
-      setIsLoadingMessages(true);
-      hubApi
-        .sessionMessages(config, ref, { limit: PAGE_SIZE, offset: 0 })
-        .then((page) => {
-          if (messagesGenerationRef.current !== generation) return;
-          setMessages(page.messages);
-          setTotalCount(page.totalCount);
-        })
-        .catch((err) => {
-          if (messagesGenerationRef.current !== generation) return;
-          setMessagesError(String(err));
-        })
-        .finally(() => {
-          if (messagesGenerationRef.current !== generation) return;
-          setIsLoadingMessages(false);
-        });
-    },
-    [config]
-  );
-
-  // Open a session from the Journal view: switch to Browse and load messages
-  // through the existing message-fetch path.
-  const handleOpenSessionFromJournal = useCallback(
-    (sessionId: number, label: string) => {
-      setView("browse");
-      openSessionRef(sessionId, label);
-    },
-    [openSessionRef]
-  );
-
-  const handleSelectProject = useCallback(
+  const fetchSessionsFor = useCallback(
     (project: HubProject) => {
       const generation = ++sessionsGenerationRef.current;
-      // Invalidate any in-flight message fetch for the previously open
-      // session — it belongs to a project we're navigating away from.
-      ++messagesGenerationRef.current;
-      setSelectedProject(project);
-      setOpenSession(null);
-      setMessages([]);
-      setTotalCount(null);
       setSessions([]);
       setSessionsError(null);
       setIsLoadingSessions(true);
@@ -192,6 +223,82 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         });
     },
     [config]
+  );
+
+  // Select a project WITHOUT clearing the open session — pane sync for a
+  // session opened from Journal or a search hit.
+  const syncProjectSelection = useCallback(
+    (project: HubProject) => {
+      setSelectedProject(project);
+      fetchSessionsFor(project);
+    },
+    [fetchSessionsFor]
+  );
+
+  const openSessionRef = useCallback(
+    (ref: number | string, label: string, context?: SessionOpenContext) => {
+      const generation = ++messagesGenerationRef.current;
+      setOpenSession({ ref, label });
+      setMessages([]);
+      setTotalCount(null);
+      setMessagesError(null);
+      setIsLoadingMessages(true);
+      hubApi
+        .sessionMessages(config, ref, { limit: PAGE_SIZE, offset: 0 })
+        .then((page) => {
+          if (messagesGenerationRef.current !== generation) return;
+          setMessages(page.messages);
+          setTotalCount(page.totalCount);
+        })
+        .catch((err) => {
+          if (messagesGenerationRef.current !== generation) return;
+          setMessagesError(String(err));
+        })
+        .finally(() => {
+          if (messagesGenerationRef.current !== generation) return;
+          setIsLoadingMessages(false);
+        });
+      // Pane sync: only when the context pins exactly one known project —
+      // an ambiguous match (same path on several machines) syncs nothing.
+      if (context?.project_path) {
+        const matches = projects.filter(
+          (p) =>
+            p.project_path === context.project_path &&
+            (context.machine_hostname == null ||
+              p.machine_hostname === context.machine_hostname) &&
+            (context.provider == null || p.provider === context.provider)
+        );
+        if (matches.length === 1 && matches[0]!.id !== selectedProject?.id) {
+          syncProjectSelection(matches[0]!);
+        }
+      }
+    },
+    [config, projects, selectedProject?.id, syncProjectSelection]
+  );
+
+  // Open a session from the Journal view: switch to Browse and load messages
+  // through the existing message-fetch path.
+  const handleOpenSessionFromJournal = useCallback(
+    (sessionId: number, label: string, context?: SessionOpenContext) => {
+      setView("browse");
+      openSessionRef(sessionId, label, context);
+    },
+    [openSessionRef]
+  );
+
+  const handleSelectProject = useCallback(
+    (project: HubProject) => {
+      // Invalidate any in-flight message fetch for the previously open
+      // session — it belongs to a project we're navigating away from.
+      ++messagesGenerationRef.current;
+      setSelectedProject(project);
+      setOpenSession(null);
+      setMessages([]);
+      setTotalCount(null);
+      setMessagesError(null);
+      fetchSessionsFor(project);
+    },
+    [fetchSessionsFor]
   );
 
   const handleLoadMore = useCallback(() => {
@@ -220,10 +327,8 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
       });
   }, [config, openSession, messages.length, isLoadingMessages]);
 
-  const handleSearchSubmit = useCallback(
-    (e: FormEvent) => {
-      e.preventDefault();
-      const query = searchQuery.trim();
+  const runSearch = useCallback(
+    (query: string) => {
       if (!query) return;
       const generation = ++searchGenerationRef.current;
       setIsSearching(true);
@@ -256,12 +361,30 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           setJournalHits([]);
         });
     },
-    [config, searchQuery]
+    [config]
+  );
+
+  const handleSearchSubmit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      const query = searchQuery.trim();
+      if (!query) return;
+      runSearch(query);
+      writeHash(formatArchiveHash({ kind: "search", query }));
+    },
+    [searchQuery, runSearch, writeHash]
   );
 
   const handleActivateHit = useCallback(
     (hit: HubSearchHit) => {
-      openSessionRef(hit.session_id, hit.session_summary ?? hit.session_id);
+      // Land the user ON the session — a hit activated from the Journal view
+      // used to open it invisibly behind the feed.
+      setView("browse");
+      openSessionRef(hit.session_id, hit.session_summary ?? hit.session_id, {
+        project_path: hit.project_path,
+        machine_hostname: hit.machine_hostname,
+        provider: hit.provider,
+      });
     },
     [openSessionRef]
   );
@@ -301,6 +424,73 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
     setTotalCount(null);
     setMessagesError(null);
     setIsLoadingMessages(false);
+  }, []);
+
+  // --- Hash routing: state → URL. Search hashes are written on submit; the
+  // view/date/session state is reflected here. Skip the very first write when
+  // the page loaded on a search deep link so it isn't clobbered before the
+  // search state settles.
+  const skipFirstWriteRef = useRef(initialRouteRef.current?.kind === "search");
+  useEffect(() => {
+    if (skipFirstWriteRef.current) {
+      skipFirstWriteRef.current = false;
+      return;
+    }
+    const route: ArchiveRoute =
+      view === "journal"
+        ? { kind: "journal", date: journalDate || null }
+        : { kind: "browse", sessionRef: openSession?.ref ?? null };
+    writeHash(formatArchiveHash(route));
+  }, [view, journalDate, openSession, writeHash]);
+
+  // --- Hash routing: URL → state (back/forward, hand-edited hashes). A
+  // latest-callback ref lets the singleton listener see fresh state without
+  // re-subscribing every render.
+  const applyRouteRef = useRef<(route: ArchiveRoute) => void>(() => {});
+  applyRouteRef.current = (route: ArchiveRoute) => {
+    if (route.kind === "journal") {
+      setView("journal");
+      setAnchorDate(route.date ?? "");
+      setAnchorNonce((n) => n + 1);
+    } else if (route.kind === "browse") {
+      setView("browse");
+      if (route.sessionRef == null) {
+        if (openSession) handleBackFromMessages();
+      } else if (openSession?.ref !== route.sessionRef) {
+        openSessionRef(route.sessionRef, String(route.sessionRef));
+      }
+    } else {
+      setSearchQuery(route.query);
+      runSearch(route.query);
+    }
+  };
+
+  useEffect(() => {
+    if (!enableHashRoutes) return;
+    const onHashChange = () => {
+      const hash = window.location.hash;
+      if (selfHashRef.current === hash) {
+        selfHashRef.current = null;
+        return;
+      }
+      const route = parseArchiveHash(hash);
+      if (route) applyRouteRef.current(route);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [enableHashRoutes]);
+
+  // Deep-link fetches on mount — the state initializers only set the shape;
+  // the session/search the route names still has to load.
+  useEffect(() => {
+    const route = initialRouteRef.current;
+    if (route?.kind === "browse" && route.sessionRef != null) {
+      openSessionRef(route.sessionRef, String(route.sessionRef));
+    } else if (route?.kind === "search") {
+      runSearch(route.query);
+    }
+    // Mount-only by design: the route was captured before first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const hasMoreMessages = totalCount !== null && messages.length < totalCount;
@@ -457,6 +647,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           anchorDate={anchorDate}
           anchorNonce={anchorNonce}
           onOpenSession={handleOpenSessionFromJournal}
+          onDateChange={setJournalDate}
         />
       ) : (
         <div className="flex flex-1 min-h-0 gap-3">
@@ -497,6 +688,9 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                     <p className="truncate">{project.name ?? project.project_path}</p>
                     <p className="text-px12 text-muted-foreground truncate">
                       {project.machine_hostname}
+                      <span className="ml-1.5 rounded bg-muted px-1 py-px">
+                        {getProviderLabel(t, project.provider)}
+                      </span>
                     </p>
                   </button>
                 </li>
@@ -555,7 +749,10 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                       openSessionRef(session.id, session.summary ?? session.session_id)
                     }
                     className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
-                      openSession?.ref === session.id ? "bg-accent/10" : ""
+                      openSession?.ref === session.id ||
+                      openSession?.ref === session.session_id
+                        ? "bg-accent/10"
+                        : ""
                     }`}
                   >
                     <p className="truncate">{session.summary ?? session.session_id}</p>
@@ -630,15 +827,39 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                 </p>
               )}
             {/* Reading-measure column: don't span the full pane on wide screens. */}
-            <div className="px-2 py-1 space-y-1 w-full max-w-4xl mx-auto">
-              {messages.map((row) => (
-                <ArchivedMessage
-                  key={row.id}
-                  row={row}
-                  sessionId={String(openSession?.ref ?? "")}
-                />
-              ))}
-            </div>
+            <ArchiveRenderContext.Provider value={true}>
+              <div className="px-2 py-1 space-y-1 w-full max-w-4xl mx-auto">
+                {messages.map((row, index) => {
+                  const prev = index > 0 ? messages[index - 1] : undefined;
+                  const role = row.role ?? row.message_type;
+                  // Role/timestamp gutter at turn boundaries only — a header
+                  // on every row would drown the content.
+                  const showGutter =
+                    role != null && role !== (prev?.role ?? prev?.message_type);
+                  return (
+                    <div key={row.id}>
+                      {showGutter && (
+                        <div
+                          data-testid="message-gutter"
+                          className="flex items-baseline gap-2 pt-2 pb-0.5 text-px12 text-muted-foreground"
+                        >
+                          <span className="font-medium">{roleLabel(role, t)}</span>
+                          {row.timestamp && (
+                            <span title={row.timestamp}>
+                              {humanizeTimestamp(row.timestamp)}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <ArchivedMessage
+                        row={row}
+                        sessionId={String(openSession?.ref ?? "")}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </ArchiveRenderContext.Provider>
             {hasMoreMessages && (
               <div className="px-2 pb-2 w-full max-w-4xl mx-auto">
                 <button

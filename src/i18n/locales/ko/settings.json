@@ -562,6 +562,7 @@
   "settings.archiveHub.journal.loading": "저널 불러오는 중…",
   "settings.archiveHub.journal.error": "저널 항목을 불러오지 못했습니다",
   "settings.archiveHub.journal.empty": "이 범위에 저널 항목이 없습니다. 오래된 기록은 아직 정리되지 않았을 수 있습니다.",
+  "settings.archiveHub.journal.showLatest": "최신 항목 보기",
   "settings.archiveHub.journal.relative.today": "오늘",
   "settings.archiveHub.journal.relative.yesterday": "어제",
   "settings.archiveHub.journal.sessionCount": "세션 {{count}}개",

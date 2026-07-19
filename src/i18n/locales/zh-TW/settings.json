@@ -562,6 +562,7 @@
   "settings.archiveHub.journal.loading": "正在載入日誌…",
   "settings.archiveHub.journal.error": "無法載入日誌項目",
   "settings.archiveHub.journal.empty": "此範圍內沒有日誌項目。較早的歷史記錄可能尚未提煉。",
+  "settings.archiveHub.journal.showLatest": "顯示最新項目",
   "settings.archiveHub.journal.relative.today": "今天",
   "settings.archiveHub.journal.relative.yesterday": "昨天",
   "settings.archiveHub.journal.sessionCount": "{{count}} 個工作階段",

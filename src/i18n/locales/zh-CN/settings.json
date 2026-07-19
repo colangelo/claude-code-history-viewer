@@ -562,6 +562,7 @@
   "settings.archiveHub.journal.loading": "正在加载日志…",
   "settings.archiveHub.journal.error": "无法加载日志条目",
   "settings.archiveHub.journal.empty": "此范围内没有日志条目。较早的历史记录可能尚未提炼。",
+  "settings.archiveHub.journal.showLatest": "显示最新条目",
   "settings.archiveHub.journal.relative.today": "今天",
   "settings.archiveHub.journal.relative.yesterday": "昨天",
   "settings.archiveHub.journal.sessionCount": "{{count}} 个会话",

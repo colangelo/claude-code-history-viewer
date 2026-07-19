@@ -562,6 +562,7 @@
   "settings.archiveHub.journal.loading": "Loading journal…",
   "settings.archiveHub.journal.error": "Couldn't load journal entries",
   "settings.archiveHub.journal.empty": "No journal entries for this range. Older history may not be distilled yet.",
+  "settings.archiveHub.journal.showLatest": "Show latest entries",
   "settings.archiveHub.journal.relative.today": "Today",
   "settings.archiveHub.journal.relative.yesterday": "Yesterday",
   "settings.archiveHub.journal.sessionCount": "{{count}} sessions",

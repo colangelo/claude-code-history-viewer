@@ -12,13 +12,18 @@ import { useTranslation } from "react-i18next";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { JournalEntry, HubSession } from "../../services/hubApi";
+import type { SessionOpenContext } from "./index";
 
 interface JournalEntryCardProps {
   entry: JournalEntry;
   /** Resolve (and cache) the sessions for a project path. Called on expand. */
   resolveSessions: (projectPath: string) => Promise<HubSession[]>;
-  /** Open a session in the Browse view. */
-  onOpenSession: (sessionId: number, label: string) => void;
+  /** Open a session in the Browse view (context enables pane sync). */
+  onOpenSession: (
+    sessionId: number,
+    label: string,
+    context?: SessionOpenContext
+  ) => void;
 }
 
 export function JournalEntryCard({
@@ -156,7 +161,13 @@ export function JournalEntryCard({
                     <button
                       type="button"
                       data-testid="journal-session-link"
-                      onClick={() => onOpenSession(id, sessionLabel(id))}
+                      onClick={() =>
+                        onOpenSession(id, sessionLabel(id), {
+                          project_path: match?.project_path ?? entry.project_path,
+                          machine_hostname: match?.machine_hostname ?? null,
+                          provider: match?.provider ?? null,
+                        })
+                      }
                       className="w-full text-left rounded px-2 py-1.5 text-px14 hover:bg-muted"
                     >
                       <span className="truncate">{sessionLabel(id)}</span>
