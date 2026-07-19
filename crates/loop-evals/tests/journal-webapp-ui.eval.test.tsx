@@ -555,8 +555,10 @@ describe("AC4 — entry card at rest / expanded, lazy session labels", () => {
     const cards = screen.getAllByTestId("journal-entry-card");
     const card = within(cards[0]);
 
-    // At rest: project, model, headline, summary, topic chips are visible.
-    expect(card.getByText("/work/alpha")).toBeInTheDocument();
+    // At rest: project (basename, full path on hover), model, headline,
+    // summary, topic chips are visible (webapp-ux-readability change).
+    expect(card.getByText("alpha")).toBeInTheDocument();
+    expect(card.getByText("alpha")).toHaveAttribute("title", "/work/alpha");
     expect(card.getByText("claude-opus-model")).toBeInTheDocument();
     expect(card.getByText(/Reworked the token cache/)).toBeInTheDocument();
     expect(card.getByText("auth")).toBeInTheDocument();
@@ -794,11 +796,12 @@ describe("AC7 — empty and error states", () => {
 });
 
 // ============================================================================
-// AC8: unified type scale — content 14 > tool header 13 > tool id 11 (mono)
+// AC8: unified type scale — content 15 > tool header 14 > tool id 12 (mono)
+// (sizes re-tuned by the webapp-ux-readability change)
 // ============================================================================
 
 describe("AC8 — unified archive type scale", () => {
-  it("message text is 14px, tool-card headers 13px, tool ids 11px mono", () => {
+  it("message text is 15px, tool-card headers 14px, tool ids 12px mono", () => {
     // Tool card: header title + tool id badge.
     render(
       <ExpandKeyProvider value="ac8-tool">
@@ -813,30 +816,30 @@ describe("AC8 — unified archive type scale", () => {
       </ExpandKeyProvider>
     );
 
-    // Tool-card header carries an EXPLICIT 13px size (no size-class-less header
+    // Tool-card header carries an EXPLICIT 14px size (no size-class-less header
     // that inherits the 16px default).
     const headerTitle = screen.getByText(/^Bash/);
     const headerPx = effectiveFontSizePx(headerTitle);
-    expect(headerPx).toBe(13);
+    expect(headerPx).toBe(14);
 
-    // Tool id: 11px monospace.
+    // Tool id: 12px monospace.
     const toolId = screen.getByText(/toolu_abc/);
     const idPx = effectiveFontSizePx(toolId);
-    expect(idPx).toBe(11);
+    expect(idPx).toBe(12);
     expect(hasClassUp(toolId, "font-mono")).toBe(true);
 
     cleanup();
 
-    // Conversation message text renders at the 14px scale.
+    // Conversation message text renders at the 15px scale.
     render(
       <ExpandKeyProvider value="ac8-msg">
         <MessageContentDisplay content="hello archive" messageType="user" />
       </ExpandKeyProvider>
     );
     const contentPx = effectiveFontSizePx(screen.getByText("hello archive"));
-    expect(contentPx).toBe(14);
+    expect(contentPx).toBe(15);
 
-    // Content outranks chrome: 14 > 13 > 11.
+    // Content outranks chrome: 15 > 14 > 12.
     expect(contentPx as number).toBeGreaterThan(headerPx as number);
     expect(headerPx as number).toBeGreaterThan(idPx as number);
   });
@@ -889,15 +892,16 @@ describe("AC9 — widened Browse panes and humanized list rows", () => {
     render(<ArchiveBrowser config={CFG} />);
     fireEvent.click(await screen.findByTestId("archive-tab-browse"));
 
-    // Projects pane widened to 240px (w-60), sessions pane to 320px (w-80).
-    const projectsPane = screen.getByText(
-      "settings.archiveHub.browser.projects.title"
-    ).parentElement as HTMLElement;
-    const sessionsPane = screen.getByText(
-      "settings.archiveHub.browser.sessions.title"
-    ).parentElement as HTMLElement;
-    expect((projectsPane.getAttribute("class") ?? "").split(/\s+/)).toContain("w-60");
-    expect((sessionsPane.getAttribute("class") ?? "").split(/\s+/)).toContain("w-80");
+    // Projects pane widened to 240px (md:w-60), sessions pane to 320px
+    // (md:w-80); below `md` the panes stack full-width (webapp-ux-readability).
+    const projectsPane = screen
+      .getByText("settings.archiveHub.browser.projects.title")
+      .closest(".overflow-y-auto") as HTMLElement;
+    const sessionsPane = screen
+      .getByText("settings.archiveHub.browser.sessions.title")
+      .closest(".overflow-y-auto") as HTMLElement;
+    expect((projectsPane.getAttribute("class") ?? "").split(/\s+/)).toContain("md:w-60");
+    expect((sessionsPane.getAttribute("class") ?? "").split(/\s+/)).toContain("md:w-80");
 
     // Open a project so its sessions render.
     fireEvent.click(await screen.findByText("alpha-project"));

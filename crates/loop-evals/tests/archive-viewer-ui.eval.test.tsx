@@ -40,7 +40,11 @@ vi.mock("react-i18next", async () => {
   return {
     ...actual,
     useTranslation: () => ({
-      t: (key: string, fallback?: string) => fallback ?? key,
+      // Second arg is either a fallback string or an i18next options object
+      // (interpolation params) — only a string may be rendered in place of
+      // the key, never the options object.
+      t: (key: string, arg?: unknown) =>
+        typeof arg === "string" ? arg : key,
     }),
   };
 });
