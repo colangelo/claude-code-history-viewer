@@ -358,6 +358,70 @@ async fn aggregates_update_on_reingest() {
     );
 }
 
+/// `ingest_xid` is the journal's dirty-detection watermark: `pending` reports an
+/// entry stale when a session's xid is not visible in the entry's snapshot. So it
+/// must be stamped exactly when a session GAINS messages, and must NOT move when
+/// an already-archived batch is replayed — otherwise every retry would re-dirty
+/// every entry and the distiller would never converge. The stamp rides along with
+/// the session aggregates in one statement, so pin it independently of them.
+#[tokio::test]
+async fn watermark_moves_only_when_a_session_gains_messages() {
+    let hub = spawn().await;
+
+    async fn watermark(hub: &TestHub, session: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT ingest_xid::text::bigint FROM sessions
+             WHERE machine_id = $1 AND session_id = $2",
+        )
+        .bind(hub.machine_id)
+        .bind(session)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap()
+    }
+
+    let b1 = sample_batch(
+        hub.machine_id,
+        "sess-xid",
+        vec![msg(
+            "sess-xid",
+            "k1",
+            Some("u1"),
+            "2026-01-01T00:00:00Z",
+            "first",
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &b1).await;
+    let after_insert = watermark(&hub, "sess-xid").await;
+
+    // Replay the identical batch: every message is already archived, nothing is
+    // touched, so the watermark must stay exactly where it was.
+    post_ingest(&hub, Some(&hub.token), &b1).await;
+    assert_eq!(
+        watermark(&hub, "sess-xid").await,
+        after_insert,
+        "replaying a fully-archived batch must not re-dirty the session"
+    );
+
+    // A genuinely new message in the same session moves it forward again.
+    let b2 = sample_batch(
+        hub.machine_id,
+        "sess-xid",
+        vec![msg(
+            "sess-xid",
+            "k2",
+            Some("u2"),
+            "2026-01-02T00:00:00Z",
+            "second",
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &b2).await;
+    assert!(
+        watermark(&hub, "sess-xid").await > after_insert,
+        "a batch that adds a message advances the watermark"
+    );
+}
+
 /// A project's aggregates roll up its sessions' stored counts rather than
 /// re-counting `messages` (see the note in `ingest.rs`). The case that rollup
 /// could plausibly get wrong is a batch that touches only ONE session of a

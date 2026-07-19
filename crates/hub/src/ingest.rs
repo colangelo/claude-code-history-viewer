@@ -128,17 +128,28 @@ pub async fn ingest(
     let mut tx = state.pool.begin().await?;
 
     // -- machine -----------------------------------------------------------
-    sqlx::query!(
-        r#"
+    // The `DO UPDATE` is guarded: an unchanged machine whose `last_seen` is
+    // already fresh writes no tuple at all. Unguarded, this fired once per
+    // batch — 411,391 updates on a THREE-ROW table since 2026-05-10, which
+    // autovacuumed it 5,380 times (m4m 2026-07-19). The 60 s floor is far
+    // tighter than any staleness threshold `/v1/health` is queried with, so
+    // ingest-freshness alerting is unaffected.
+    // Runtime query (not `query!`): the offline build has no `.sqlx` metadata
+    // for new statements.
+    sqlx::query(
+        r"
         INSERT INTO machines (machine_id, hostname, os, first_seen, last_seen)
         VALUES ($1, $2, $3, now(), now())
         ON CONFLICT (machine_id)
         DO UPDATE SET hostname = excluded.hostname, os = excluded.os, last_seen = now()
-        "#,
-        batch.machine.machine_id,
-        batch.machine.hostname,
-        batch.machine.os,
+        WHERE machines.hostname IS DISTINCT FROM excluded.hostname
+           OR machines.os IS DISTINCT FROM excluded.os
+           OR machines.last_seen < now() - interval '60 seconds'
+        ",
     )
+    .bind(batch.machine.machine_id)
+    .bind(&batch.machine.hostname)
+    .bind(&batch.machine.os)
     .execute(&mut *tx)
     .await?;
 
@@ -203,11 +214,16 @@ pub async fn ingest(
             row.git_root_commit.as_deref(),
             row.git_remote_url.as_deref(),
         );
-        sqlx::query!(
-            "UPDATE projects SET identity_key = $1 WHERE id = $2",
-            identity_key.as_deref(),
-            row.id,
+        // `IS DISTINCT FROM` keeps this a no-op write when the key is unchanged
+        // (the common case: the facts only move when a repo is re-cloned or
+        // gains a remote). Always-set is still self-healing; it just no longer
+        // dirties a `projects` tuple on every batch.
+        sqlx::query(
+            "UPDATE projects SET identity_key = $1
+             WHERE id = $2 AND identity_key IS DISTINCT FROM $1",
         )
+        .bind(identity_key.as_deref())
+        .bind(row.id)
         .execute(&mut *tx)
         .await?;
         project_ids.insert((p.provider.clone(), p.project_path.clone()), row.id);
@@ -269,7 +285,20 @@ pub async fn ingest(
     }
 
     // -- messages ----------------------------------------------------------
-    let mut touched_sessions: HashSet<i64> = HashSet::new();
+    // Resolve every message's session surrogate id first, then insert the whole
+    // batch in ONE multi-row statement. The hub reaches Postgres over the
+    // network (m4m -> pg1), so the old per-message `INSERT` paid a round trip
+    // per row: 3.48M statements since 2026-05-10 (m4m 2026-07-19) for batches
+    // averaging ~8.5 messages, and up to 500 back-to-back round trips for a
+    // full chunk. `UNNEST` collapses a chunk to a single round trip.
+    //
+    // Semantics are unchanged. `ON CONFLICT DO NOTHING` dedups duplicates that
+    // occur WITHIN one statement as well as against archived rows (verified on
+    // PG 18: a 3-row insert carrying one intra-batch duplicate inserts 2, and
+    // replaying it inserts 0), so idempotent re-delivery still holds. Counting
+    // moves from per-row `rows_affected()` to `RETURNING session_id`: the rows
+    // returned are exactly the rows inserted.
+    let mut session_pks: Vec<i64> = Vec::with_capacity(batch.messages.len());
     for m in &batch.messages {
         // Resolve the session surrogate id: from this batch first, then the DB
         // (the message may belong to a session ingested in an earlier batch).
@@ -294,81 +323,166 @@ pub async fn ingest(
             session_ids.insert(key, id);
             id
         };
+        session_pks.push(session_pk);
+    }
 
-        let result = sqlx::query!(
+    // Take ownership so the column vectors move the payload out of `batch`
+    // instead of cloning it — `raw` alone can be most of an 8 MiB chunk.
+    let message_count = batch.messages.len();
+    let messages = std::mem::take(&mut batch.messages);
+
+    let mut c_provider: Vec<String> = Vec::with_capacity(message_count);
+    let mut c_message_key: Vec<String> = Vec::with_capacity(message_count);
+    let mut c_uuid: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_parent_uuid: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_seq: Vec<i32> = Vec::with_capacity(message_count);
+    let mut c_timestamp: Vec<Option<DateTime<Utc>>> = Vec::with_capacity(message_count);
+    let mut c_type: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_role: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_model: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_stop_reason: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_input_tokens: Vec<Option<i64>> = Vec::with_capacity(message_count);
+    let mut c_output_tokens: Vec<Option<i64>> = Vec::with_capacity(message_count);
+    let mut c_cache_creation: Vec<Option<i64>> = Vec::with_capacity(message_count);
+    let mut c_cache_read: Vec<Option<i64>> = Vec::with_capacity(message_count);
+    let mut c_cost_usd: Vec<Option<f64>> = Vec::with_capacity(message_count);
+    let mut c_duration_ms: Vec<Option<i64>> = Vec::with_capacity(message_count);
+    let mut c_is_sidechain: Vec<bool> = Vec::with_capacity(message_count);
+    let mut c_content: Vec<Option<serde_json::Value>> = Vec::with_capacity(message_count);
+    let mut c_raw: Vec<serde_json::Value> = Vec::with_capacity(message_count);
+    let mut c_search_text: Vec<Option<String>> = Vec::with_capacity(message_count);
+
+    for m in messages {
+        c_provider.push(m.provider);
+        c_message_key.push(m.message_key);
+        c_uuid.push(m.uuid);
+        c_parent_uuid.push(m.parent_uuid);
+        c_seq.push(m.seq);
+        c_timestamp.push(parse_ts(m.timestamp.as_deref()));
+        c_type.push(m.message_type);
+        c_role.push(m.role);
+        c_model.push(m.model);
+        c_stop_reason.push(m.stop_reason);
+        c_input_tokens.push(m.input_tokens);
+        c_output_tokens.push(m.output_tokens);
+        c_cache_creation.push(m.cache_creation_tokens);
+        c_cache_read.push(m.cache_read_tokens);
+        c_cost_usd.push(m.cost_usd);
+        c_duration_ms.push(m.duration_ms);
+        c_is_sidechain.push(m.is_sidechain);
+        c_content.push(m.content);
+        c_raw.push(m.raw);
+        c_search_text.push(m.search_text);
+    }
+
+    let mut touched_sessions: HashSet<i64> = HashSet::new();
+    if message_count > 0 {
+        // Runtime query (not `query!`): the offline build has no `.sqlx`
+        // metadata for new statements.
+        let inserted: Vec<i64> = sqlx::query_scalar(
             r#"
             INSERT INTO messages
                 (session_id, machine_id, provider, message_key, uuid, parent_uuid, seq,
                  "timestamp", type, role, model, stop_reason,
                  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
                  cost_usd, duration_ms, is_sidechain, content, raw, search_text)
-            VALUES ($1, $2, $3, $4, $5, $6, $7,
-                    $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16,
-                    $17, $18, $19, $20, $21, $22)
+            SELECT t.session_id, $1, t.provider, t.message_key, t.uuid, t.parent_uuid, t.seq,
+                   t."timestamp", t.type, t.role, t.model, t.stop_reason,
+                   t.input_tokens, t.output_tokens, t.cache_creation_tokens, t.cache_read_tokens,
+                   t.cost_usd, t.duration_ms, t.is_sidechain, t.content, t.raw, t.search_text
+            FROM UNNEST(
+                     $2::bigint[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[],
+                     $8::timestamptz[], $9::text[], $10::text[], $11::text[], $12::text[],
+                     $13::bigint[], $14::bigint[], $15::bigint[], $16::bigint[],
+                     $17::double precision[], $18::bigint[], $19::boolean[],
+                     $20::jsonb[], $21::jsonb[], $22::text[]
+                 ) AS t(session_id, provider, message_key, uuid, parent_uuid, seq,
+                        "timestamp", type, role, model, stop_reason,
+                        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                        cost_usd, duration_ms, is_sidechain, content, raw, search_text)
             ON CONFLICT (session_id, message_key) DO NOTHING
+            RETURNING session_id
             "#,
-            session_pk,
-            token_machine,
-            m.provider,
-            m.message_key,
-            m.uuid,
-            m.parent_uuid,
-            m.seq,
-            parse_ts(m.timestamp.as_deref()),
-            m.message_type,
-            m.role,
-            m.model,
-            m.stop_reason,
-            m.input_tokens,
-            m.output_tokens,
-            m.cache_creation_tokens,
-            m.cache_read_tokens,
-            m.cost_usd,
-            m.duration_ms,
-            m.is_sidechain,
-            m.content,
-            m.raw,
-            m.search_text,
         )
-        .execute(&mut *tx)
+        .bind(token_machine)
+        .bind(&session_pks)
+        .bind(&c_provider)
+        .bind(&c_message_key)
+        .bind(&c_uuid)
+        .bind(&c_parent_uuid)
+        .bind(&c_seq)
+        .bind(&c_timestamp)
+        .bind(&c_type)
+        .bind(&c_role)
+        .bind(&c_model)
+        .bind(&c_stop_reason)
+        .bind(&c_input_tokens)
+        .bind(&c_output_tokens)
+        .bind(&c_cache_creation)
+        .bind(&c_cache_read)
+        .bind(&c_cost_usd)
+        .bind(&c_duration_ms)
+        .bind(&c_is_sidechain)
+        .bind(&c_content)
+        .bind(&c_raw)
+        .bind(&c_search_text)
+        .fetch_all(&mut *tx)
         .await?;
 
-        if result.rows_affected() == 1 {
-            resp.messages_inserted += 1;
-            touched_sessions.insert(session_pk);
-        } else {
-            resp.messages_skipped += 1;
-        }
+        resp.messages_inserted += inserted.len() as u64;
+        resp.messages_skipped += (message_count - inserted.len()) as u64;
+        touched_sessions.extend(inserted);
     }
 
     // -- aggregates --------------------------------------------------------
     // Recompute from the archived rows (cumulative), for every session that
     // gained messages, and then for their projects.
+    // One statement for the whole batch, not one per session, and it carries the
+    // journal watermark too. Previously a touched session was rewritten THREE
+    // times per batch (upsert, aggregates, watermark) across N+1 round trips;
+    // folding the watermark in here makes it two, which is the bulk of the
+    // 473,952 `sessions` updates on 3,810 rows infra measured (m4m 2026-07-19).
+    //
+    // The watermark keeps its old semantics: only sessions that actually gained
+    // messages are stamped (`touched_sessions`), so replaying an already-fully-
+    // archived batch stays a no-op for journal purposes — the session upsert
+    // above may bump `updated_at`, but `ingest_xid` (the value pending compares)
+    // stays put. Dirtiness is transaction-VISIBILITY, not wall-clock: pending
+    // checks `NOT pg_visible_in_snapshot(ingest_xid, generated_snapshot)`, so an
+    // ingest that commits after an entry's snapshot was taken is dirty by
+    // construction, however the timestamps interleave. `updated_at` is bumped
+    // alongside for human observability only.
+    //
+    // Every touched session gained at least one message, so the GROUP BY yields
+    // a row for each and all of them are updated. Runtime query (not `query!`):
+    // the offline build has no `.sqlx` metadata for new statements.
     let mut touched_projects: HashSet<i64> = HashSet::new();
-    for session_pk in &touched_sessions {
-        let row = sqlx::query!(
+    if !touched_sessions.is_empty() {
+        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
+        let project_ids: Vec<Option<i64>> = sqlx::query_scalar(
             r#"
             UPDATE sessions s
             SET message_count = sub.cnt,
                 first_message_time = sub.first_ts,
-                last_message_time = sub.last_ts
+                last_message_time = sub.last_ts,
+                updated_at = clock_timestamp(),
+                ingest_xid = pg_current_xact_id()
             FROM (
-                SELECT count(*) AS cnt,
-                       min("timestamp") AS first_ts,
-                       max("timestamp") AS last_ts
-                FROM messages WHERE session_id = $1
+                SELECT session_id,
+                       count(*)          AS cnt,
+                       min("timestamp")  AS first_ts,
+                       max("timestamp")  AS last_ts
+                FROM messages WHERE session_id = ANY($1)
+                GROUP BY session_id
             ) sub
-            WHERE s.id = $1
+            WHERE s.id = sub.session_id
             RETURNING s.project_id
             "#,
-            session_pk,
         )
-        .fetch_one(&mut *tx)
+        .bind(&touched)
+        .fetch_all(&mut *tx)
         .await?;
-        if let Some(pid) = row.project_id {
-            touched_projects.insert(pid);
-        }
+        touched_projects.extend(project_ids.into_iter().flatten());
     }
     // A project's message_count rolls up its sessions' already-exact counts
     // instead of re-counting the project's messages. The old form
@@ -383,39 +497,20 @@ pub async fn ingest(
     // and an untouched session's stored count was exact when it was last
     // touched. Runtime query (not `query!`): the offline build has no `.sqlx`
     // metadata for new statements.
-    for project_pk in &touched_projects {
+    if !touched_projects.is_empty() {
+        let touched: Vec<i64> = touched_projects.iter().copied().collect();
         sqlx::query(
             "UPDATE projects p
              SET session_count = sub.session_count,
                  message_count = sub.message_count
              FROM (
-                 SELECT count(*)::int                        AS session_count,
+                 SELECT project_id,
+                        count(*)::int                        AS session_count,
                         COALESCE(sum(message_count), 0)::int AS message_count
-                 FROM sessions WHERE project_id = $1
+                 FROM sessions WHERE project_id = ANY($1)
+                 GROUP BY project_id
              ) sub
-             WHERE p.id = $1",
-        )
-        .bind(project_pk)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    // Journal dirty-detection watermark. Only sessions that actually gained
-    // messages are stamped (`touched_sessions`), so replaying an already-fully-
-    // archived batch is a no-op for journal purposes: the session upsert above
-    // may bump `updated_at`, but `ingest_xid` — the value pending compares —
-    // stays put. Dirtiness is transaction-VISIBILITY, not wall-clock: pending
-    // checks `NOT pg_visible_in_snapshot(ingest_xid, generated_snapshot)`, so
-    // an ingest that commits after an entry's snapshot was taken is dirty by
-    // construction, however the timestamps interleave. `updated_at` is bumped
-    // alongside for human observability only. Runtime query (not `query!`): the
-    // offline build has no `.sqlx` metadata for new statements.
-    if !touched_sessions.is_empty() {
-        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
-        sqlx::query(
-            "UPDATE sessions
-             SET updated_at = clock_timestamp(), ingest_xid = pg_current_xact_id()
-             WHERE id = ANY($1)",
+             WHERE p.id = sub.project_id",
         )
         .bind(&touched)
         .execute(&mut *tx)
@@ -424,7 +519,7 @@ pub async fn ingest(
 
     tx.commit().await?;
     tracing::info!(
-        messages = batch.messages.len(),
+        messages = message_count,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "ingest done"
     );
