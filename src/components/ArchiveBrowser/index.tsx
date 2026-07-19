@@ -971,7 +971,7 @@ export function ArchiveBrowser({
                       data-testid="project-group"
                       onClick={() => handleSelectGroup(group)}
                       className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
-                        isSelected ? "bg-accent/10" : ""
+                        isSelected ? "bg-accent/15 dark:bg-accent/25" : ""
                       }`}
                       title={group.paths.join("\n")}
                     >
@@ -989,7 +989,7 @@ export function ArchiveBrowser({
                         {group.providers.map((provider) => (
                           <span
                             key={provider}
-                            className="ml-1.5 rounded bg-muted px-1 py-px"
+                            className="ml-1.5 rounded border border-border bg-muted/50 px-1 py-px text-foreground/75"
                           >
                             {getProviderLabel(t, provider)}
                           </span>
@@ -1034,7 +1034,7 @@ export function ArchiveBrowser({
                                 )}
                                 {alias && (
                                   <>
-                                    <span className="shrink-0 rounded bg-muted px-1 py-px">
+                                    <span className="shrink-0 rounded border border-border bg-muted/50 px-1 py-px text-foreground/75">
                                       {t("settings.archiveHub.identity.linked")}
                                     </span>
                                     <button
@@ -1142,7 +1142,7 @@ export function ArchiveBrowser({
                     className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
                       openSession?.ref === session.id ||
                       openSession?.ref === session.session_id
-                        ? "bg-accent/10"
+                        ? "bg-accent/15 dark:bg-accent/25"
                         : ""
                     }`}
                   >

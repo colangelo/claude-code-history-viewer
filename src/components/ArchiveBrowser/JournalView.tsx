@@ -321,7 +321,7 @@ export function JournalView({
                   onClick={() => setDate(d)}
                   className={cn(
                     "w-full text-left rounded px-2 py-1 text-px13 hover:bg-muted",
-                    date === d && "bg-accent/10 font-medium"
+                    date === d && "bg-accent/15 dark:bg-accent/25 text-accent font-medium"
                   )}
                 >
                   {dayHeader(d)}
@@ -377,8 +377,10 @@ export function JournalView({
               key={d}
               type="button"
               onClick={() => setDate(d)}
-              className={`rounded-full border border-border px-2.5 py-1 text-px12 hover:bg-muted ${
-                date === d ? "bg-accent/10" : ""
+              className={`rounded-full border px-2.5 py-1 text-px12 hover:bg-muted ${
+                date === d
+                  ? "border-accent/60 bg-accent/15 text-accent dark:bg-accent/25"
+                  : "border-border"
               }`}
             >
               {pillLabel(d)}

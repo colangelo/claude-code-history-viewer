@@ -125,7 +125,7 @@ export function JournalEntryCard({
           {entry.topics.map((topic) => (
             <span
               key={topic}
-              className="rounded-full bg-muted px-2 py-0.5 text-px12 text-muted-foreground"
+              className="rounded-full border border-border bg-muted/50 px-2 py-0.5 text-px12 text-foreground/75"
             >
               {topic}
             </span>
