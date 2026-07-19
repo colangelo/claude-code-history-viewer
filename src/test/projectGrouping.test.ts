@@ -144,6 +144,52 @@ describe("groupProjects", () => {
     expect(groups).toHaveLength(0);
   });
 
+  it("folds NULL-identity rows into the identity that owns their path", () => {
+    // Live-hub regression (2026-07-19): fingerprinted rows + not-yet-
+    // refingerprinted rows of the SAME path rendered as two identical
+    // "home-network — Infra" options.
+    const groups = groupProjects([
+      row({ identity_key: KEY, project_path: "/sync/Infra/home-network" }),
+      row({
+        project_path: "/sync/Infra/home-network",
+        provider: "codex",
+        identity_key: null,
+      }),
+      row({
+        project_path: "/sync/Infra/home-network",
+        machine_hostname: "mbm5",
+        identity_key: null,
+      }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.identityKey).toBe(KEY);
+    expect(groups[0]!.providers).toEqual(["claude", "codex"]);
+    expect(groups[0]!.machines).toEqual(["m4m", "mbm5"]);
+  });
+
+  it("leaves a path contested by two identities as its own group", () => {
+    const groups = groupProjects([
+      row({ identity_key: KEY, project_path: "/a/x" }),
+      row({ identity_key: FORK_KEY, project_path: "/a/x", provider: "codex" }),
+      row({ identity_key: null, project_path: "/a/x", provider: "gemini" }),
+    ]);
+    // Two identity groups plus the unresolvable NULL row as a path group.
+    expect(groups).toHaveLength(3);
+  });
+
+  it("escalates the disambiguator until colliding labels differ", () => {
+    // Same basename AND same parent — one segment cannot distinguish them.
+    const groups = groupProjects([
+      row({ identity_key: KEY, project_path: "/home/ac/_sync/dev/foo" }),
+      row({ identity_key: FORK_KEY, project_path: "/home/ac/other/dev/foo" }),
+    ]);
+    expect(groups).toHaveLength(2);
+    const labels = groups
+      .map((g) => `${g.displayName} — ${g.disambiguator}`)
+      .sort();
+    expect(labels).toEqual(["foo — _sync/dev", "foo — other/dev"]);
+  });
+
   it("sorts groups by most recent activity", () => {
     const groups = groupProjects([
       row({ project_path: "/dev/older", last_modified: "2026-07-01T00:00:00Z" }),
