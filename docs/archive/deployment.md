@@ -361,6 +361,56 @@ retroactively — link them from the webapp (orphan-path suggestions on the
 identity's member panel create a reversible alias; nothing rewrites archived
 rows).
 
+### Rollout status (2026-07-19)
+
+Steps 1–3 are **done and verified on m4m** (hub + daemon swapped, migration
+`0003` applied, `/v1/identities` 200, v0.10.0 in the served entry chunk).
+Step 2 on **ac-mbm5 is deferred** — the attended window closed before the swap
+(infra relay, thread `8df6880`). No urgency: the Jul-11 daemon keeps working
+against the new hub; the only consequence is ac-mbm5 project grouping /
+`identity_key` lagging until it updates.
+
+ac-mbm5 state as of the deferral (infra recon — no need to redo it): arm64,
+macOS 26.5.2; daemon `~/.local/bin/cchv-sync-daemon` (Jul 11 build, 9.6M);
+launchd label `dev.cchv.daemon` running, plist
+`~/Library/LaunchAgents/dev.cchv.daemon.plist`; `cchv-launch` present at
+`~/.local/bin/cchv-launch`; `~/.config/cchv/staging/` does **not** exist.
+
+### Staging protocol for daemon-affecting releases
+
+A staged binary is inert until swapped, so **stage every machine when the
+release is cut**, not when someone happens to be at the keyboard — otherwise a
+Mac→Mac ssh (1Password Touch-ID) round-trip burns an attended window. Cut the
+release, stage, and relay the swap incantation with it; then any attended
+session on either Mac executes the swap immediately.
+
+Stage (from the release checkout, arm64 → arm64):
+
+```bash
+cargo build --release -p sync-daemon
+REV=$(git rev-parse --short HEAD)
+ssh ac-mbm5 'mkdir -p ~/.config/cchv/staging'
+scp target/release/sync-daemon "ac-mbm5:~/.config/cchv/staging/cchv-sync-daemon-$REV"
+```
+
+Swap (attended, on the target machine — same codesign-aware shape as §2b:
+rm-first, re-sign, `bootout`+`bootstrap`, never `kickstart -k`):
+
+```bash
+REV=<rev>
+cp ~/.local/bin/cchv-sync-daemon ~/.local/bin/cchv-sync-daemon.bak.$(date +%Y%m%d)
+launchctl bootout gui/$(id -u)/dev.cchv.daemon 2>/dev/null || true
+rm -f ~/.local/bin/cchv-sync-daemon
+cp ~/.config/cchv/staging/cchv-sync-daemon-$REV ~/.local/bin/cchv-sync-daemon
+chmod 755 ~/.local/bin/cchv-sync-daemon
+codesign --force --sign - ~/.local/bin/cchv-sync-daemon
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.daemon.plist
+```
+
+Verify from any tailnet host: the machine's rows gain `identity_key` after the
+next scan pass —
+`curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/projects" | jq '[.[] | select(.identity_key != null)] | length'`.
+
 ## 4. Verify end-to-end
 
 ```bash
