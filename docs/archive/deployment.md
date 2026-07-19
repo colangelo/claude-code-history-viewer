@@ -186,6 +186,53 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.hub.plist
 Verify: `curl -s https://m4m.cat-bluegill.ts.net:8788/v1/healthz` → `{"status":"ok",…}`
 and the process is running clean (fresh pid, no respawn churn).
 
+## 2c. House deployment: swapping the m4m webapp (static-only)
+
+A webapp-only bump (`dist-archive/` contents, no Rust change) is **much cheaper
+than §2b**: the hub serves `static_dir` from disk per request, so there is **no
+codesign step, no `launchctl` bootout/bootstrap, and no restart** — the next
+request picks up the new files. Do not carry the binary-swap ceremony over to a
+static bump.
+
+Validated on m4m 2026-07-19 (`cchv-v0.10.3`, thread 3fe4b63f):
+
+```bash
+cd ~/.config/cchv
+STAMP=$(date +%Y%m%d-%H%M)
+mv webapp staging/webapp-preswap-$STAMP-<oldversion>   # back up by moving, not copying
+cp -R staging/webapp-<newversion> webapp
+```
+
+Rollback is the same two moves in reverse (and likewise needs no restart).
+
+> **Provenance check: compare extracted trees, never tarball checksums.**
+> To confirm a staged bundle matches the GitHub Release asset, download
+> `cchv-webapp.tar.gz` for the tag, extract it, and `diff -r` the two trees. The
+> two `.tar.gz` **sha256s will not match even for byte-identical contents** —
+> gzip embeds metadata (mtime/name), so the archives differ while the trees are
+> identical (observed on v0.10.3: `04f0397a` released vs `c800f11d` staged, trees
+> `diff -r`-clean). This is the concrete form of the "tarball checksum is not
+> reproducible" rule in §2's verify note.
+
+Post-swap verification (no restart involved, so all of it is client-visible):
+
+- the served entry chunks (`assets/archive-<hash>.js` / `.css`) equal the staged
+  bundle's — these are the authoritative identity of the deploy
+- the version chip string (`v0.10.3`) appears in the archive chunk
+- a string unique to the new release is present (e.g. a new i18n key in
+  `assets/i18n-en-<hash>.js`)
+- `/v1/healthz` 200, `/v1/healthz/ingest` 200, and the HTTPS front (`:8788`) 200
+- the asset-list diff vs the backup touches only the chunks the change should
+  touch — a client-only patch that moves other chunks is a red flag
+
+Visual/layout changes cannot be verified this way; a rendering claim needs a
+human at a real window. Say so explicitly instead of marking it green.
+
+> **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
+> hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
+> tailnet ingress via `tailscale serve` on `:8788`. A failing loopback `:8787`
+> probe is therefore *not* an outage.
+
 ## 3. Sync daemon (on each machine)
 
 Build it:
