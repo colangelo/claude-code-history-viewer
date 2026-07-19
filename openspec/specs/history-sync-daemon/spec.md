@@ -74,6 +74,22 @@ The daemon SHALL deliver records to the hub in bounded batches and retry failed 
 - **WHEN** an ingest POST fails transiently and then succeeds on retry
 - **THEN** the records are stored exactly once and the checkpoint advances only after the successful acknowledgement
 
+### Requirement: Chronically failing sessions back off instead of retrying at full cost
+
+A session whose delivery fails on every pass MUST NOT cost the full retry ladder on every pass. The daemon SHALL record a per-file consecutive-failure streak in the checkpoint; after a small grace window of immediate retries it SHALL defer that session on an exponentially widening schedule up to a daily ceiling, count the deferral separately from errors, and log the transition into backoff. Deferral is never abandonment: the session is still retried on the widened schedule, any change to the file's size or mtime resets the streak and forces an immediate attempt, and a successful delivery clears the streak entirely.
+
+The daemon SHALL also make a failing delivery diagnosable: every retry warning and final error MUST name the session, its payload size, and the classified transport cause (timeout / connect / body / decode) with the error's full `source` chain — a bare "error sending request" is not actionable. The per-request timeout SHALL scale with payload size rather than being flat, so that the largest sessions are not the ones that permanently fail.
+
+#### Scenario: A session failing every pass stops dominating the pass
+
+- **WHEN** the same session fails delivery on more consecutive passes than the grace window allows
+- **THEN** subsequent passes skip it without parsing or attempting delivery until its backoff window elapses, and it is reported as deferred rather than re-erroring
+
+#### Scenario: Editing a deferred session forces an immediate retry
+
+- **WHEN** a deferred session's file changes size or mtime
+- **THEN** the next pass attempts delivery immediately and the failure streak restarts from zero
+
 ### Requirement: Cumulative archive semantics
 
 The daemon SHALL treat the archive as cumulative. Deletion, truncation, or rotation of a local source file MUST NOT cause the daemon to delete or tombstone records previously delivered to the hub.
