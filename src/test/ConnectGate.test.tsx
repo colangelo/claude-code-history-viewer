@@ -144,6 +144,30 @@ describe("ConnectGate", () => {
     );
   });
 
+  it("shows the build version in both the connected header and the form", async () => {
+    // Connected state (stored config).
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ v: 1, url: "http://stored:8787", token: "tok" })
+    );
+    const { unmount } = render(<ConnectGate />);
+    expect(screen.getByTestId("app-version").textContent).toMatch(
+      /^v\d+\.\d+\.\d+/
+    );
+    unmount();
+
+    // Disconnected form.
+    localStorage.clear();
+    mockHubApi.listProjects.mockRejectedValueOnce(new Error("401"));
+    render(<ConnectGate />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
+    );
+    expect(screen.getByTestId("app-version").textContent).toMatch(
+      /^v\d+\.\d+\.\d+/
+    );
+  });
+
   it("ignores malformed or wrong-version stored payloads", () => {
     localStorage.setItem(STORAGE_KEY, "not json");
     expect(loadStoredHubConfig()).toBeNull();
