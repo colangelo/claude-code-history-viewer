@@ -141,5 +141,9 @@
   "archive.web.disconnect": "切断",
   "archive.web.fontSmaller": "文字サイズを小さく",
   "archive.web.fontLarger": "文字サイズを大きく",
-  "archive.web.fontReset": "文字サイズをリセット"
+  "archive.web.fontReset": "文字サイズをリセット",
+  "archive.web.themeToggle": "テーマ切り替え",
+  "archive.web.themeLight": "ライト",
+  "archive.web.themeDark": "ダーク",
+  "archive.web.themeSystem": "システム"
 }

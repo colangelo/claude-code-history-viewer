@@ -29,6 +29,11 @@ vi.mock("../components/ArchiveBrowser/index", () => ({
   ),
 }));
 
+// ThemeToggle needs a ThemeProvider; the gate's own behavior doesn't.
+vi.mock("../components/ArchiveBrowser/ThemeToggle", () => ({
+  ThemeToggle: () => null,
+}));
+
 const STORAGE_KEY = "cchv.archiveWeb.hubConfig";
 
 function fillAndSubmit(url: string, token: string) {

@@ -141,5 +141,9 @@
   "archive.web.disconnect": "Disconnect",
   "archive.web.fontSmaller": "Decrease text size",
   "archive.web.fontLarger": "Increase text size",
-  "archive.web.fontReset": "Reset text size"
+  "archive.web.fontReset": "Reset text size",
+  "archive.web.themeToggle": "Toggle theme",
+  "archive.web.themeLight": "Light",
+  "archive.web.themeDark": "Dark",
+  "archive.web.themeSystem": "System"
 }

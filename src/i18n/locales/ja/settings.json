@@ -562,6 +562,7 @@
   "settings.archiveHub.journal.loading": "ジャーナルを読み込み中…",
   "settings.archiveHub.journal.error": "ジャーナルの読み込みに失敗しました",
   "settings.archiveHub.journal.empty": "この範囲にジャーナルはありません。古い履歴はまだ要約されていない可能性があります。",
+  "settings.archiveHub.journal.showLatest": "最新のエントリを表示",
   "settings.archiveHub.journal.relative.today": "今日",
   "settings.archiveHub.journal.relative.yesterday": "昨日",
   "settings.archiveHub.journal.sessionCount": "{{count}} セッション",

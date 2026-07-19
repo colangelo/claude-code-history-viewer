@@ -27,6 +27,7 @@ import {
 } from "../../services/hubApi";
 import { JournalEntryCard } from "./JournalEntryCard";
 import { dayLabel, shortDayLabel } from "@/utils/journalFormat";
+import type { SessionOpenContext } from "./index";
 
 /** Hub's max page size (`crates/hub/src/pagination.rs::MAX_LIMIT`). */
 const PAGE_SIZE = 200;
@@ -38,7 +39,13 @@ interface JournalViewProps {
   /** Bumped whenever an anchor is (re)requested, even to the same date. */
   anchorNonce: number;
   /** Open a session in the Browse view (reuses the existing message path). */
-  onOpenSession: (sessionId: number, label: string) => void;
+  onOpenSession: (
+    sessionId: number,
+    label: string,
+    context?: SessionOpenContext
+  ) => void;
+  /** Notifies the parent of the current date filter (hash routing). */
+  onDateChange?: (date: string) => void;
 }
 
 interface DayGroup {
@@ -51,6 +58,7 @@ export function JournalView({
   anchorDate,
   anchorNonce,
   onOpenSession,
+  onDateChange,
 }: JournalViewProps) {
   const { t } = useTranslation();
 
@@ -64,6 +72,14 @@ export function JournalView({
   // Union of every project path seen, so the filter options never shrink when
   // the feed is narrowed to a single project.
   const [projectOptions, setProjectOptions] = useState<string[]>([]);
+  // Union of every entry date seen: the quick-nav pills must survive a date
+  // jump (a filtered fetch returns only one day) so the user can hop back.
+  const [knownDates, setKnownDates] = useState<string[]>([]);
+
+  // Mirror the date filter to the parent (hash routing).
+  useEffect(() => {
+    onDateChange?.(date);
+  }, [date, onDateChange]);
 
   const generationRef = useRef(0);
 
@@ -109,6 +125,22 @@ export function JournalView({
     });
   }, []);
 
+  const mergeKnownDates = useCallback((list: JournalEntry[]) => {
+    setKnownDates((prev) => {
+      const seen = new Set(prev);
+      let changed = false;
+      for (const e of list) {
+        if (!seen.has(e.entry_date)) {
+          seen.add(e.entry_date);
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      // Newest first, capped — the pills are quick nav, not a calendar.
+      return Array.from(seen).sort().reverse().slice(0, 21);
+    });
+  }, []);
+
   // Jump to an anchor date requested from a journal search hit. `anchorNonce`
   // is a dep so a repeated jump to the same date still re-triggers.
   useEffect(() => {
@@ -133,6 +165,7 @@ export function JournalView({
         setEntries(list);
         setHasMore(list.length === PAGE_SIZE);
         mergeProjectOptions(list);
+        mergeKnownDates(list);
       })
       .catch((err) => {
         if (generationRef.current !== generation) return;
@@ -144,7 +177,7 @@ export function JournalView({
         if (generationRef.current !== generation) return;
         setIsLoading(false);
       });
-  }, [config, date, projectFilter, mergeProjectOptions]);
+  }, [config, date, projectFilter, mergeProjectOptions, mergeKnownDates]);
 
   const handleLoadMore = useCallback(() => {
     if (isLoading) return;
@@ -163,6 +196,7 @@ export function JournalView({
         setEntries((prev) => [...prev, ...list]);
         setHasMore(list.length === PAGE_SIZE);
         mergeProjectOptions(list);
+        mergeKnownDates(list);
       })
       .catch((err) => {
         if (generationRef.current !== generation) return;
@@ -172,7 +206,7 @@ export function JournalView({
         if (generationRef.current !== generation) return;
         setIsLoading(false);
       });
-  }, [config, date, projectFilter, entries.length, isLoading, mergeProjectOptions]);
+  }, [config, date, projectFilter, entries.length, isLoading, mergeProjectOptions, mergeKnownDates]);
 
   const groups = useMemo<DayGroup[]>(() => {
     const map = new Map<string, JournalEntry[]>();
@@ -187,8 +221,33 @@ export function JournalView({
     }));
   }, [entries]);
 
-  // Distinct loaded dates for quick-nav pills (already newest-first).
-  const quickNavDates = useMemo(() => groups.map((g) => g.date), [groups]);
+  // Quick-nav pills come from the accumulated date union (`knownDates`), not
+  // the currently-loaded groups — a date jump must not collapse them.
+  const quickNavDates = knownDates;
+
+  // Filter options labelled by basename (Windows-tolerant split), with the
+  // parent segment appended only when basenames collide; sorted by label.
+  const filterOptions = useMemo(() => {
+    const basename = (p: string) =>
+      p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+    const counts = new Map<string, number>();
+    for (const p of projectOptions) {
+      const b = basename(p);
+      counts.set(b, (counts.get(b) ?? 0) + 1);
+    }
+    return projectOptions
+      .map((p) => {
+        const parts = p.split(/[\\/]/).filter(Boolean);
+        const b = parts.pop() ?? p;
+        const parent = parts.pop();
+        return {
+          value: p,
+          label:
+            (counts.get(b) ?? 0) > 1 && parent ? `${b} — ${parent}` : b,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [projectOptions]);
 
   const dayHeader = (dateStr: string): string => {
     const label = dayLabel(dateStr);
@@ -235,9 +294,9 @@ export function JournalView({
           <option value="">
             {t("settings.archiveHub.journal.filterAll")}
           </option>
-          {projectOptions.map((path) => (
-            <option key={path} value={path}>
-              {path}
+          {filterOptions.map((option) => (
+            <option key={option.value} value={option.value} title={option.value}>
+              {option.label}
             </option>
           ))}
         </select>
@@ -276,12 +335,21 @@ export function JournalView({
         )}
 
         {!isLoading && !error && entries.length === 0 && (
-          <p
-            data-testid="journal-empty"
-            className="text-px14 text-muted-foreground"
-          >
-            {t("settings.archiveHub.journal.empty")}
-          </p>
+          <div data-testid="journal-empty" className="space-y-2">
+            <p className="text-px14 text-muted-foreground">
+              {t("settings.archiveHub.journal.empty")}
+            </p>
+            {date && (
+              <button
+                type="button"
+                data-testid="journal-show-latest"
+                onClick={() => setDate("")}
+                className="rounded-md border border-border px-3 py-1.5 text-px13 hover:bg-muted"
+              >
+                {t("settings.archiveHub.journal.showLatest")}
+              </button>
+            )}
+          </div>
         )}
 
         {groups.map((group) => (

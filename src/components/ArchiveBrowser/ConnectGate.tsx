@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArchiveBrowser } from "./index";
 import { FontScaleControl } from "./FontScaleControl";
+import { ThemeToggle } from "./ThemeToggle";
 import { hubApi, type HubConfig } from "../../services/hubApi";
 import {
   clearStoredHubConfig,
@@ -137,6 +138,7 @@ export function ConnectGate() {
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <ThemeToggle />
             <FontScaleControl />
             <Button variant="outline" size="sm" onClick={handleDisconnect}>
               {t("archive.web.disconnect")}
@@ -144,7 +146,7 @@ export function ConnectGate() {
           </div>
         </div>
         <div className="flex-1 min-h-0">
-          <ArchiveBrowser config={config} />
+          <ArchiveBrowser config={config} enableHashRoutes />
         </div>
       </div>
     );

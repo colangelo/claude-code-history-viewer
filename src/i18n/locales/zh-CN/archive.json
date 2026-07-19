@@ -141,5 +141,9 @@
   "archive.web.disconnect": "断开连接",
   "archive.web.fontSmaller": "减小字号",
   "archive.web.fontLarger": "增大字号",
-  "archive.web.fontReset": "重置字号"
+  "archive.web.fontReset": "重置字号",
+  "archive.web.themeToggle": "切换主题",
+  "archive.web.themeLight": "浅色",
+  "archive.web.themeDark": "深色",
+  "archive.web.themeSystem": "跟随系统"
 }
