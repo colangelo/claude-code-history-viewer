@@ -756,9 +756,11 @@ export function ArchiveBrowser({
           aria-label={t("settings.archiveHub.browser.searchPlaceholder")}
           className="flex-1 h-9 rounded-md border border-border bg-background px-2.5 text-px14"
         />
+        {/* The one primary verb in the archive: solid accent, so it is never
+            mistaken for the neutral utilities sharing the toolbar. */}
         <button
           type="submit"
-          className="h-9 shrink-0 rounded-md border border-border px-3 text-px14 hover:bg-muted"
+          className="h-9 shrink-0 rounded-md bg-accent px-3 text-px14 font-medium text-accent-foreground transition-colors hover:bg-accent/90"
         >
           {t("settings.archiveHub.browser.searchButton")}
         </button>
@@ -906,10 +908,13 @@ export function ArchiveBrowser({
           title={t("settings.archiveHub.identity.showWorktrees")}
           onClick={handleToggleWorktrees}
           className={cn(
-            "ml-auto flex items-center gap-1 rounded-md border px-2 py-1 text-px12",
+            "ml-auto flex items-center gap-1 rounded-md border px-2 py-1 text-px12 transition-colors",
+            // On/off used to differ only by a strikethrough. The accent tint
+            // makes the live state legible at a glance, in the same language
+            // the tabs and the Link buttons already speak.
             showWorktrees
-              ? "border-border text-foreground"
-              : "border-border/50 text-muted-foreground line-through"
+              ? "border-accent/30 bg-accent/10 text-accent font-medium"
+              : "border-border/50 text-muted-foreground line-through hover:bg-muted"
           )}
         >
           <GitBranch className="w-3 h-3" aria-hidden="true" />

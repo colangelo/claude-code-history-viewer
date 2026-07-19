@@ -149,7 +149,15 @@ export function ConnectGate() {
           <div className="flex items-center gap-2 shrink-0">
             <ThemeToggle />
             <FontScaleControl />
-            <Button variant="outline" size="sm" onClick={handleDisconnect}>
+            {/* The one exit action: neutral at rest so it never nags, but it
+                drops the stored hub config, so the hover states it. Same
+                language as Unlink in the Locations block. */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDisconnect}
+              className="text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            >
               {t("archive.web.disconnect")}
             </Button>
           </div>
