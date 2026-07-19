@@ -75,4 +75,4 @@ machine changes — and distinguishes true forks.
 - **Not touched**: distiller (`scripts/cchv-distill.py`), journal write path,
   desktop/Tauri surface, upstream-portable parser code in `history-core`
   (fingerprinting lives in the fork-owned daemon crate).
-- **Version**: ships as `cchv-v0.9.0` (minor: new feature + migration).
+- **Version**: ships as `cchv-v0.10.0` (minor: new feature + migration).
