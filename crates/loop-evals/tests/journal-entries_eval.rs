@@ -159,6 +159,7 @@ async fn ingest_session(hub: &TestHub, session_id: &str, ts: &str, text: &str) -
             session_count: Some(1),
             message_count: Some(1),
             last_modified: None,
+            ..Default::default()
         }],
         sessions: vec![IngestSession {
             provider: "claude".into(),

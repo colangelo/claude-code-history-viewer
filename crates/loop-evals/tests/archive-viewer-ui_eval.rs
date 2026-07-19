@@ -89,6 +89,7 @@ fn sample_batch(hub: &TestHub, session: &str) -> IngestBatch {
             session_count: Some(1),
             message_count: Some(1),
             last_modified: None,
+            ..Default::default()
         }],
         sessions: vec![IngestSession {
             provider: "claude".into(),

@@ -38,7 +38,7 @@ pub struct MachineInfo {
 }
 
 /// A provider project/workspace, keyed by (provider, `project_path`) on this machine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IngestProject {
     pub provider: String,
     pub project_path: String,
