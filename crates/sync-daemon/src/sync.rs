@@ -263,12 +263,14 @@ async fn deliver_session<C: HubClient>(
         return match ingest_with_deadline(client, &batch, deadline).await {
             Ok(_) => true,
             Err(e) => {
-                tracing::error!(error = %e, "ingest failed");
+                log_ingest_failure(session, &batch, 0, 1, &e);
                 false
             }
         };
     }
-    for chunk in chunk_by_count_and_bytes(messages, batch_max, max_batch_bytes()) {
+    let chunks = chunk_by_count_and_bytes(messages, batch_max, max_batch_bytes());
+    let chunk_total = chunks.len();
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
         let batch = IngestBatch {
             machine: machine.clone(),
             projects: vec![project.clone()],
@@ -278,12 +280,37 @@ async fn deliver_session<C: HubClient>(
         match ingest_with_deadline(client, &batch, deadline).await {
             Ok(_) => stats.messages_delivered += chunk.len(),
             Err(e) => {
-                tracing::error!(error = %e, "ingest failed");
+                log_ingest_failure(session, &batch, chunk_index, chunk_total, &e);
                 return false;
             }
         }
     }
     true
+}
+
+/// Name the session that failed. Without these fields a failing session is
+/// invisible in the log — the operator sees only "ingest failed" and cannot
+/// tell *which* session (or how big its payload was) is wedging the backlog.
+/// The re-serialization here only happens on the failure path.
+fn log_ingest_failure(
+    session: &archive_protocol::IngestSession,
+    batch: &IngestBatch,
+    chunk_index: usize,
+    chunk_total: usize,
+    error: &anyhow::Error,
+) {
+    let payload_bytes = serde_json::to_vec(batch).map(|v| v.len()).unwrap_or(0);
+    tracing::error!(
+        error = %error,
+        provider = %session.provider,
+        session_id = %session.session_id,
+        file = session.file_path.as_deref().unwrap_or(""),
+        chunk = chunk_index + 1,
+        chunks = chunk_total,
+        messages = batch.messages.len(),
+        payload_bytes,
+        "ingest failed"
+    );
 }
 
 #[cfg(test)]
