@@ -358,6 +358,119 @@ async fn aggregates_update_on_reingest() {
     );
 }
 
+/// Session aggregates are applied as the batch's DELTA (`message_count + n`,
+/// `LEAST`/`GREATEST` on the bounds) instead of being recomputed from
+/// `messages` — see the note in `ingest.rs`. A delta gets the cumulative answer
+/// wrong in exactly three ways, so pin all three: it must count only the rows
+/// actually inserted (not the rows offered), it must let the bounds widen
+/// BACKWARDS when a batch carries an older message than anything archived, and
+/// a timestamp-less message must not clobber the bounds.
+#[tokio::test]
+async fn session_aggregates_apply_the_batch_delta() {
+    let hub = spawn().await;
+
+    /// `(message_count, first_message_time, last_message_time)`
+    async fn agg(
+        hub: &TestHub,
+    ) -> (
+        i32,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        sqlx::query_as(
+            "SELECT message_count, first_message_time, last_message_time FROM sessions
+             WHERE machine_id = $1 AND session_id = 'sess-delta'",
+        )
+        .bind(hub.machine_id)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap()
+    }
+
+    let b1 = sample_batch(
+        hub.machine_id,
+        "sess-delta",
+        vec![
+            msg(
+                "sess-delta",
+                "k1",
+                Some("u1"),
+                "2026-01-05T00:00:00Z",
+                "mid",
+            ),
+            msg(
+                "sess-delta",
+                "k2",
+                Some("u2"),
+                "2026-01-10T00:00:00Z",
+                "late",
+            ),
+        ],
+    );
+    post_ingest(&hub, Some(&hub.token), &b1).await;
+    let (count, first, last) = agg(&hub).await;
+    assert_eq!(count, 2);
+    assert_eq!(first.unwrap().to_rfc3339(), "2026-01-05T00:00:00+00:00");
+    assert_eq!(last.unwrap().to_rfc3339(), "2026-01-10T00:00:00+00:00");
+
+    // A batch carrying one genuinely new (and OLDER) message plus a replay of an
+    // already-archived one: the conflicting row must not be counted, and the
+    // lower bound must move backwards.
+    let b2 = sample_batch(
+        hub.machine_id,
+        "sess-delta",
+        vec![
+            msg(
+                "sess-delta",
+                "k0",
+                Some("u0"),
+                "2026-01-01T00:00:00Z",
+                "early",
+            ),
+            msg(
+                "sess-delta",
+                "k1",
+                Some("u1"),
+                "2026-01-05T00:00:00Z",
+                "mid",
+            ),
+        ],
+    );
+    post_ingest(&hub, Some(&hub.token), &b2).await;
+    let (count, first, last) = agg(&hub).await;
+    assert_eq!(count, 3, "the already-archived message is not re-counted");
+    assert_eq!(
+        first.unwrap().to_rfc3339(),
+        "2026-01-01T00:00:00+00:00",
+        "first_message_time widens backwards"
+    );
+    assert_eq!(last.unwrap().to_rfc3339(), "2026-01-10T00:00:00+00:00");
+
+    // A message with no timestamp counts, but leaves the bounds alone.
+    let mut undated = msg(
+        "sess-delta",
+        "k3",
+        Some("u3"),
+        "2026-01-07T00:00:00Z",
+        "n/a",
+    );
+    undated.timestamp = None;
+    let b3 = sample_batch(hub.machine_id, "sess-delta", vec![undated]);
+    post_ingest(&hub, Some(&hub.token), &b3).await;
+    let (count, first, last) = agg(&hub).await;
+    assert_eq!(count, 4);
+    assert_eq!(first.unwrap().to_rfc3339(), "2026-01-01T00:00:00+00:00");
+    assert_eq!(
+        last.unwrap().to_rfc3339(),
+        "2026-01-10T00:00:00+00:00",
+        "an undated message must not NULL out the bounds"
+    );
+
+    // Replaying a fully-archived batch adds nothing.
+    post_ingest(&hub, Some(&hub.token), &b2).await;
+    assert_eq!(agg(&hub).await.0, 4, "replay is a no-op for the count");
+}
+
 /// `ingest_xid` is the journal's dirty-detection watermark: `pending` reports an
 /// entry stale when a session's xid is not visible in the entry's snapshot. So it
 /// must be stamped exactly when a session GAINS messages, and must NOT move when

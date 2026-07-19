@@ -1,10 +1,11 @@
 //! `POST /v1/ingest` — authenticated, idempotent batch ingestion.
 //!
 //! Upserts machines/projects/sessions and inserts messages with
-//! `ON CONFLICT DO NOTHING` (dedup on `(session_id, message_key)`), then
-//! recomputes session/project aggregates from the archived rows so they reflect
-//! the cumulative archive, not just the current batch. The whole batch runs in
-//! one transaction.
+//! `ON CONFLICT DO NOTHING` (dedup on `(session_id, message_key)`), then applies
+//! the batch's delta to the session aggregates and rolls those sessions up into
+//! their projects. The aggregates stay cumulative (they describe the whole
+//! archive, not the current batch) without re-reading `messages`. The whole
+//! batch runs in one transaction.
 
 use std::collections::{HashMap, HashSet};
 
@@ -375,11 +376,21 @@ pub async fn ingest(
         c_search_text.push(m.search_text);
     }
 
-    let mut touched_sessions: HashSet<i64> = HashSet::new();
+    // What each touched session actually gained in THIS batch, keyed by session
+    // surrogate id: rows inserted (conflicts excluded) and the time bounds of
+    // those rows. This is the whole input to the aggregate update below — see
+    // the note there for why the aggregates are no longer recomputed.
+    #[derive(Default)]
+    struct SessionDelta {
+        inserted: i32,
+        first_ts: Option<DateTime<Utc>>,
+        last_ts: Option<DateTime<Utc>>,
+    }
+    let mut deltas: HashMap<i64, SessionDelta> = HashMap::new();
     if message_count > 0 {
         // Runtime query (not `query!`): the offline build has no `.sqlx`
         // metadata for new statements.
-        let inserted: Vec<i64> = sqlx::query_scalar(
+        let inserted: Vec<(i64, Option<DateTime<Utc>>)> = sqlx::query_as(
             r#"
             INSERT INTO messages
                 (session_id, machine_id, provider, message_key, uuid, parent_uuid, seq,
@@ -401,7 +412,7 @@ pub async fn ingest(
                         input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
                         cost_usd, duration_ms, is_sidechain, content, raw, search_text)
             ON CONFLICT (session_id, message_key) DO NOTHING
-            RETURNING session_id
+            RETURNING session_id, "timestamp"
             "#,
         )
         .bind(token_machine)
@@ -431,20 +442,62 @@ pub async fn ingest(
 
         resp.messages_inserted += inserted.len() as u64;
         resp.messages_skipped += (message_count - inserted.len()) as u64;
-        touched_sessions.extend(inserted);
+        for (session_pk, ts) in inserted {
+            let d = deltas.entry(session_pk).or_default();
+            d.inserted += 1;
+            // NULL timestamps are ignored, exactly as `min()`/`max()` ignored
+            // them in the old recompute (and as `LEAST`/`GREATEST` will below).
+            if let Some(ts) = ts {
+                d.first_ts = Some(d.first_ts.map_or(ts, |cur| cur.min(ts)));
+                d.last_ts = Some(d.last_ts.map_or(ts, |cur| cur.max(ts)));
+            }
+        }
     }
 
     // -- aggregates --------------------------------------------------------
-    // Recompute from the archived rows (cumulative), for every session that
-    // gained messages, and then for their projects.
+    // Apply the batch's DELTA to every session that gained messages, then roll
+    // those sessions up into their projects.
     // One statement for the whole batch, not one per session, and it carries the
     // journal watermark too. Previously a touched session was rewritten THREE
     // times per batch (upsert, aggregates, watermark) across N+1 round trips;
     // folding the watermark in here makes it two, which is the bulk of the
     // 473,952 `sessions` updates on 3,810 rows infra measured (m4m 2026-07-19).
     //
+    // The aggregates are NOT recomputed from `messages`. The recompute
+    // (`count(*), min/max("timestamp") ... WHERE session_id = ANY($1)`) was
+    // O(messages in the touched sessions) on EVERY batch, not O(messages
+    // arriving). Infra re-measured it post-`c92e071` (m4m 2026-07-19) and still
+    // saw 36.5 tuples read per scan of `messages_session_id_message_key_key` —
+    // ~14 new messages per batch dragging ~3,800 index tuples with them, because
+    // one live session (`363038`) holds 121,066 messages and every batch that
+    // touches it re-read all of them to move a count by one. Collapsing the
+    // recompute to a single statement (`c92e071`) fixed the round trips but not
+    // the complexity; the delta fixes the complexity.
+    //
+    // The delta is EXACT, not an approximation: `RETURNING` yields exactly the
+    // rows the insert actually inserted (conflicts excluded), `message_count`
+    // was exact when the session was last touched, and `LEAST`/`GREATEST` ignore
+    // NULLs the same way `min`/`max` did — so the bounds only ever widen, which
+    // is what a cumulative archive does. It is also strictly safer under
+    // concurrency: the old recompute read `messages` under READ COMMITTED and
+    // could miss a concurrent transaction's not-yet-committed rows, silently
+    // writing a count that was already stale; `message_count + $n` cannot.
+    // Messages are never deleted from the archive, so nothing narrows.
+    //
+    // If the stored counts ever DO need reconciling (a manual `DELETE`, a
+    // restore from a partial dump), that is a periodic/one-shot job, not the
+    // ingest path:
+    //
+    //     UPDATE sessions s SET message_count = sub.cnt,
+    //            first_message_time = sub.first_ts, last_message_time = sub.last_ts
+    //     FROM (SELECT session_id, count(*) AS cnt, min("timestamp") AS first_ts,
+    //                  max("timestamp") AS last_ts FROM messages GROUP BY session_id) sub
+    //     WHERE s.id = sub.session_id AND (s.message_count, s.first_message_time,
+    //            s.last_message_time) IS DISTINCT FROM (sub.cnt::int, sub.first_ts, sub.last_ts);
+    //
     // The watermark keeps its old semantics: only sessions that actually gained
-    // messages are stamped (`touched_sessions`), so replaying an already-fully-
+    // messages are stamped (they are exactly the keys of `deltas`, each with
+    // `inserted >= 1`), so replaying an already-fully-
     // archived batch stays a no-op for journal purposes — the session upsert
     // above may bump `updated_at`, but `ingest_xid` (the value pending compares)
     // stays put. Dirtiness is transaction-VISIBILITY, not wall-clock: pending
@@ -453,33 +506,40 @@ pub async fn ingest(
     // construction, however the timestamps interleave. `updated_at` is bumped
     // alongside for human observability only.
     //
-    // Every touched session gained at least one message, so the GROUP BY yields
-    // a row for each and all of them are updated. Runtime query (not `query!`):
-    // the offline build has no `.sqlx` metadata for new statements.
+    // The delta arrives as parallel arrays (one entry per touched session), so
+    // this stays one statement for the whole batch and touches only `sessions` —
+    // `messages` is not read at all. Runtime query (not `query!`): the offline
+    // build has no `.sqlx` metadata for new statements.
     let mut touched_projects: HashSet<i64> = HashSet::new();
-    if !touched_sessions.is_empty() {
-        let touched: Vec<i64> = touched_sessions.iter().copied().collect();
+    if !deltas.is_empty() {
+        let mut d_session: Vec<i64> = Vec::with_capacity(deltas.len());
+        let mut d_inserted: Vec<i32> = Vec::with_capacity(deltas.len());
+        let mut d_first: Vec<Option<DateTime<Utc>>> = Vec::with_capacity(deltas.len());
+        let mut d_last: Vec<Option<DateTime<Utc>>> = Vec::with_capacity(deltas.len());
+        for (session_pk, d) in &deltas {
+            d_session.push(*session_pk);
+            d_inserted.push(d.inserted);
+            d_first.push(d.first_ts);
+            d_last.push(d.last_ts);
+        }
         let project_ids: Vec<Option<i64>> = sqlx::query_scalar(
-            r#"
+            r"
             UPDATE sessions s
-            SET message_count = sub.cnt,
-                first_message_time = sub.first_ts,
-                last_message_time = sub.last_ts,
+            SET message_count = s.message_count + d.inserted,
+                first_message_time = LEAST(s.first_message_time, d.first_ts),
+                last_message_time = GREATEST(s.last_message_time, d.last_ts),
                 updated_at = clock_timestamp(),
                 ingest_xid = pg_current_xact_id()
-            FROM (
-                SELECT session_id,
-                       count(*)          AS cnt,
-                       min("timestamp")  AS first_ts,
-                       max("timestamp")  AS last_ts
-                FROM messages WHERE session_id = ANY($1)
-                GROUP BY session_id
-            ) sub
-            WHERE s.id = sub.session_id
+            FROM UNNEST($1::bigint[], $2::int[], $3::timestamptz[], $4::timestamptz[])
+                 AS d(session_id, inserted, first_ts, last_ts)
+            WHERE s.id = d.session_id
             RETURNING s.project_id
-            "#,
+            ",
         )
-        .bind(&touched)
+        .bind(&d_session)
+        .bind(&d_inserted)
+        .bind(&d_first)
+        .bind(&d_last)
         .fetch_all(&mut *tx)
         .await?;
         touched_projects.extend(project_ids.into_iter().flatten());
