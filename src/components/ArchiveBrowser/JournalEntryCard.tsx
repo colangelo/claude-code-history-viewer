@@ -47,14 +47,22 @@ export function JournalEntryCard({
     return match?.summary ?? String(id);
   };
 
+  // Lead with the project's basename; the full path stays hoverable.
+  // Windows-tolerant split per the cross-platform checklist.
+  const projectName =
+    entry.project_path.split(/[\\/]/).filter(Boolean).pop() ??
+    entry.project_path;
+
   return (
     <div
       data-testid="journal-entry-card"
       className="rounded-md border border-border/60 bg-card/40 p-3 space-y-2"
     >
       {/* Meta row */}
-      <div className="flex items-center gap-2 text-px11 text-muted-foreground">
-        <span className="font-mono truncate">{entry.project_path}</span>
+      <div className="flex items-center gap-2 text-px12 text-muted-foreground">
+        <span className="font-mono truncate" title={entry.project_path}>
+          {projectName}
+        </span>
         <span aria-hidden="true">·</span>
         <span>
           {t("settings.archiveHub.journal.sessionCount", {
@@ -84,12 +92,12 @@ export function JournalEntryCard({
       >
         <ChevronRight
           className={cn(
-            "w-4 h-4 mt-0.5 shrink-0 text-muted-foreground transition-transform",
+            "w-4 h-4 mt-1 shrink-0 text-muted-foreground transition-transform",
             expanded && "rotate-90"
           )}
           aria-hidden="true"
         />
-        <span className="text-px14 font-medium leading-snug">
+        <span className="text-px16 font-medium leading-snug">
           {entry.headline ?? entry.project_path}
         </span>
       </button>
@@ -98,7 +106,7 @@ export function JournalEntryCard({
       {entry.summary && (
         <p
           className={cn(
-            "text-px13 text-foreground/80 leading-relaxed",
+            "text-px14 text-foreground/80 leading-relaxed",
             !expanded && "line-clamp-2"
           )}
         >
@@ -112,7 +120,7 @@ export function JournalEntryCard({
           {entry.topics.map((topic) => (
             <span
               key={topic}
-              className="rounded-full bg-muted px-2 py-0.5 text-px11 text-muted-foreground"
+              className="rounded-full bg-muted px-2 py-0.5 text-px12 text-muted-foreground"
             >
               {topic}
             </span>
@@ -125,10 +133,10 @@ export function JournalEntryCard({
         <div className="space-y-3 pt-1">
           {entry.open_questions.length > 0 && (
             <div className="space-y-1">
-              <p className="text-px11 font-medium text-muted-foreground uppercase tracking-wide">
+              <p className="text-px12 font-medium text-muted-foreground uppercase tracking-wide">
                 {t("settings.archiveHub.journal.openQuestions")}
               </p>
-              <ul className="list-disc pl-4 space-y-0.5 text-px13 text-foreground/80">
+              <ul className="list-disc pl-4 space-y-0.5 text-px14 text-foreground/80">
                 {entry.open_questions.map((q, i) => (
                   <li key={i}>{q}</li>
                 ))}
@@ -137,7 +145,7 @@ export function JournalEntryCard({
           )}
 
           <div className="space-y-1">
-            <p className="text-px11 font-medium text-muted-foreground uppercase tracking-wide">
+            <p className="text-px12 font-medium text-muted-foreground uppercase tracking-wide">
               {t("settings.archiveHub.journal.sessions")}
             </p>
             <ul className="space-y-1">
@@ -149,11 +157,11 @@ export function JournalEntryCard({
                       type="button"
                       data-testid="journal-session-link"
                       onClick={() => onOpenSession(id, sessionLabel(id))}
-                      className="w-full text-left rounded px-2 py-1 text-px13 hover:bg-muted"
+                      className="w-full text-left rounded px-2 py-1.5 text-px14 hover:bg-muted"
                     >
                       <span className="truncate">{sessionLabel(id)}</span>
                       {match && (
-                        <span className="text-px11 text-muted-foreground">
+                        <span className="text-px12 text-muted-foreground">
                           {" · "}
                           {t("settings.archiveHub.journal.sessionMessages", {
                             count: match.message_count,

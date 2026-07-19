@@ -138,5 +138,8 @@
   "archive.web.connecting": "接続中...",
   "archive.web.connectFailed": "接続に失敗しました: {{error}}",
   "archive.web.storageHint": "ハブURLとトークンはこのブラウザー（localStorage）にのみ保存されます。",
-  "archive.web.disconnect": "切断"
+  "archive.web.disconnect": "切断",
+  "archive.web.fontSmaller": "文字サイズを小さく",
+  "archive.web.fontLarger": "文字サイズを大きく",
+  "archive.web.fontReset": "文字サイズをリセット"
 }

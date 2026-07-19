@@ -205,7 +205,7 @@ export function JournalView({
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 gap-2">
+    <div className="flex flex-col flex-1 min-h-0 gap-2 w-full max-w-4xl mx-auto">
       {/* Controls: date picker, project filter, quick-nav pills */}
       <div className="flex flex-wrap items-center gap-2 shrink-0">
         <input
@@ -214,13 +214,13 @@ export function JournalView({
           value={date}
           onChange={(e) => setDate(e.target.value)}
           aria-label={t("settings.archiveHub.journal.datePickerLabel")}
-          className="h-8 rounded-md border border-border bg-background px-2 text-px13"
+          className="h-9 rounded-md border border-border bg-background px-2 text-px14 dark:[color-scheme:dark]"
         />
         {date && (
           <button
             type="button"
             onClick={() => setDate("")}
-            className="h-8 rounded-md border border-border px-2 text-px11 hover:bg-muted"
+            className="h-9 rounded-md border border-border px-2.5 text-px13 hover:bg-muted"
           >
             {t("settings.archiveHub.journal.clearDate")}
           </button>
@@ -230,7 +230,7 @@ export function JournalView({
           value={projectFilter}
           onChange={(e) => setProjectFilter(e.target.value)}
           aria-label={t("settings.archiveHub.journal.projectFilterLabel")}
-          className="h-8 rounded-md border border-border bg-background px-2 text-px13"
+          className="h-9 max-w-64 rounded-md border border-border bg-background px-2 text-px14"
         >
           <option value="">
             {t("settings.archiveHub.journal.filterAll")}
@@ -250,7 +250,7 @@ export function JournalView({
               key={d}
               type="button"
               onClick={() => setDate(d)}
-              className={`rounded-full border border-border px-2 py-0.5 text-px11 hover:bg-muted ${
+              className={`rounded-full border border-border px-2.5 py-1 text-px12 hover:bg-muted ${
                 date === d ? "bg-accent/10" : ""
               }`}
             >
@@ -263,14 +263,14 @@ export function JournalView({
       {/* Feed */}
       <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">
         {isLoading && entries.length === 0 && (
-          <p className="text-px13 text-muted-foreground flex items-center gap-1.5">
+          <p className="text-px14 text-muted-foreground flex items-center gap-1.5">
             <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
             {t("settings.archiveHub.journal.loading")}
           </p>
         )}
 
         {error && (
-          <p data-testid="journal-error" className="text-px13 text-destructive">
+          <p data-testid="journal-error" className="text-px14 text-destructive">
             {t("settings.archiveHub.journal.error")}
           </p>
         )}
@@ -278,7 +278,7 @@ export function JournalView({
         {!isLoading && !error && entries.length === 0 && (
           <p
             data-testid="journal-empty"
-            className="text-px13 text-muted-foreground"
+            className="text-px14 text-muted-foreground"
           >
             {t("settings.archiveHub.journal.empty")}
           </p>
@@ -288,7 +288,7 @@ export function JournalView({
           <section key={group.date} className="space-y-2">
             <h3
               data-testid="journal-day-header"
-              className="text-px13 font-medium text-foreground sticky top-0 bg-background/95 py-1"
+              className="text-px15 font-semibold text-foreground sticky top-0 bg-background/95 py-1"
             >
               {dayHeader(group.date)}
             </h3>
@@ -311,7 +311,7 @@ export function JournalView({
             data-testid="journal-load-more"
             onClick={handleLoadMore}
             disabled={isLoading}
-            className="w-full rounded-md border border-border px-3 py-1.5 text-px13 hover:bg-muted disabled:opacity-50"
+            className="w-full rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
           >
             {isLoading ? (
               <>

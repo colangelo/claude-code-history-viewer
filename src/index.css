@@ -1599,6 +1599,12 @@
   .text-px14 {
     font-size: calc(0.875rem * var(--app-font-scale));
   }
+  .text-px15 {
+    font-size: calc(0.9375rem * var(--app-font-scale));
+  }
+  .text-px16 {
+    font-size: calc(1rem * var(--app-font-scale));
+  }
 
   /* === Text Wrapping === */
   .text-balance {

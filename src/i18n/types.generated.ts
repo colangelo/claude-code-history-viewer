@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-18T18:15:55.756Z
- * 총 키 개수: 1867
+ * 생성 시간: 2026-07-19T00:05:24.324Z
+ * 총 키 개수: 1872
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (572개)
+ * settings namespace의 번역 키 (577개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -657,12 +657,17 @@ export type SettingsKeys =
   | 'folderPicker.selectedPath'
   | 'folderPicker.validating'
   | 'folderPicker.validationError'
+  | 'settings.archiveHub.browser.backToProjects'
+  | 'settings.archiveHub.browser.backToSessions'
   | 'settings.archiveHub.browser.messages.empty'
   | 'settings.archiveHub.browser.messages.loadMore'
   | 'settings.archiveHub.browser.messages.loading'
+  | 'settings.archiveHub.browser.messages.progress'
   | 'settings.archiveHub.browser.projects.empty'
   | 'settings.archiveHub.browser.projects.loading'
   | 'settings.archiveHub.browser.projects.title'
+  | 'settings.archiveHub.browser.search.clear'
+  | 'settings.archiveHub.browser.search.count'
   | 'settings.archiveHub.browser.search.empty'
   | 'settings.archiveHub.browser.search.loading'
   | 'settings.archiveHub.browser.searchButton'
@@ -3040,12 +3045,17 @@ export type TranslationKey =
   | 'sessionPicker.empty'
   | 'sessionPicker.subtitle'
   | 'sessionPicker.title'
+  | 'settings.archiveHub.browser.backToProjects'
+  | 'settings.archiveHub.browser.backToSessions'
   | 'settings.archiveHub.browser.messages.empty'
   | 'settings.archiveHub.browser.messages.loadMore'
   | 'settings.archiveHub.browser.messages.loading'
+  | 'settings.archiveHub.browser.messages.progress'
   | 'settings.archiveHub.browser.projects.empty'
   | 'settings.archiveHub.browser.projects.loading'
   | 'settings.archiveHub.browser.projects.title'
+  | 'settings.archiveHub.browser.search.clear'
+  | 'settings.archiveHub.browser.search.count'
   | 'settings.archiveHub.browser.search.empty'
   | 'settings.archiveHub.browser.search.loading'
   | 'settings.archiveHub.browser.searchButton'

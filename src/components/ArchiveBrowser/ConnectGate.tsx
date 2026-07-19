@@ -17,12 +17,22 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArchiveBrowser } from "./index";
+import { FontScaleControl } from "./FontScaleControl";
 import { hubApi, type HubConfig } from "../../services/hubApi";
 import {
   clearStoredHubConfig,
   loadStoredHubConfig,
   storeHubConfig,
 } from "./hubConfigStorage";
+
+/** Display form of the hub URL — host only; the full URL goes in `title`. */
+function hubHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
 
 export function ConnectGate() {
   const { t } = useTranslation();
@@ -107,11 +117,24 @@ export function ConnectGate() {
   if (config) {
     return (
       <div className="flex flex-col h-full gap-2">
-        <div className="flex items-center justify-between shrink-0 border-b border-border pb-2">
-          <h1 className="text-sm font-semibold">{t("archive.web.title")}</h1>
-          <Button variant="outline" size="sm" onClick={handleDisconnect}>
-            {t("archive.web.disconnect")}
-          </Button>
+        <div className="flex items-center justify-between gap-3 shrink-0 border-b border-border pb-2">
+          <div className="flex items-baseline gap-2 min-w-0">
+            <h1 className="text-px16 font-semibold shrink-0">
+              {t("archive.web.title")}
+            </h1>
+            <span
+              className="text-px12 font-mono text-muted-foreground truncate"
+              title={config.url}
+            >
+              {hubHost(config.url)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <FontScaleControl />
+            <Button variant="outline" size="sm" onClick={handleDisconnect}>
+              {t("archive.web.disconnect")}
+            </Button>
+          </div>
         </div>
         <div className="flex-1 min-h-0">
           <ArchiveBrowser config={config} />
@@ -171,7 +194,7 @@ export function ConnectGate() {
             t("archive.web.connect")
           )}
         </Button>
-        <p className="text-[11px] text-muted-foreground">{t("archive.web.storageHint")}</p>
+        <p className="text-px12 text-muted-foreground">{t("archive.web.storageHint")}</p>
       </form>
     </div>
   );

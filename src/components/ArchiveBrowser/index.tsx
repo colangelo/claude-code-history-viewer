@@ -10,12 +10,13 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { ChevronLeft, Loader2, X } from "lucide-react";
 import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
 import { MessageContentDisplay } from "@/components/messageRenderer";
 import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
 import { cn } from "@/lib/utils";
 import { formatCount, humanizeTimestamp } from "@/utils/journalFormat";
+import { renderSnippet } from "@/utils/searchSnippet";
 import { JournalView } from "./JournalView";
 import {
   hubApi,
@@ -271,6 +272,37 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
     setAnchorNonce((n) => n + 1);
   }, []);
 
+  // Dismiss the current results without clearing the query input.
+  const handleClearSearch = useCallback(() => {
+    ++searchGenerationRef.current;
+    setSearchHits(null);
+    setJournalHits([]);
+    setSearchError(null);
+    setIsSearching(false);
+  }, []);
+
+  // Mobile drill-up: the stacked (<md) Browse shows one level at a time.
+  const handleBackToProjects = useCallback(() => {
+    ++sessionsGenerationRef.current;
+    ++messagesGenerationRef.current;
+    setSelectedProject(null);
+    setSessions([]);
+    setSessionsError(null);
+    setOpenSession(null);
+    setMessages([]);
+    setTotalCount(null);
+    setMessagesError(null);
+  }, []);
+
+  const handleBackFromMessages = useCallback(() => {
+    ++messagesGenerationRef.current;
+    setOpenSession(null);
+    setMessages([]);
+    setTotalCount(null);
+    setMessagesError(null);
+    setIsLoadingMessages(false);
+  }, []);
+
   const hasMoreMessages = totalCount !== null && messages.length < totalCount;
 
   return (
@@ -285,11 +317,11 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder={t("settings.archiveHub.browser.searchPlaceholder")}
           aria-label={t("settings.archiveHub.browser.searchPlaceholder")}
-          className="flex-1 h-8 rounded-md border border-border bg-background px-2 text-px13"
+          className="flex-1 h-9 rounded-md border border-border bg-background px-2.5 text-px14"
         />
         <button
           type="submit"
-          className="h-8 shrink-0 rounded-md border border-border px-3 text-px13 hover:bg-muted"
+          className="h-9 shrink-0 rounded-md border border-border px-3 text-px14 hover:bg-muted"
         >
           {t("settings.archiveHub.browser.searchButton")}
         </button>
@@ -297,19 +329,39 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
 
       {/* Search results (global, above both views) */}
       {isSearching && (
-        <p className="text-px12 text-muted-foreground shrink-0">
+        <p className="text-px13 text-muted-foreground shrink-0 flex items-center gap-1.5">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
           {t("settings.archiveHub.browser.search.loading")}
         </p>
       )}
       {searchError && (
-        <p className="text-px12 text-destructive shrink-0">{searchError}</p>
+        <p className="text-px13 text-destructive shrink-0">{searchError}</p>
+      )}
+      {!isSearching && (searchHits != null || journalHits.length > 0) && (
+        <div className="flex items-center justify-between shrink-0">
+          <p className="text-px12 text-muted-foreground" data-testid="search-result-count">
+            {t("settings.archiveHub.browser.search.count", {
+              count: (searchHits?.length ?? 0) + journalHits.length,
+            })}
+          </p>
+          <button
+            type="button"
+            data-testid="search-clear"
+            onClick={handleClearSearch}
+            aria-label={t("settings.archiveHub.browser.search.clear")}
+            title={t("settings.archiveHub.browser.search.clear")}
+            className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted"
+          >
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
       )}
       {journalHits.length > 0 && (
         <section
           data-testid="journal-search-section"
           className="shrink-0 space-y-1 border border-info/40 bg-info/5 rounded-md p-1"
         >
-          <p className="px-1 text-px11 font-medium text-info uppercase tracking-wide">
+          <p className="px-1 text-px12 font-medium text-info uppercase tracking-wide">
             {t("settings.archiveHub.journal.searchSection")}
           </p>
           <ul className="space-y-1">
@@ -319,12 +371,12 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                   type="button"
                   data-testid="journal-search-hit"
                   onClick={() => handleActivateJournalHit(hit)}
-                  className="w-full text-left rounded px-2 py-1 hover:bg-muted"
+                  className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
                 >
-                  <p className="text-px13 font-medium truncate">
+                  <p className="text-px14 font-medium truncate">
                     {hit.headline ?? hit.project_path}
                   </p>
-                  <p className="text-px11 text-muted-foreground truncate">
+                  <p className="text-px12 text-muted-foreground truncate">
                     <span>{hit.entry_date}</span>
                     {" · "}
                     <span>{hit.project_path}</span>
@@ -336,21 +388,21 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         </section>
       )}
       {searchHits && searchHits.length === 0 && journalHits.length === 0 && !isSearching && (
-        <p className="text-px12 text-muted-foreground shrink-0">
+        <p className="text-px13 text-muted-foreground shrink-0">
           {t("settings.archiveHub.browser.search.empty")}
         </p>
       )}
       {searchHits && searchHits.length > 0 && (
-        <ul className="shrink-0 space-y-1 max-h-40 overflow-y-auto border border-border/50 rounded-md p-1">
+        <ul className="shrink-0 space-y-1 max-h-72 overflow-y-auto border border-border/50 rounded-md p-1">
           {searchHits.map((hit, index) => (
             <li key={`${hit.session_id}-${index}`}>
               <button
                 type="button"
                 onClick={() => handleActivateHit(hit)}
-                className="w-full text-left rounded px-2 py-1 hover:bg-muted"
+                className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
               >
-                <p className="text-px13 truncate">{hit.snippet}</p>
-                <p className="text-px11 text-muted-foreground truncate">
+                <p className="text-px14 truncate">{renderSnippet(hit.snippet)}</p>
+                <p className="text-px12 text-muted-foreground truncate">
                   <span>{hit.project_name ?? hit.project_path}</span>
                   {" · "}
                   <span>{hit.machine_hostname}</span>
@@ -374,7 +426,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           aria-selected={view === "journal"}
           onClick={() => setView("journal")}
           className={cn(
-            "px-3 py-1.5 text-px13 border-b-2 -mb-px",
+            "px-3 py-2 text-px14 border-b-2 -mb-px",
             view === "journal"
               ? "border-accent text-foreground font-medium"
               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -389,7 +441,7 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           aria-selected={view === "browse"}
           onClick={() => setView("browse")}
           className={cn(
-            "px-3 py-1.5 text-px13 border-b-2 -mb-px",
+            "px-3 py-2 text-px14 border-b-2 -mb-px",
             view === "browse"
               ? "border-accent text-foreground font-medium"
               : "border-transparent text-muted-foreground hover:text-foreground"
@@ -408,21 +460,27 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
         />
       ) : (
         <div className="flex flex-1 min-h-0 gap-3">
-          {/* Projects pane */}
-          <div className="w-60 shrink-0 overflow-y-auto border border-border/50 rounded-md">
-            <p className="px-2 py-1.5 text-px11 font-medium text-muted-foreground">
+          {/* Projects pane. Below `md` the three panes stack: exactly one level
+              is visible (messages > sessions > projects) with back buttons. */}
+          <div
+            className={cn(
+              "w-full md:w-60 md:shrink-0 overflow-y-auto border border-border/50 rounded-md",
+              (selectedProject || openSession) && "hidden md:block"
+            )}
+          >
+            <p className="px-2 py-1.5 text-px12 font-medium text-muted-foreground">
               {t("settings.archiveHub.browser.projects.title")}
             </p>
             {isLoadingProjects && (
-              <p className="px-2 py-1 text-px13 text-muted-foreground">
+              <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.projects.loading")}
               </p>
             )}
             {projectsError && (
-              <p className="px-2 py-1 text-px13 text-destructive">{projectsError}</p>
+              <p className="px-2 py-1 text-px14 text-destructive">{projectsError}</p>
             )}
             {!isLoadingProjects && !projectsError && projects.length === 0 && (
-              <p className="px-2 py-1 text-px13 text-muted-foreground">
+              <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.projects.empty")}
               </p>
             )}
@@ -432,12 +490,12 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                   <button
                     type="button"
                     onClick={() => handleSelectProject(project)}
-                    className={`w-full text-left px-2 py-1.5 text-px13 hover:bg-muted ${
+                    className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
                       selectedProject?.id === project.id ? "bg-accent/10" : ""
                     }`}
                   >
                     <p className="truncate">{project.name ?? project.project_path}</p>
-                    <p className="text-px11 text-muted-foreground truncate">
+                    <p className="text-px12 text-muted-foreground truncate">
                       {project.machine_hostname}
                     </p>
                   </button>
@@ -447,28 +505,44 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           </div>
 
           {/* Sessions pane */}
-          <div className="w-80 shrink-0 overflow-y-auto border border-border/50 rounded-md">
-            <p className="px-2 py-1.5 text-px11 font-medium text-muted-foreground">
-              {t("settings.archiveHub.browser.sessions.title")}
-            </p>
+          <div
+            className={cn(
+              "w-full md:w-80 md:shrink-0 overflow-y-auto border border-border/50 rounded-md",
+              (!selectedProject || openSession) && "hidden md:block"
+            )}
+          >
+            <div className="flex items-center gap-1 px-2 py-1.5">
+              <button
+                type="button"
+                data-testid="browse-back-to-projects"
+                onClick={handleBackToProjects}
+                className="md:hidden flex items-center gap-0.5 text-px12 text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                {t("settings.archiveHub.browser.backToProjects")}
+              </button>
+              <p className="text-px12 font-medium text-muted-foreground">
+                {t("settings.archiveHub.browser.sessions.title")}
+              </p>
+            </div>
             {!selectedProject && (
-              <p className="px-2 py-1 text-px13 text-muted-foreground">
+              <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.selectProject")}
               </p>
             )}
             {selectedProject && isLoadingSessions && (
-              <p className="px-2 py-1 text-px13 text-muted-foreground">
+              <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.sessions.loading")}
               </p>
             )}
             {sessionsError && (
-              <p className="px-2 py-1 text-px13 text-destructive">{sessionsError}</p>
+              <p className="px-2 py-1 text-px14 text-destructive">{sessionsError}</p>
             )}
             {selectedProject &&
               !isLoadingSessions &&
               !sessionsError &&
               sessions.length === 0 && (
-                <p className="px-2 py-1 text-px13 text-muted-foreground">
+                <p className="px-2 py-1 text-px14 text-muted-foreground">
                   {t("settings.archiveHub.browser.sessions.empty")}
                 </p>
               )}
@@ -480,12 +554,12 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
                     onClick={() =>
                       openSessionRef(session.id, session.summary ?? session.session_id)
                     }
-                    className={`w-full text-left px-2 py-1.5 text-px13 hover:bg-muted ${
+                    className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
                       openSession?.ref === session.id ? "bg-accent/10" : ""
                     }`}
                   >
                     <p className="truncate">{session.summary ?? session.session_id}</p>
-                    <p className="text-px11 text-muted-foreground truncate">
+                    <p className="text-px12 text-muted-foreground truncate">
                       {formatCount(session.message_count)}{" "}
                       {t("settings.archiveHub.browser.sessions.messageCountUnit")}
                       {session.last_message_time
@@ -499,32 +573,64 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
           </div>
 
           {/* Messages pane */}
-          <div className="flex-1 min-w-0 overflow-y-auto border border-border/50 rounded-md">
-            <p className="px-2 py-1.5 text-px11 font-medium text-muted-foreground truncate">
-              {openSession?.label ?? t("settings.archiveHub.browser.selectSession")}
-            </p>
+          <div
+            className={cn(
+              "flex-1 min-w-0 overflow-y-auto border border-border/50 rounded-md",
+              !openSession && "hidden md:block"
+            )}
+          >
+            <div className="flex items-center gap-2 px-2 py-1.5 min-w-0">
+              {openSession && (
+                <button
+                  type="button"
+                  data-testid="browse-back-from-messages"
+                  onClick={handleBackFromMessages}
+                  className="md:hidden flex items-center gap-0.5 shrink-0 text-px12 text-muted-foreground hover:text-foreground"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                  {selectedProject
+                    ? t("settings.archiveHub.browser.backToSessions")
+                    : t("settings.archiveHub.browser.backToProjects")}
+                </button>
+              )}
+              <p className="text-px12 font-medium text-muted-foreground truncate">
+                {openSession?.label ?? t("settings.archiveHub.browser.selectSession")}
+              </p>
+              {openSession && totalCount != null && (
+                <p
+                  className="ml-auto shrink-0 text-px12 text-muted-foreground tabular-nums"
+                  data-testid="message-progress"
+                >
+                  {t("settings.archiveHub.browser.messages.progress", {
+                    loaded: formatCount(messages.length),
+                    total: formatCount(totalCount),
+                  })}
+                </p>
+              )}
+            </div>
             {!openSession && (
-              <p className="px-2 py-1 text-px13 text-muted-foreground">
+              <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.selectSession")}
               </p>
             )}
             {openSession && isLoadingMessages && messages.length === 0 && (
-              <p className="px-2 py-1 text-px13 text-muted-foreground">
+              <p className="px-2 py-1 text-px14 text-muted-foreground">
                 {t("settings.archiveHub.browser.messages.loading")}
               </p>
             )}
             {messagesError && (
-              <p className="px-2 py-1 text-px13 text-destructive">{messagesError}</p>
+              <p className="px-2 py-1 text-px14 text-destructive">{messagesError}</p>
             )}
             {openSession &&
               !isLoadingMessages &&
               !messagesError &&
               messages.length === 0 && (
-                <p className="px-2 py-1 text-px13 text-muted-foreground">
+                <p className="px-2 py-1 text-px14 text-muted-foreground">
                   {t("settings.archiveHub.browser.messages.empty")}
                 </p>
               )}
-            <div className="px-2 py-1 space-y-1">
+            {/* Reading-measure column: don't span the full pane on wide screens. */}
+            <div className="px-2 py-1 space-y-1 w-full max-w-4xl mx-auto">
               {messages.map((row) => (
                 <ArchivedMessage
                   key={row.id}
@@ -534,13 +640,13 @@ export function ArchiveBrowser({ config }: ArchiveBrowserProps) {
               ))}
             </div>
             {hasMoreMessages && (
-              <div className="px-2 pb-2">
+              <div className="px-2 pb-2 w-full max-w-4xl mx-auto">
                 <button
                   type="button"
                   data-testid="archive-load-more"
                   onClick={handleLoadMore}
                   disabled={isLoadingMessages}
-                  className="w-full rounded-md border border-border px-3 py-1.5 text-px13 hover:bg-muted disabled:opacity-50"
+                  className="w-full rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
                 >
                   {isLoadingMessages ? (
                     <>

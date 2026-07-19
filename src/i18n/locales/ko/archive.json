@@ -138,5 +138,8 @@
   "archive.web.connecting": "연결 중...",
   "archive.web.connectFailed": "연결 실패: {{error}}",
   "archive.web.storageHint": "허브 URL과 토큰은 이 브라우저(localStorage)에만 저장됩니다.",
-  "archive.web.disconnect": "연결 해제"
+  "archive.web.disconnect": "연결 해제",
+  "archive.web.fontSmaller": "글자 크기 줄이기",
+  "archive.web.fontLarger": "글자 크기 키우기",
+  "archive.web.fontReset": "글자 크기 초기화"
 }

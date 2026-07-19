@@ -22,6 +22,11 @@ import { ThemeProvider } from "./contexts/theme/ThemeProvider.tsx";
 import { ModalProvider } from "./contexts/modal/ModalProvider.tsx";
 import { Toaster } from "sonner";
 import { ConnectGate } from "./components/ArchiveBrowser/ConnectGate.tsx";
+import { initFontScale } from "./components/ArchiveBrowser/fontScaleStorage.ts";
+
+// Webapp-only reader preference: apply the persisted (or default 1.1) font
+// scale before first paint. Desktop/WebUI own the var via useAppInitialization.
+initFontScale();
 
 OverlayScrollbars(document.body, {
   scrollbars: {
