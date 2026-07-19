@@ -407,6 +407,26 @@ codesign --force --sign - ~/.local/bin/cchv-sync-daemon
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.daemon.plist
 ```
 
+**Concurrent swaps.** Two agents staging/swapping the same daemon in the same
+window is a real collision (it happened on m4m 2026-07-19: one session swapped
+to `5cc660a` at 13:51 while another held the follow-up fix uncommitted in the
+working tree — the second swap to `e419f4a` at 14:29 was correct only by luck of
+ordering). Convention, cheap enough to always follow:
+
+```bash
+# claim before touching ~/.local/bin — fails if someone else holds it
+LOCK=~/.config/cchv/staging/.swap-lock
+( set -o noclobber; echo "$(id -un)@$(hostname -s) $(date -Iseconds) rev=$REV" > "$LOCK" ) \
+  || { echo "swap in progress: $(cat "$LOCK")"; exit 1; }
+trap 'rm -f "$LOCK"' EXIT
+```
+
+Whoever swaps also **commits and pushes the rev first** — a swapped binary whose
+source is only in a working tree is unreconstructable. Identify what is actually
+live (not what you think you staged) with a symbol probe rather than a hash: the
+installed copy is re-signed after the copy, so its hash never matches the staged
+file, e.g. `strings -a ~/.local/bin/cchv-sync-daemon | grep -c sessions_deferred`.
+
 Verify from any tailnet host: the machine's rows gain `identity_key` after the
 next scan pass —
 `curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/projects" | jq '[.[] | select(.identity_key != null)] | length'`.
