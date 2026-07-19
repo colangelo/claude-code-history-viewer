@@ -377,9 +377,18 @@ export const hubApi = {
   },
 
   /**
-   * The `journal` block of `GET /v1/search` (present at the default `scope=all`).
+   * The `journal` block of `GET /v1/search`.
    * Kept separate from {@link search} so that method's array return stays
    * byte-compatible with existing callers; absence of the block yields `[]`.
+   *
+   * `scope=journal` because this method reads ONLY the journal block. The
+   * default `scope=all` also runs the message leg — a GIN probe of
+   * `messages_text_search_idx` plus a correlated `position` subquery per hit —
+   * whose results are then thrown away. `ArchiveBrowser.runSearch` fires this
+   * alongside {@link search}, so at the default every user search paid for the
+   * message leg twice. Scoping each call to the block it reads halves that.
+   * A pre-journal hub ignores the unknown param and returns the bare array,
+   * which still degrades to `[]` below.
    */
   async journalSearch(
     config: HubConfig,
@@ -388,6 +397,7 @@ export const hubApi = {
   ): Promise<JournalSearchHit[]> {
     const url = hubUrl(config, "/v1/search", {
       q: query,
+      scope: "journal",
       machine: options?.machine,
       provider: options?.provider,
       project: options?.project,
@@ -405,7 +415,13 @@ export const hubApi = {
     return data.journal ?? [];
   },
 
-  /** `GET /v1/search` — Postgres websearch full-text query over the archive. */
+  /**
+   * `GET /v1/search` — Postgres websearch full-text query over the archive.
+   * `scope=messages` for the same reason {@link journalSearch} uses
+   * `scope=journal`: this method reads only `results`, so the journal leg is
+   * pure waste here. The response is byte-compatible with the pre-journal
+   * shape at this scope.
+   */
   async search(
     config: HubConfig,
     query: string,
@@ -413,6 +429,7 @@ export const hubApi = {
   ): Promise<HubSearchHit[]> {
     const url = hubUrl(config, "/v1/search", {
       q: query,
+      scope: "messages",
       machine: options?.machine,
       provider: options?.provider,
       project: options?.project,
