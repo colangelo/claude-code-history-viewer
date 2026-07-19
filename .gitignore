@@ -97,3 +97,6 @@ PLAN.md
 # leak surface the nats variant exists to prevent; keep any stray inbox untracked.
 agent-relay/
 .superpowers/
+
+# python bytecode from scripts/
+__pycache__/
