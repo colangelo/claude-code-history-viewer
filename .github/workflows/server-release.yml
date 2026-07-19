@@ -5,23 +5,31 @@
 # Upstream's `v1.x` tags (fetched for the parser supply chain) are NOT ours and
 # do not trigger a release here.
 #
-# Self-contained: this workflow creates its own release, attaches the static
-# archive webapp bundle and the WebUI server binaries (rust-embed → single
-# self-contained file, no external dist/). The real deploy to m4m still copies
-# a locally-built binary (docs/archive/deployment.md); these artifacts are for
-# reproducibility and non-local hosts.
+# Self-contained: this workflow creates its own release and attaches the static
+# archive webapp bundle. The per-platform WebUI server binaries (rust-embed →
+# single self-contained file, no external dist/) are DISPATCH-ONLY: nothing
+# consumes them today (the real deploy to m4m copies a locally-built binary —
+# docs/archive/deployment.md — and no non-local hosts exist), so a tag push
+# runs only the cheap webapp job. If a non-local host ever needs binaries, run
+# this workflow manually ON THE TAG REF (gh workflow run server-release.yml
+# --ref cchv-vX.Y.Z) and the matrix attaches them to that tag's release.
 name: Server Release
 
 on:
   push:
     tags:
       - "cchv-v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   create-release:
+    # Runs on tag push AND on dispatch (idempotent: view-or-create + --clobber),
+    # but never on a dispatch against a branch ref — that would mint a release
+    # named after the branch.
+    if: startsWith(github.ref, 'refs/tags/cchv-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +67,8 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" cchv-webapp.tar.gz --clobber
 
   build-server:
+    # Dispatch-only (see header): tag pushes skip the 4-platform matrix.
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/cchv-v')
     needs: create-release
     strategy:
       fail-fast: false
