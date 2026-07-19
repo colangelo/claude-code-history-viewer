@@ -38,4 +38,4 @@
 
 - [x] 6.1 Full gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`, `pnpm run i18n:validate`, `cargo test -- --test-threads=1`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check`
 - [x] 6.2 Docs: `docs/archive/deployment.md` rollout note (hub → daemons order, migration 0003 auto-runs); update `docs/agents`/CONTEXT pointers if needed
-- [ ] 6.3 Rebase onto `main` after cchv-v0.9.0 lands; resolve `ArchiveBrowser/index.tsx` overlap; merge; version bump 0.10.0 + `just sync-version` (release cut is a separate step on `main`)
+- [x] 6.3 Rebase onto `main` after cchv-v0.9.0 lands; resolve `ArchiveBrowser/index.tsx` overlap; merge; version bump 0.10.0 + `just sync-version` (release cut is a separate step on `main`)
