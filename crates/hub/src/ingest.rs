@@ -60,7 +60,18 @@ fn strip_nul_value(v: &mut serde_json::Value) {
 /// batch (gitea #7; hit in practice by Time Machine backfills of old sessions).
 /// Clamp well under the limit: only FTS on the tail is lost; `raw`/`content`
 /// keep full fidelity.
-const SEARCH_TEXT_MAX_BYTES: usize = 512 * 1024;
+///
+/// 64 KiB, not the original 512 KiB, because the binding cost is GIN
+/// maintenance, not the size limit. m4m measured ingest on pg1 (2026-07-19):
+/// insert time tracks TEXT LENGTH, not row count — 434 average messages cost
+/// 79 ms, the 434 largest cost 12.9 s, because each big row merges ~9.6k buffers
+/// into `messages_text_search_idx`. The corpus is brutally skewed: 812 messages
+/// (0.04%) hold 112 MB of 805 MB of `search_text`. Capping at 64 KiB keeps 86%
+/// of the total indexed text while cutting that worst-case batch to 6.4 s on its
+/// own (4.3 s combined with pg1's `fastupdate`/`gin_pending_list_limit` change).
+/// A 500 kB message contributes ~200k lexemes nobody searches for; the snippet
+/// (`ts_headline` over `search_text`) can only quote indexed text anyway.
+const SEARCH_TEXT_MAX_BYTES: usize = 64 * 1024;
 
 /// Truncate a string in place to at most `max` bytes on a char boundary.
 fn clamp_utf8(s: &mut String, max: usize) {
@@ -359,20 +370,32 @@ pub async fn ingest(
             touched_projects.insert(pid);
         }
     }
+    // A project's message_count rolls up its sessions' already-exact counts
+    // instead of re-counting the project's messages. The old form
+    // (`count(*) FROM messages JOIN sessions WHERE s.project_id = p.id`) was
+    // O(messages in the project) on EVERY batch that touched it, executed as one
+    // index scan of `messages_session_id_message_key_key` per session of the
+    // project — which is where pg1's 6.91B idx_tup_read over 34.9M idx_scan came
+    // from (m4m 2026-07-19: 198 tuples read per scan on a unique index whose
+    // point lookups should read ~1). Rolling up is O(sessions in the project) on
+    // `sessions_project_id_idx` and is still EXACT: every session that gained
+    // messages had `message_count` recomputed from `messages` immediately above,
+    // and an untouched session's stored count was exact when it was last
+    // touched. Runtime query (not `query!`): the offline build has no `.sqlx`
+    // metadata for new statements.
     for project_pk in &touched_projects {
-        sqlx::query!(
-            r#"
-            UPDATE projects p
-            SET session_count = (SELECT count(*) FROM sessions WHERE project_id = p.id),
-                message_count = (
-                    SELECT count(*) FROM messages m
-                    JOIN sessions s ON m.session_id = s.id
-                    WHERE s.project_id = p.id
-                )
-            WHERE p.id = $1
-            "#,
-            project_pk,
+        sqlx::query(
+            "UPDATE projects p
+             SET session_count = sub.session_count,
+                 message_count = sub.message_count
+             FROM (
+                 SELECT count(*)::int                        AS session_count,
+                        COALESCE(sum(message_count), 0)::int AS message_count
+                 FROM sessions WHERE project_id = $1
+             ) sub
+             WHERE p.id = $1",
         )
+        .bind(project_pk)
         .execute(&mut *tx)
         .await?;
     }
