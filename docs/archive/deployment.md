@@ -194,6 +194,20 @@ codesign step, no `launchctl` bootout/bootstrap, and no restart** — the next
 request picks up the new files. Do not carry the binary-swap ceremony over to a
 static bump.
 
+> **The infra side automates all of this: `just cchv-webapp-deploy <version>`**
+> (home-network `dd1aef2`, `tools/cchv-webapp-deploy`, documented in
+> `hosts/m4m.md` § "cchv archive hub"). It accepts `0.10.3` / `v0.10.3` /
+> `cchv-v0.10.3`, runs from either Mac (ssh-wraps itself when not on m4m), stages
+> straight from the GitHub Release when nothing is staged locally, diffs
+> **extracted trees** (below), takes a timestamped `mv` backup, enforces the
+> post-swap assertions below, and **auto-restores the backup if verification
+> fails** (keeping the bad tree at `staging/webapp-failed-<stamp>`). Nothing is
+> ever deleted in either direction. So a relay handoff needs only "deploy
+> vX.Y.Z" plus the release-artifact entry-chunk hashes — the manual steps below
+> are the fallback/reference, not the expected path. Proven 2026-07-19 by an
+> idempotent re-deploy of the live `v0.10.3` (all assertions green); the
+> auto-rollback branch was exercised in a sandbox on m4m, not against prod.
+
 Validated on m4m 2026-07-19 (`cchv-v0.10.3`, thread 3fe4b63f):
 
 ```bash
@@ -218,10 +232,19 @@ Post-swap verification (no restart involved, so all of it is client-visible):
 
 - the served entry chunks (`assets/archive-<hash>.js` / `.css`) equal the staged
   bundle's — these are the authoritative identity of the deploy
-- the version chip string (`v0.10.3`) appears in the archive chunk
+- the served entry chunk actually carries the version: probe it by the version
+  chip's `title:"cchv-v<x.y.z>"` marker rather than by filename (a marker is
+  stabler than a hashed asset name)
 - a string unique to the new release is present (e.g. a new i18n key in
   `assets/i18n-en-<hash>.js`)
-- `/v1/healthz` 200, `/v1/healthz/ingest` 200, and the HTTPS front (`:8788`) 200
+- `/v1/healthz` 200, `/v1/healthz/ingest?exclude=ac-mbp` 200, and the HTTPS
+  front (`:8788`) 200 — **the `?exclude=` is not optional.** `ac-mbp` (the
+  decommissioning Intel laptop) has a permanently stale ingest heartbeat
+  (`last_seen` 2026-07-06), so the **bare** `/v1/healthz/ingest` is a standing
+  503 today and every day. That is not an outage and must never roll a deploy
+  back. The excluded host stays observable (`excluded:true`) but cannot flip the
+  verdict; this is the same form the Gatus `cchv-ingest` check has used since
+  hub `36870b4`.
 - the asset-list diff vs the backup touches only the chunks the change should
   touch — a client-only patch that moves other chunks is a red flag
 
