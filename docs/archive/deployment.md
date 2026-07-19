@@ -219,6 +219,32 @@ static bump.
 > `m4m:~/.config/cchv/staging/webapp-cchv-vX.Y.Z` first so the diff actually
 > fires. (Observed on the v0.10.4 deploy, 2026-07-19, thread 395b47ca.)
 
+> **The handoff shape a webapp deploy wants from us: tag + built-from rev +
+> expected entry chunk + a counted marker.** Since home-network `3c84aa4`
+> (2026-07-19) the recipe takes all four, so the checks we used to ask for by
+> hand on v0.10.7 are now part of it rather than a one-off:
+>
+> - `--expect-entry archive-<hash>.js` — the entry chunk we built and expect to
+>   be served, checked **before** the swap.
+> - `--assert-count '<N>:<literal>'` (repeatable) — counts a marker of the
+>   announced change in the release bundle pre-swap (fatal, before the live tree
+>   is touched) and again in the **served** entry chunk post-swap (rolls back).
+>   **Count, do not grep for presence:** the failure mode of a "narrow every call
+>   site" change is a *surviving un-narrowed* call site, which is invisible to a
+>   presence check and only shows up as a wrong count. Pick the literal from the
+>   diff and count it in our own `dist-archive/` first — the number we send is
+>   the assertion.
+> - CSS byte-identity against the tree being replaced — **reported, never
+>   fatal.** It answers "does this deploy touch the tokens", which is headless;
+>   it cannot answer "has anyone looked yet", which is not. Identical bytes ⇒ a
+>   pending eyeball item carries forward unchanged; changed ⇒ it re-opens and a
+>   new look is owed. It hashes *content*, so an asset-hash bump over identical
+>   bytes still reads as unchanged.
+>
+> Verified end-to-end on m4m, not syntax-checked: an idempotent v0.10.7 redeploy
+> passes all four; a bogus `--expect-entry` and a wrong marker count each abort
+> pre-swap with the live tree untouched; a malformed spec is rejected at parse.
+
 Validated on m4m 2026-07-19 (`cchv-v0.10.3`, thread 3fe4b63f):
 
 ```bash
@@ -260,7 +286,11 @@ Post-swap verification (no restart involved, so all of it is client-visible):
   touch — a client-only patch that moves other chunks is a red flag
 
 Visual/layout changes cannot be verified this way; a rendering claim needs a
-human at a real window. Say so explicitly instead of marking it green.
+human at a real window. Say so explicitly instead of marking it green. The
+recipe's CSS byte-identity report narrows *what is owed*, never discharges it:
+unchanged CSS means the outstanding eyeball item is still the same one, changed
+CSS means a fresh look is owed. Currently owed: the rose topic chips
+(`cchv-v0.10.6`, `bb40c41`) in a real window.
 
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
