@@ -23,6 +23,9 @@ export function ThemeToggle() {
     theme === "light" ? Sun : theme === "dark" ? Moon : MonitorSmartphone;
   const next = ORDER[(ORDER.indexOf(theme) + 1) % ORDER.length]!;
 
+  // Borderless to pair with the `Aa` trigger beside it: the two are quiet
+  // reader utilities and should read as one group, not as two more outlined
+  // buttons competing with Disconnect.
   return (
     <button
       type="button"
@@ -30,7 +33,7 @@ export function ThemeToggle() {
       onClick={() => void setTheme(next)}
       aria-label={t("archive.web.themeToggle")}
       title={`${t("archive.web.themeToggle")}: ${labels[theme]}`}
-      className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted"
+      className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       <Icon className="w-3.5 h-3.5" aria-hidden="true" />
     </button>
