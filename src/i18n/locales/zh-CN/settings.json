@@ -578,6 +578,7 @@
   "settings.archiveHub.journal.projectFilterLabel": "按项目筛选",
   "settings.archiveHub.journal.datePickerLabel": "跳转到日期",
   "settings.archiveHub.journal.clearDate": "清除日期",
+  "settings.archiveHub.journal.dateNavTitle": "跳转到日期",
   "settings.archiveHub.journal.searchSection": "日志",
   "settings.archiveHub.identity.showWorktrees": "显示工作树",
   "settings.archiveHub.identity.worktree": "工作树",

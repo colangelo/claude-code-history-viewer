@@ -1,6 +1,10 @@
 /* ============================================
    GLOBAL SCROLLBAR STYLES
    WebKit/Tauri Compatible
+
+   Deliberately SUBTLE: neutral slate thumbs on transparent tracks. The
+   original indigo-on-solid-track bars read as giant UI elements on wide
+   screens (user-reported 2026-07-19) — scrollbars are chrome, not content.
    ============================================ */
 
 /* ============================================
@@ -8,63 +12,66 @@
    ============================================ */
 .os-theme-custom {
   box-sizing: border-box;
-  --os-size: 10px;
+  --os-size: 8px;
   --os-padding-perpendicular: 2px;
   --os-padding-axis: 2px;
-  --os-track-border-radius: 5px;
-  --os-handle-border-radius: 5px;
-  --os-handle-bg: #6366f1;
-  --os-handle-bg-hover: #818cf8;
-  --os-handle-bg-active: #a5b4fc;
+  --os-track-border-radius: 4px;
+  --os-handle-border-radius: 4px;
+  --os-handle-bg: rgba(148, 163, 184, 0.35);
+  --os-handle-bg-hover: rgba(148, 163, 184, 0.55);
+  --os-handle-bg-active: rgba(148, 163, 184, 0.7);
 }
 
 .os-theme-custom .os-scrollbar-track {
-  background: #0d0d14;
-  border-radius: 5px;
+  background: transparent;
+  border-radius: 4px;
 }
 
 .os-theme-custom .os-scrollbar-handle {
-  background: #6366f1;
-  border-radius: 5px;
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 4px;
 }
 
 .os-theme-custom .os-scrollbar-handle:hover {
-  background: #818cf8;
+  background: rgba(148, 163, 184, 0.55);
 }
 
 .os-theme-custom .os-scrollbar-handle:active {
-  background: #a5b4fc;
+  background: rgba(148, 163, 184, 0.7);
 }
 
 /* Light theme */
-:root:not(.dark) .os-theme-custom .os-scrollbar-track {
-  background: #e2e8f0;
+:root:not(.dark) .os-theme-custom .os-scrollbar-handle {
+  background: rgba(100, 116, 139, 0.35);
+}
+
+:root:not(.dark) .os-theme-custom .os-scrollbar-handle:hover {
+  background: rgba(100, 116, 139, 0.55);
 }
 
 /* ============================================
    2. NATIVE SCROLLBAR - WebKit (Safari/Tauri)
    ============================================ */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
-  background: #0d0d14;
-  border-radius: 5px;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #6366f1;
-  border-radius: 5px;
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 4px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #818cf8;
+  background: rgba(148, 163, 184, 0.55);
 }
 
 *::-webkit-scrollbar-thumb:active {
-  background: #a5b4fc;
+  background: rgba(148, 163, 184, 0.7);
 }
 
 *::-webkit-scrollbar-corner {
@@ -72,8 +79,12 @@
 }
 
 /* Light theme native scrollbar */
-:root:not(.dark) *::-webkit-scrollbar-track {
-  background: #e2e8f0;
+:root:not(.dark) *::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+}
+
+:root:not(.dark) *::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
 }
 
 /* ============================================
@@ -82,10 +93,10 @@
 @supports (scrollbar-color: auto) {
   * {
     scrollbar-width: thin;
-    scrollbar-color: #6366f1 #0d0d14;
+    scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
   }
 
   :root:not(.dark) * {
-    scrollbar-color: #6366f1 #e2e8f0;
+    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
   }
 }

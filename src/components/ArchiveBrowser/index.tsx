@@ -90,6 +90,22 @@ export interface SessionOpenTarget {
   messageId?: number;
 }
 
+/** Roles that get a turn-boundary gutter; record types (`attachment`, `mode`,
+ * …) neither render one nor reset the turn. */
+const GUTTER_ROLES = new Set(["user", "assistant", "system", "summary"]);
+
+/** The previous conversation-role before `index`, skipping record rows. */
+function lastConversationRole(
+  messages: HubMessage[],
+  index: number
+): string | null {
+  for (let i = index - 1; i >= 0; i--) {
+    const role = messages[i]!.role ?? messages[i]!.message_type;
+    if (role != null && GUTTER_ROLES.has(role)) return role;
+  }
+  return null;
+}
+
 /** Localized role label for the message gutter; unknown roles pass through. */
 function roleLabel(role: string, t: (key: string) => string): string {
   switch (role) {
@@ -1151,7 +1167,9 @@ export function ArchiveBrowser({
               !openSession && "hidden md:block"
             )}
           >
-            <div className="flex items-center gap-2 px-2 py-1.5 min-w-0">
+            {/* Header rides the same centered column as the messages — on
+                ultrawide screens label and count otherwise sit 1400px apart. */}
+            <div className="w-full max-w-4xl mx-auto flex items-center gap-2 px-2 py-1.5 min-w-0">
               {openSession && (
                 <button
                   type="button"
@@ -1224,12 +1242,17 @@ export function ArchiveBrowser({
             <ArchiveRenderContext.Provider value={true}>
               <div className="px-2 py-1 space-y-1 w-full max-w-4xl mx-auto">
                 {messages.map((row, index) => {
-                  const prev = index > 0 ? messages[index - 1] : undefined;
                   const role = row.role ?? row.message_type;
-                  // Role/timestamp gutter at turn boundaries only — a header
-                  // on every row would drown the content.
+                  // Role/timestamp gutter at turn boundaries only, and only
+                  // for real conversation roles: record types like
+                  // `attachment`/`mode` interleave constantly and would strew
+                  // noise gutters between every real turn (they also must not
+                  // RESET the turn, so compare against the last real role).
+                  const isConversationRole =
+                    role != null && GUTTER_ROLES.has(role);
                   const showGutter =
-                    role != null && role !== (prev?.role ?? prev?.message_type);
+                    isConversationRole &&
+                    role !== lastConversationRole(messages, index);
                   return (
                     <div
                       key={row.id}
