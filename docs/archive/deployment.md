@@ -388,7 +388,17 @@ curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/identities" \
   "parse only new lines" and `notify`-based watching are planned optimizations.
 - **pgvector / semantic search and an MCP context server** are future phases;
   the schema already reserves a `message_embeddings` side table so they land
-  without a breaking migration.
+  without a breaking migration. **pg1 disk envelope for the embeddings backfill**
+  (infra note, home-network relay 2026-07-19, `hosts/configs/proxmox1/pg1.md`):
+  the pg1 data disk was pre-grown 32 → 48 GB online, so there is now **~24 GB
+  free**. pgvector **0.8.5** is installed and **`halfvec` is verified working**.
+  Sizing the migration: 768-dim `halfvec` (~6–7 GB) + HNSW slack fits comfortably;
+  768-dim f32 (~12.2 GB) fits with room; 1536-dim f32 (~24.2 GB) does **not** fit —
+  use `halfvec` or ask infra for another grow first. Budget the **nightly pg_dump**
+  growth too, not just heap+HNSW: backups live on the same disk with 14-day
+  retention, so a +6–7 GB embeddings table inflates every dump. Send infra the firm
+  dimension/type when scoped and they will re-check; tens-of-GB grows are fine on
+  request, 100 GB+ needs a `/mnt/state` cleanup conversation first.
 - **Desktop release:** the repo is now a Cargo workspace, so build artifacts
   live in the repo-root `target/` (not `src-tauri/target/`). The release
   workflows were updated accordingly — verify at the next desktop release.
