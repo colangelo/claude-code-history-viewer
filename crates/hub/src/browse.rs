@@ -261,12 +261,20 @@ pub async fn session_messages(
 ) -> Result<([(HeaderName, String); 1], Json<Vec<MessageRow>>), HubError> {
     let session_pk = resolve_session_ref(&state, &session_ref).await?;
     let page = Page::from(page.limit, page.offset);
-    let total = sqlx::query_scalar!(
-        r#"SELECT COUNT(*) AS "count!" FROM messages WHERE session_id = $1"#,
-        session_pk,
-    )
-    .fetch_one(&state.pool)
-    .await?;
+    // Read the maintained aggregate rather than `COUNT(*)`-ing the messages: a
+    // count over `session_id` range-scans `messages_session_id_message_key_key`
+    // (that unique index doubles as the only index on `session_id`), so every
+    // page view of a 3,000-message session read 3,000 index tuples for a number
+    // ingest already recomputes on that row, inside the same transaction that
+    // wrote the messages. Same value, one row read.
+    let total = i64::from(
+        sqlx::query_scalar!(
+            r#"SELECT message_count AS "count!" FROM sessions WHERE id = $1"#,
+            session_pk,
+        )
+        .fetch_one(&state.pool)
+        .await?,
+    );
     let rows = sqlx::query!(
         r#"
         SELECT m.id            AS "id!",

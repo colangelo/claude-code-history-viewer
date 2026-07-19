@@ -484,6 +484,144 @@ async fn project_aggregates_sum_sessions_untouched_by_the_batch() {
     assert_eq!(messages, 5, "replaying an archived batch is a no-op");
 }
 
+/// The session aggregate recompute is ONE set-based statement over every
+/// touched session, not a per-session loop. The way a `GROUP BY` rewrite fails
+/// is by smearing the batch's totals across the sessions, so a batch carrying
+/// two sessions must still leave each with its own count and time bounds.
+#[tokio::test]
+async fn aggregates_are_per_session_within_one_batch() {
+    let hub = spawn().await;
+    let mut batch = sample_batch(
+        hub.machine_id,
+        "sess-a",
+        vec![
+            msg("sess-a", "a1", Some("ua1"), "2026-01-01T00:00:00Z", "a one"),
+            msg("sess-a", "a2", Some("ua2"), "2026-01-03T00:00:00Z", "a two"),
+            msg("sess-b", "b1", Some("ub1"), "2026-02-01T00:00:00Z", "b one"),
+        ],
+    );
+    // A second session in the SAME batch, under the same project.
+    let mut sess_b = batch.sessions[0].clone();
+    sess_b.session_id = "sess-b".into();
+    sess_b.file_path = Some("/tmp/proj/sess-b.jsonl".into());
+    batch.sessions.push(sess_b);
+
+    let resp = post_ingest(&hub, Some(&hub.token), &batch).await;
+    assert_eq!(resp.status(), 200);
+
+    /// `(session_id, message_count, first_message_time, last_message_time)`
+    type SessionAggregate = (
+        String,
+        i32,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    );
+    let rows: Vec<SessionAggregate> = sqlx::query_as(
+        "SELECT session_id, message_count, first_message_time, last_message_time
+         FROM sessions WHERE machine_id = $1 ORDER BY session_id",
+    )
+    .bind(hub.machine_id)
+    .fetch_all(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, "sess-a");
+    assert_eq!(rows[0].1, 2, "sess-a counts only its own messages");
+    assert_eq!(rows[0].2.unwrap().to_rfc3339(), "2026-01-01T00:00:00+00:00");
+    assert_eq!(rows[0].3.unwrap().to_rfc3339(), "2026-01-03T00:00:00+00:00");
+    assert_eq!(rows[1].0, "sess-b");
+    assert_eq!(rows[1].1, 1, "sess-b counts only its own messages");
+    assert_eq!(rows[1].2.unwrap().to_rfc3339(), "2026-02-01T00:00:00+00:00");
+
+    // The project aggregate spans both sessions.
+    let (sc, mc): (i32, i32) =
+        sqlx::query_as("SELECT session_count, message_count FROM projects WHERE machine_id = $1")
+            .bind(hub.machine_id)
+            .fetch_one(&hub.pool)
+            .await
+            .unwrap();
+    assert_eq!((sc, mc), (2, 3));
+}
+
+/// `machines.last_seen` is a coarse liveness heartbeat: back-to-back ingests
+/// must NOT each rewrite the row (it was the archive's hottest write), but a
+/// changed hostname/os must still land immediately.
+#[tokio::test]
+async fn machine_heartbeat_is_coalesced_but_facts_propagate() {
+    let hub = spawn().await;
+    let b1 = sample_batch(
+        hub.machine_id,
+        "sess-hb",
+        vec![msg(
+            "sess-hb",
+            "k1",
+            Some("u1"),
+            "2026-01-01T00:00:00Z",
+            "one",
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &b1).await;
+
+    let seen_after_first: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT last_seen FROM machines WHERE machine_id = $1")
+            .bind(hub.machine_id)
+            .fetch_one(&hub.pool)
+            .await
+            .unwrap();
+
+    // A second ingest moments later leaves the heartbeat alone.
+    let b2 = sample_batch(
+        hub.machine_id,
+        "sess-hb",
+        vec![msg(
+            "sess-hb",
+            "k2",
+            Some("u2"),
+            "2026-01-02T00:00:00Z",
+            "two",
+        )],
+    );
+    post_ingest(&hub, Some(&hub.token), &b2).await;
+
+    let (seen_after_second, hostname): (chrono::DateTime<chrono::Utc>, String) =
+        sqlx::query_as("SELECT last_seen, hostname FROM machines WHERE machine_id = $1")
+            .bind(hub.machine_id)
+            .fetch_one(&hub.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        seen_after_second, seen_after_first,
+        "a heartbeat inside the coalescing window must not rewrite the row"
+    );
+    assert_eq!(hostname, "testbox");
+
+    // A renamed machine bypasses the window.
+    let mut b3 = sample_batch(
+        hub.machine_id,
+        "sess-hb",
+        vec![msg(
+            "sess-hb",
+            "k3",
+            Some("u3"),
+            "2026-01-03T00:00:00Z",
+            "three",
+        )],
+    );
+    b3.machine.hostname = "renamedbox".into();
+    post_ingest(&hub, Some(&hub.token), &b3).await;
+
+    let hostname: String =
+        sqlx::query_scalar("SELECT hostname FROM machines WHERE machine_id = $1")
+            .bind(hub.machine_id)
+            .fetch_one(&hub.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        hostname, "renamedbox",
+        "a changed fact propagates regardless of the heartbeat window"
+    );
+}
+
 #[tokio::test]
 async fn ingest_sanitizes_nul_characters() {
     let hub = spawn().await;
@@ -563,7 +701,9 @@ async fn oversized_search_text_is_clamped_not_rejected() {
     .fetch_one(&hub.pool)
     .await
     .expect("row must exist");
-    assert!(stored.len() <= 512 * 1024, "search_text must be clamped");
+    // Pinned to the live clamp (`SEARCH_TEXT_MAX_BYTES`), not the old 512 KiB
+    // bound — a stale ceiling would keep passing if the clamp regressed.
+    assert!(stored.len() <= 64 * 1024, "search_text must be clamped");
     assert!(stored.starts_with("w0 w1 "), "head of text preserved");
 }
 

@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT COUNT(*) AS \"count!\" FROM messages WHERE session_id = $1",
+  "query": "SELECT message_count AS \"count!\" FROM sessions WHERE id = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
         "name": "count!",
-        "type_info": "Int8"
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -15,8 +15,8 @@
       ]
     },
     "nullable": [
-      null
+      false
     ]
   },
-  "hash": "89a96eeccea4a8cdf6da000ab1dd6b3521331b57059de0a3c2d0f07153231f6f"
+  "hash": "9cebd1e5bf18be0ac282f3108b5442bb342199dd12ee8f9b744ee10cfbbe6924"
 }
