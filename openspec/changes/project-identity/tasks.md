@@ -27,12 +27,12 @@
 
 ## 5. Webapp
 
-- [ ] 5.1 `hubApi.ts`: `identity_key`/`git_worktree` on `HubProject`; `listIdentities`/`createAlias`/`deleteAlias`; `include_worktrees` + `identity:` filter plumbing
-- [ ] 5.2 Grouping util (pure, vitest-covered): rows → identity groups, display name = basename of most recent member, dimmed-suffix disambiguation on collisions, worktree labeling
-- [ ] 5.3 Browse sidebar (`ArchiveBrowser/index.tsx:487-504`): grouped entries, member inspection (machines/providers/paths, worktree labels), selection → `identity:` filter; ungrouped rows unchanged
-- [ ] 5.4 Journal dropdown (`JournalView.tsx:228-243`): identity options from grouped projects + path options for fingerprint-less; selection → `identity:` filter
-- [ ] 5.5 `worktreeVisibilityStorage.ts` (`cchv.archiveWeb.showWorktrees`, default true, `fontScaleStorage` pattern) + toolbar toggle wired to display filtering and `include_worktrees`
-- [ ] 5.6 Suggestion chip (link) + member unlink affordances with confirmation; i18n keys added across all 5 locales, `pnpm run i18n:validate` green
+- [x] 5.1 `hubApi.ts`: `identity_key`/`git_worktree` on `HubProject`; `listIdentities`/`createAlias`/`deleteAlias`; `include_worktrees` + `identity:` filter plumbing
+- [x] 5.2 Grouping util (pure, vitest-covered): rows → identity groups, display name = basename of most recent member, dimmed-suffix disambiguation on collisions, worktree labeling
+- [x] 5.3 Browse sidebar (`ArchiveBrowser/index.tsx:487-504`): grouped entries, member inspection (machines/providers/paths, worktree labels), selection → `identity:` filter; ungrouped rows unchanged
+- [x] 5.4 Journal dropdown (`JournalView.tsx:228-243`): identity options from grouped projects + path options for fingerprint-less; selection → `identity:` filter
+- [x] 5.5 `worktreeVisibilityStorage.ts` (`cchv.archiveWeb.showWorktrees`, default true, `fontScaleStorage` pattern) + toolbar toggle wired to display filtering and `include_worktrees`
+- [x] 5.6 Suggestion chip (link) + member unlink affordances with confirmation; i18n keys added across all 5 locales, `pnpm run i18n:validate` green
 
 ## 6. Quality gate + release prep
 

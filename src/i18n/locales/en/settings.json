@@ -576,5 +576,12 @@
   "settings.archiveHub.journal.projectFilterLabel": "Filter by project",
   "settings.archiveHub.journal.datePickerLabel": "Jump to date",
   "settings.archiveHub.journal.clearDate": "Clear date",
-  "settings.archiveHub.journal.searchSection": "Journal"
+  "settings.archiveHub.journal.searchSection": "Journal",
+  "settings.archiveHub.identity.showWorktrees": "Show worktrees",
+  "settings.archiveHub.identity.worktree": "worktree",
+  "settings.archiveHub.identity.linked": "linked",
+  "settings.archiveHub.identity.link": "Link",
+  "settings.archiveHub.identity.unlink": "Unlink",
+  "settings.archiveHub.identity.locations": "Locations",
+  "settings.archiveHub.identity.suggestionHint": "possible earlier location of this project"
 }
