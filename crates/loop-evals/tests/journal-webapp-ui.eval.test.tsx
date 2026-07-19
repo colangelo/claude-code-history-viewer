@@ -135,7 +135,7 @@ interface JournalEntry {
 function makeEntry(overrides: Partial<JournalEntry>): JournalEntry {
   return {
     entry_date: "2026-07-01",
-    project_path: "/work/alpha",
+    project_path: "/work/alpha-project",
     status: "entry",
     headline: "A day of work",
     summary: "Did some things.",
@@ -283,7 +283,7 @@ describe("AC1 — Journal/Browse tabs, journal default", () => {
         {
           id: 1,
           provider: "claude",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           name: "alpha-project",
           storage_type: "jsonl",
           session_count: 1,
@@ -339,7 +339,7 @@ describe("AC2 — day grouping, newest-first, relative label", () => {
       journalEntries: () => [
         makeEntry({
           entry_date: Y,
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           headline: "Alpha work",
         }),
         makeEntry({
@@ -349,7 +349,7 @@ describe("AC2 — day grouping, newest-first, relative label", () => {
         }),
         makeEntry({
           entry_date: OLD,
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           headline: "Old work",
         }),
       ],
@@ -411,7 +411,7 @@ describe("AC3 — date picker and project filter", () => {
           makeEntry({
             entry_date: "2026-07-10",
             headline: "Default entry",
-            project_path: "/work/alpha",
+            project_path: "/work/alpha-project",
           }),
         ];
       },
@@ -441,7 +441,7 @@ describe("AC3 — date picker and project filter", () => {
           makeEntry({
             entry_date: "2026-07-10",
             headline: "Alpha entry",
-            project_path: "/work/alpha",
+            project_path: "/work/alpha-project",
           }),
           makeEntry({
             entry_date: "2026-07-10",
@@ -461,7 +461,7 @@ describe("AC3 — date picker and project filter", () => {
       "journal-project-filter"
     )) as HTMLSelectElement;
     const option = Array.from(filter.querySelectorAll("option")).find(
-      (o) => o.value.includes("/work/alpha") || o.textContent?.includes("alpha")
+      (o) => o.value.includes("/work/alpha-project") || o.textContent?.includes("alpha")
     );
     expect(option).toBeTruthy();
     fireEvent.change(filter, { target: { value: option!.value } });
@@ -500,7 +500,7 @@ describe("AC4 — entry card at rest / expanded, lazy session labels", () => {
           has_tool_use: false,
           has_errors: false,
           project_name: "alpha",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           machine_hostname: "host-a",
         },
         {
@@ -516,7 +516,7 @@ describe("AC4 — entry card at rest / expanded, lazy session labels", () => {
           has_tool_use: false,
           has_errors: false,
           project_name: "alpha",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           machine_hostname: "host-a",
         },
       ];
@@ -526,7 +526,7 @@ describe("AC4 — entry card at rest / expanded, lazy session labels", () => {
       journalEntries: () => [
         makeEntry({
           entry_date: "2026-07-10",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           headline: "Refactor auth layer",
           summary: "Reworked the token cache and simplified the guard.",
           topics: ["auth", "cache"],
@@ -537,7 +537,7 @@ describe("AC4 — entry card at rest / expanded, lazy session labels", () => {
         // A second card for the SAME project, different day, to prove caching.
         makeEntry({
           entry_date: "2026-07-09",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           headline: "Earlier work",
           summary: "Groundwork.",
           topics: ["setup"],
@@ -557,8 +557,11 @@ describe("AC4 — entry card at rest / expanded, lazy session labels", () => {
 
     // At rest: project (basename, full path on hover), model, headline,
     // summary, topic chips are visible (webapp-ux-readability change).
-    expect(card.getByText("alpha")).toBeInTheDocument();
-    expect(card.getByText("alpha")).toHaveAttribute("title", "/work/alpha");
+    expect(card.getByText("alpha-project")).toBeInTheDocument();
+    expect(card.getByText("alpha-project")).toHaveAttribute(
+      "title",
+      "/work/alpha-project"
+    );
     expect(card.getByText("claude-opus-model")).toBeInTheDocument();
     expect(card.getByText(/Reworked the token cache/)).toBeInTheDocument();
     expect(card.getByText("auth")).toBeInTheDocument();
@@ -604,7 +607,7 @@ describe("AC5 — session link drills into Browse", () => {
       journalEntries: () => [
         makeEntry({
           entry_date: "2026-07-10",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           headline: "Drill target",
           session_ids: [101],
         }),
@@ -623,7 +626,7 @@ describe("AC5 — session link drills into Browse", () => {
           has_tool_use: false,
           has_errors: false,
           project_name: "alpha",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           machine_hostname: "host-a",
         },
       ],
@@ -670,7 +673,7 @@ describe("AC6 — journal hits in search results", () => {
       session_id: "sess-msg-1",
       session_summary: "a session",
       project_name: "alpha",
-      project_path: "/work/alpha",
+      project_path: "/work/alpha-project",
       machine_hostname: "host-a",
       timestamp: "2026-07-10T00:00:00Z",
       message_type: "assistant",
@@ -681,7 +684,7 @@ describe("AC6 — journal hits in search results", () => {
     };
     const journalHit = {
       entry_date: "2026-07-08",
-      project_path: "/work/alpha",
+      project_path: "/work/alpha-project",
       headline: "Distilled journal answer",
       summary: "Everything about the needle.",
       topics: ["needle"],
@@ -699,7 +702,7 @@ describe("AC6 — journal hits in search results", () => {
             makeEntry({
               entry_date: "2026-07-08",
               headline: "Anchored day entry",
-              project_path: "/work/alpha",
+              project_path: "/work/alpha-project",
             }),
           ];
         }
@@ -725,7 +728,7 @@ describe("AC6 — journal hits in search results", () => {
     // Journal hit renders (headline, date, project) inside its own section...
     const section = await screen.findByTestId("journal-search-section");
     expect(within(section).getByText("Distilled journal answer")).toBeInTheDocument();
-    expect(section.textContent).toContain("/work/alpha");
+    expect(section.textContent).toContain("/work/alpha-project");
     expect(section.textContent).toContain("2026-07-08");
 
     // ...above the message hits.
@@ -859,7 +862,7 @@ describe("AC9 — widened Browse panes and humanized list rows", () => {
         {
           id: 1,
           provider: "claude",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           name: "alpha-project",
           storage_type: "jsonl",
           session_count: 1,
@@ -883,7 +886,7 @@ describe("AC9 — widened Browse panes and humanized list rows", () => {
           has_tool_use: false,
           has_errors: false,
           project_name: "alpha-project",
-          project_path: "/work/alpha",
+          project_path: "/work/alpha-project",
           machine_hostname: "host-a",
         },
       ],

@@ -33,6 +33,51 @@ export interface HubProject {
   last_modified: string | null;
   machine_id: string;
   machine_hostname: string;
+  /** Git-fingerprint identity (null = not a git repo → path identity). */
+  identity_key: string | null;
+  /** Linked `git worktree` member of its identity. */
+  git_worktree: boolean;
+  /** For worktrees: the main checkout's path. */
+  git_main_path: string | null;
+}
+
+/** One member path of an identity (`GET /v1/identities`). */
+export interface HubIdentityMember {
+  project_path: string;
+  providers: string[];
+  machines: string[];
+  /** True when every row binding this path to the identity is a worktree. */
+  worktree: boolean;
+  main_path: string | null;
+  last_active: string | null;
+}
+
+export interface HubIdentityAlias {
+  id: number;
+  project_path: string;
+  created_by: string;
+  created_at: string;
+}
+
+/** Advisory link suggestion — never acted on automatically. */
+export interface HubIdentitySuggestion {
+  kind: "orphan_path" | "related_identity" | string;
+  project_path?: string;
+  identity_key?: string;
+}
+
+/** One identity (`GET /v1/identities`): equivalence class of project rows. */
+export interface HubIdentity {
+  identity_key: string;
+  display_name: string;
+  members: HubIdentityMember[];
+  aliases: HubIdentityAlias[];
+  suggestions: HubIdentitySuggestion[];
+}
+
+/** Build the `identity:<key>` form of the `project` filter param. */
+export function identityProjectFilter(identityKey: string): string {
+  return `identity:${identityKey}`;
 }
 
 /** Row shape of `GET /v1/sessions` (crates/hub/src/browse.rs `SessionRow`). */
@@ -120,6 +165,8 @@ export interface JournalSearchHit extends Omit<JournalEntry, "status"> {
 
 export interface HubJournalOptions {
   project?: string;
+  /** In identity scope: `false` excludes worktree-only member paths. */
+  include_worktrees?: boolean;
   from?: string;
   to?: string;
   limit?: number;
@@ -130,6 +177,8 @@ export interface HubListOptions {
   machine?: string;
   provider?: string;
   project?: string;
+  /** In identity scope: `false` excludes worktree-only member paths. */
+  include_worktrees?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -153,7 +202,7 @@ function baseUrl(config: HubConfig): string {
 function hubUrl(
   config: HubConfig,
   path: string,
-  params?: Record<string, string | number | undefined>
+  params?: Record<string, string | number | boolean | undefined>
 ): URL {
   const url = new URL(`${baseUrl(config)}${path}`);
   if (params) {
@@ -177,6 +226,27 @@ async function hubGet(url: URL, config: HubConfig): Promise<Response> {
   const res = await fetch(url.toString(), { headers: authHeaders(config) });
   if (!res.ok) {
     throw new Error(`hub request to ${url.pathname} failed: ${res.status}`);
+  }
+  return res;
+}
+
+/** Non-GET request (alias create/delete). JSON body when provided. */
+async function hubSend(
+  method: "POST" | "DELETE",
+  url: URL,
+  config: HubConfig,
+  body?: unknown
+): Promise<Response> {
+  const res = await fetch(url.toString(), {
+    method,
+    headers: {
+      ...authHeaders(config),
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    throw new Error(`hub ${method} to ${url.pathname} failed: ${res.status}`);
   }
   return res;
 }
@@ -216,11 +286,42 @@ export const hubApi = {
       machine: options?.machine,
       provider: options?.provider,
       project: options?.project,
+      include_worktrees: options?.include_worktrees,
       limit: options?.limit,
       offset: options?.offset,
     });
     const res = await hubGet(url, config);
     return (await res.json()) as HubSession[];
+  },
+
+  /** `GET /v1/identities` — identity groups with members/aliases/suggestions. */
+  async listIdentities(config: HubConfig): Promise<HubIdentity[]> {
+    const url = hubUrl(config, "/v1/identities");
+    const res = await hubGet(url, config);
+    return (await res.json()) as HubIdentity[];
+  },
+
+  /**
+   * `POST /v1/identities/aliases` — attach a (typically moved-away) path to an
+   * identity. Reversible via {@link deleteAlias}; never rewrites archived rows.
+   */
+  async createAlias(
+    config: HubConfig,
+    projectPath: string,
+    identityKey: string
+  ): Promise<HubIdentityAlias> {
+    const url = hubUrl(config, "/v1/identities/aliases");
+    const res = await hubSend("POST", url, config, {
+      project_path: projectPath,
+      identity_key: identityKey,
+    });
+    return (await res.json()) as HubIdentityAlias;
+  },
+
+  /** `DELETE /v1/identities/aliases/{id}` — undo a link. */
+  async deleteAlias(config: HubConfig, aliasId: number): Promise<void> {
+    const url = hubUrl(config, `/v1/identities/aliases/${aliasId}`);
+    await hubSend("DELETE", url, config);
   },
 
   /**
@@ -254,6 +355,7 @@ export const hubApi = {
   ): Promise<JournalEntry[]> {
     const url = hubUrl(config, "/v1/journal/entries", {
       project: options?.project,
+      include_worktrees: options?.include_worktrees,
       from: options?.from,
       to: options?.to,
       limit: options?.limit,
@@ -282,6 +384,7 @@ export const hubApi = {
       machine: options?.machine,
       provider: options?.provider,
       project: options?.project,
+      include_worktrees: options?.include_worktrees,
       from: options?.from,
       to: options?.to,
       limit: options?.limit,
@@ -306,6 +409,7 @@ export const hubApi = {
       machine: options?.machine,
       provider: options?.provider,
       project: options?.project,
+      include_worktrees: options?.include_worktrees,
       from: options?.from,
       to: options?.to,
       limit: options?.limit,

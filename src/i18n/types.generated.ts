@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-19T08:46:32.164Z
- * 총 키 개수: 1873
+ * 생성 시간: 2026-07-19T09:53:48.192Z
+ * 총 키 개수: 1880
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (578개)
+ * settings namespace의 번역 키 (585개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -679,6 +679,13 @@ export type SettingsKeys =
   | 'settings.archiveHub.browser.sessions.messageCountUnit'
   | 'settings.archiveHub.browser.sessions.title'
   | 'settings.archiveHub.description'
+  | 'settings.archiveHub.identity.link'
+  | 'settings.archiveHub.identity.linked'
+  | 'settings.archiveHub.identity.locations'
+  | 'settings.archiveHub.identity.showWorktrees'
+  | 'settings.archiveHub.identity.suggestionHint'
+  | 'settings.archiveHub.identity.unlink'
+  | 'settings.archiveHub.identity.worktree'
   | 'settings.archiveHub.journal.clearDate'
   | 'settings.archiveHub.journal.collapse'
   | 'settings.archiveHub.journal.datePickerLabel'
@@ -3068,6 +3075,13 @@ export type TranslationKey =
   | 'settings.archiveHub.browser.sessions.messageCountUnit'
   | 'settings.archiveHub.browser.sessions.title'
   | 'settings.archiveHub.description'
+  | 'settings.archiveHub.identity.link'
+  | 'settings.archiveHub.identity.linked'
+  | 'settings.archiveHub.identity.locations'
+  | 'settings.archiveHub.identity.showWorktrees'
+  | 'settings.archiveHub.identity.suggestionHint'
+  | 'settings.archiveHub.identity.unlink'
+  | 'settings.archiveHub.identity.worktree'
   | 'settings.archiveHub.journal.clearDate'
   | 'settings.archiveHub.journal.collapse'
   | 'settings.archiveHub.journal.datePickerLabel'

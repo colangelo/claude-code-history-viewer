@@ -576,5 +576,12 @@
   "settings.archiveHub.journal.projectFilterLabel": "依專案篩選",
   "settings.archiveHub.journal.datePickerLabel": "跳至日期",
   "settings.archiveHub.journal.clearDate": "清除日期",
-  "settings.archiveHub.journal.searchSection": "日誌"
+  "settings.archiveHub.journal.searchSection": "日誌",
+  "settings.archiveHub.identity.showWorktrees": "顯示工作樹",
+  "settings.archiveHub.identity.worktree": "工作樹",
+  "settings.archiveHub.identity.linked": "已連結",
+  "settings.archiveHub.identity.link": "連結",
+  "settings.archiveHub.identity.unlink": "取消連結",
+  "settings.archiveHub.identity.locations": "位置",
+  "settings.archiveHub.identity.suggestionHint": "可能是該專案的早期位置"
 }

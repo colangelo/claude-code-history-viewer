@@ -320,8 +320,18 @@ function showBrowse() {
 describe("ArchiveBrowser", () => {
   it("AC8: renders archived projects with name and machine hostname", async () => {
     const projects = [
-      project({ id: 1, name: "alpha-project", machine_hostname: "host-alpha" }),
-      project({ id: 2, name: "beta-project", machine_hostname: "host-beta" }),
+      project({
+        id: 1,
+        name: "alpha-project",
+        project_path: "/tmp/alpha-project",
+        machine_hostname: "host-alpha",
+      }),
+      project({
+        id: 2,
+        name: "beta-project",
+        project_path: "/tmp/beta-project",
+        machine_hostname: "host-beta",
+      }),
     ];
     vi.spyOn(hubApi, "listProjects").mockResolvedValue(projects);
     vi.spyOn(hubApi, "listSessions").mockResolvedValue([]);
@@ -364,7 +374,11 @@ describe("ArchiveBrowser", () => {
   });
 
   it("AC10: sessions page with load-more, appends remaining messages driven by totalCount", async () => {
-    const targetProject = project({ id: 1, name: "alpha-project" });
+    const targetProject = project({
+      id: 1,
+      name: "alpha-project",
+      project_path: "/tmp/alpha-project",
+    });
     const targetSession = session({ id: 10, summary: "paged session" });
     const firstPage = Array.from({ length: 200 }, (_, i) =>
       messageRow({ id: i + 1, message_key: `k${i}`, content: `page1-msg-${i}` })
