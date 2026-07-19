@@ -19,8 +19,11 @@ pub struct ListParams {
     /// Machine hostname filter.
     pub machine: Option<String>,
     pub provider: Option<String>,
-    /// Project name or path filter (sessions only).
+    /// Project name or path filter (sessions only), or `identity:<key>` for
+    /// server-side expansion to the identity's member + aliased paths.
     pub project: Option<String>,
+    /// In identity scope: `false` excludes worktree-only member paths.
+    pub include_worktrees: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -37,6 +40,12 @@ pub struct ProjectRow {
     pub last_modified: Option<DateTime<Utc>>,
     pub machine_id: Uuid,
     pub machine_hostname: String,
+    /// Git-fingerprint identity (NULL = not a git repo → path identity).
+    pub identity_key: Option<String>,
+    /// Linked `git worktree` member of its identity.
+    pub git_worktree: bool,
+    /// For worktrees: the main checkout's path.
+    pub git_main_path: Option<String>,
 }
 
 pub async fn list_projects(
@@ -56,7 +65,10 @@ pub async fn list_projects(
                p.message_count   AS "message_count!",
                p.last_modified,
                p.machine_id      AS "machine_id!",
-               mac.hostname      AS "machine_hostname!"
+               mac.hostname      AS "machine_hostname!",
+               p.identity_key,
+               p.git_worktree    AS "git_worktree!",
+               p.git_main_path
         FROM projects p
         JOIN machines mac ON p.machine_id = mac.machine_id
         WHERE ($1::text IS NULL OR mac.hostname = $1)
@@ -85,6 +97,9 @@ pub async fn list_projects(
                 last_modified: r.last_modified,
                 machine_id: r.machine_id,
                 machine_hostname: r.machine_hostname,
+                identity_key: r.identity_key,
+                git_worktree: r.git_worktree,
+                git_main_path: r.git_main_path,
             })
             .collect(),
     ))
@@ -114,6 +129,12 @@ pub async fn list_sessions(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<SessionRow>>, HubError> {
     let page = Page::from(params.limit, params.offset);
+    let scope = crate::identity_filter::resolve_project_scope(
+        &state.pool,
+        params.project.as_deref(),
+        params.include_worktrees.unwrap_or(true),
+    )
+    .await?;
     let rows = sqlx::query!(
         r#"
         SELECT s.id                 AS "id!",
@@ -136,14 +157,16 @@ pub async fn list_sessions(
         WHERE ($1::text IS NULL OR mac.hostname = $1)
           AND ($2::text IS NULL OR s.provider = $2)
           AND ($3::text IS NULL OR p.name = $3 OR p.project_path = $3)
+          AND ($6::text[] IS NULL OR p.project_path = ANY($6))
         ORDER BY s.last_message_time DESC NULLS LAST, s.id DESC
         LIMIT $4 OFFSET $5
         "#,
         params.machine,
         params.provider,
-        params.project,
+        scope.plain,
         page.limit,
         page.offset,
+        scope.paths.as_deref(),
     )
     .fetch_all(&state.pool)
     .await?;

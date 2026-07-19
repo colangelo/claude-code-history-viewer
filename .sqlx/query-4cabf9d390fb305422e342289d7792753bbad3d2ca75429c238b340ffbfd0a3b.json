@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            m.id              AS \"message_id!\",\n            m.message_key     AS \"message_key!\",\n            m.uuid,\n            m.provider        AS \"provider!\",\n            m.session_id      AS \"session_pk!\",\n            s.session_id      AS \"session_id!\",\n            s.summary         AS session_summary,\n            p.name            AS project_name,\n            p.project_path     AS \"project_path?\",\n            mac.hostname      AS \"machine_hostname!\",\n            m.\"timestamp\",\n            m.type            AS message_type,\n            m.role,\n            m.model,\n            ts_headline('simple', coalesce(m.search_text, ''),\n                        websearch_to_tsquery('simple', $1),\n                        'MaxFragments=2, MinWords=3, MaxWords=14') AS \"snippet!\",\n            ts_rank(m.text_search, websearch_to_tsquery('simple', $1)) AS \"rank!\"\n        FROM messages m\n        JOIN sessions s   ON m.session_id = s.id\n        LEFT JOIN projects p ON s.project_id = p.id\n        JOIN machines mac ON m.machine_id = mac.machine_id\n        WHERE m.text_search @@ websearch_to_tsquery('simple', $1)\n          AND ($2::text IS NULL OR m.provider = $2)\n          AND ($3::text IS NULL OR mac.hostname = $3)\n          AND ($4::text IS NULL OR p.name = $4 OR p.project_path = $4)\n          AND ($5::timestamptz IS NULL OR m.\"timestamp\" >= $5)\n          AND ($6::timestamptz IS NULL OR m.\"timestamp\" <= $6)\n        ORDER BY \"rank!\" DESC, m.\"timestamp\" DESC NULLS LAST, m.id DESC\n        LIMIT $7 OFFSET $8\n        ",
+  "query": "\n        SELECT\n            m.id              AS \"message_id!\",\n            m.message_key     AS \"message_key!\",\n            m.uuid,\n            m.provider        AS \"provider!\",\n            m.session_id      AS \"session_pk!\",\n            s.session_id      AS \"session_id!\",\n            s.summary         AS session_summary,\n            p.name            AS project_name,\n            p.project_path     AS \"project_path?\",\n            mac.hostname      AS \"machine_hostname!\",\n            m.\"timestamp\",\n            m.type            AS message_type,\n            m.role,\n            m.model,\n            ts_headline('simple', coalesce(m.search_text, ''),\n                        websearch_to_tsquery('simple', $1),\n                        'MaxFragments=2, MinWords=3, MaxWords=14') AS \"snippet!\",\n            ts_rank(m.text_search, websearch_to_tsquery('simple', $1)) AS \"rank!\"\n        FROM messages m\n        JOIN sessions s   ON m.session_id = s.id\n        LEFT JOIN projects p ON s.project_id = p.id\n        JOIN machines mac ON m.machine_id = mac.machine_id\n        WHERE m.text_search @@ websearch_to_tsquery('simple', $1)\n          AND ($2::text IS NULL OR m.provider = $2)\n          AND ($3::text IS NULL OR mac.hostname = $3)\n          AND ($4::text IS NULL OR p.name = $4 OR p.project_path = $4)\n          AND ($9::text[] IS NULL OR p.project_path = ANY($9))\n          AND ($5::timestamptz IS NULL OR m.\"timestamp\" >= $5)\n          AND ($6::timestamptz IS NULL OR m.\"timestamp\" <= $6)\n        ORDER BY \"rank!\" DESC, m.\"timestamp\" DESC NULLS LAST, m.id DESC\n        LIMIT $7 OFFSET $8\n        ",
   "describe": {
     "columns": [
       {
@@ -93,7 +93,8 @@
         "Timestamptz",
         "Timestamptz",
         "Int8",
-        "Int8"
+        "Int8",
+        "TextArray"
       ]
     },
     "nullable": [
@@ -115,5 +116,5 @@
       null
     ]
   },
-  "hash": "eebc81208244072c9666907df29c472d26e9a0e945e1a27a2e72fd64b377147c"
+  "hash": "4cabf9d390fb305422e342289d7792753bbad3d2ca75429c238b340ffbfd0a3b"
 }

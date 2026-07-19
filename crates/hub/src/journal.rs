@@ -348,8 +348,11 @@ pub async fn create(
 
 #[derive(Debug, Deserialize)]
 pub struct BrowseParams {
-    /// Match `project_path`.
+    /// Match `project_path`, or `identity:<key>` for server-side expansion
+    /// to the identity's member + aliased paths.
     pub project: Option<String>,
+    /// In identity scope: `false` excludes worktree-only member paths.
+    pub include_worktrees: Option<bool>,
     /// Inclusive `entry_date` bounds (`YYYY-MM-DD`).
     pub from: Option<String>,
     pub to: Option<String>,
@@ -382,6 +385,12 @@ pub async fn browse(
     let from = parse_date(params.from.as_deref(), "from")?;
     let to = parse_date(params.to.as_deref(), "to")?;
     let page = Page::from(params.limit, params.offset);
+    let scope = crate::identity_filter::resolve_project_scope(
+        &state.pool,
+        params.project.as_deref(),
+        params.include_worktrees.unwrap_or(true),
+    )
+    .await?;
 
     let rows = sqlx::query_as::<_, JournalEntry>(
         r"
@@ -390,17 +399,19 @@ pub async fn browse(
         FROM journal_entries
         WHERE status = 'entry'
           AND ($1::text IS NULL OR project_path = $1)
+          AND ($6::text[] IS NULL OR project_path = ANY($6))
           AND ($2::date IS NULL OR entry_date >= $2)
           AND ($3::date IS NULL OR entry_date <= $3)
         ORDER BY entry_date DESC, project_path DESC, id DESC
         LIMIT $4 OFFSET $5
         ",
     )
-    .bind(&params.project)
+    .bind(&scope.plain)
     .bind(from)
     .bind(to)
     .bind(page.limit)
     .bind(page.offset)
+    .bind(scope.paths.as_deref())
     .fetch_all(&state.pool)
     .await?;
 
@@ -429,11 +440,12 @@ pub struct JournalHit {
 
 /// Ranked FTS over `entry`-status journal rows for the `/v1/search` journal
 /// block. `skip` rows have a NULL `search_text` and are filtered out anyway, so
-/// they never match. `project`, when set, matches `project_path`.
+/// they never match. The project scope carries either a plain `project_path`
+/// match or a pre-resolved identity path set (see `identity_filter`).
 pub async fn search_journal(
     state: &AppState,
     q: &str,
-    project: Option<&str>,
+    scope: &crate::identity_filter::ProjectScope,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<JournalHit>, HubError> {
@@ -446,14 +458,16 @@ pub async fn search_journal(
         WHERE status = 'entry'
           AND text_search @@ websearch_to_tsquery('simple', $1)
           AND ($2::text IS NULL OR project_path = $2)
+          AND ($5::text[] IS NULL OR project_path = ANY($5))
         ORDER BY rank DESC, entry_date DESC, id DESC
         LIMIT $3 OFFSET $4
         ",
     )
     .bind(q)
-    .bind(project)
+    .bind(&scope.plain)
     .bind(limit)
     .bind(offset)
+    .bind(scope.paths.as_deref())
     .fetch_all(&state.pool)
     .await?;
 
