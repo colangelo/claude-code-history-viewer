@@ -7,9 +7,9 @@
 
 ## 2. Daemon fingerprint capture
 
-- [ ] 2.1 New `crates/sync-daemon/src/git_fingerprint.rs`: guarded capture (only when `.git` marker present), 5s-timeboxed `git` subprocesses (`rev-parse --is-shallow-repository`, `rev-list --max-parents=0 HEAD` → lexicographically smallest root, `config --get remote.origin.url`), per-project failure isolation returning `Option<Fingerprint>`
-- [ ] 2.2 Wire into `to_ingest_project` / the scan loop (`sync.rs:109-123`): capture from `actual_path`, reuse `detect_git_worktree_info` result for `git_is_worktree`/`git_main_path`, normalize remote before send
-- [ ] 2.3 Tests with tempdir git repos: normal repo, no-remote repo, linked worktree, non-git dir, shallow clone (skip if `git clone --depth` unavailable), and capture-failure isolation (missing git binary path)
+- [x] 2.1 New `crates/sync-daemon/src/git_fingerprint.rs`: guarded capture (only when `.git` marker present), 5s-timeboxed `git` subprocesses (`rev-parse --is-shallow-repository`, `rev-list --max-parents=0 HEAD` → lexicographically smallest root, `config --get remote.origin.url`), per-project failure isolation returning `Option<Fingerprint>`
+- [x] 2.2 Wire into `to_ingest_project` / the scan loop (`sync.rs:109-123`): capture from `actual_path`, reuse `detect_git_worktree_info` result for `git_is_worktree`/`git_main_path`, normalize remote before send
+- [x] 2.3 Tests with tempdir git repos: normal repo, no-remote repo, linked worktree, non-git dir, shallow clone (skip if `git clone --depth` unavailable), and capture-failure isolation (missing git binary path)
 
 ## 3. Hub schema + ingest
 
