@@ -586,5 +586,7 @@
   "settings.archiveHub.identity.link": "連結",
   "settings.archiveHub.identity.unlink": "取消連結",
   "settings.archiveHub.identity.locations": "位置",
+  "settings.archiveHub.identity.suggested": "建議",
+  "settings.archiveHub.identity.linkHint": "將該路徑的歷史併入此專案",
   "settings.archiveHub.identity.suggestionHint": "可能是該專案的早期位置"
 }

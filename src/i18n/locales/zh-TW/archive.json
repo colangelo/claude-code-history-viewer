@@ -139,6 +139,7 @@
   "archive.web.connectFailed": "連線失敗：{{error}}",
   "archive.web.storageHint": "中樞 URL 與權杖僅儲存於此瀏覽器（localStorage）。",
   "archive.web.disconnect": "中斷連線",
+  "archive.web.fontSize": "字體大小",
   "archive.web.fontSmaller": "縮小字體",
   "archive.web.fontLarger": "放大字體",
   "archive.web.fontReset": "重設字體大小",
