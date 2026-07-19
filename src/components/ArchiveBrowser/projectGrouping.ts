@@ -79,10 +79,32 @@ export function groupProjects(
   const aliases = options?.aliases;
   const showWorktrees = options?.showWorktrees ?? true;
 
-  const groups = new Map<string, ProjectGroup>();
+  // Pass 1 — which identity claims each path (fingerprinted or aliased rows).
+  // A NULL-identity row whose path an identity already owns must fold INTO
+  // that identity, not spawn a twin `path:` group: rows ingested by a
+  // pre-fingerprint daemon (or a provider pass that hasn't re-reported yet)
+  // otherwise duplicate every cross-provider repo in the sidebar/filter.
+  // A path claimed by TWO identities is contested → left as its own group.
+  const identityOwningPath = new Map<string, string | null>();
   for (const row of projects) {
     const identityKey =
       row.identity_key ?? aliases?.get(row.project_path) ?? null;
+    if (!identityKey) continue;
+    const prev = identityOwningPath.get(row.project_path);
+    if (prev === undefined) {
+      identityOwningPath.set(row.project_path, identityKey);
+    } else if (prev !== identityKey) {
+      identityOwningPath.set(row.project_path, null); // contested
+    }
+  }
+
+  const groups = new Map<string, ProjectGroup>();
+  for (const row of projects) {
+    const identityKey =
+      row.identity_key ??
+      aliases?.get(row.project_path) ??
+      identityOwningPath.get(row.project_path) ??
+      null;
     const key = identityKey ?? `path:${row.project_path}`;
     let group = groups.get(key);
     if (!group) {
@@ -159,6 +181,34 @@ export function groupProjects(
   for (const group of result) {
     if ((nameCounts.get(group.displayName) ?? 0) > 1) {
       group.disambiguator = pathParent(group.paths[0] ?? "");
+    }
+  }
+
+  // Escalate: one parent segment can still tie (same basename AND parent
+  // under different grandparents — `_sync/dev/x` vs `other/dev/x`). Deepen
+  // the suffix for colliding labels until they differ or the path runs out;
+  // two visibly identical options must never render.
+  const labelOf = (g: ProjectGroup) =>
+    g.disambiguator ? `${g.displayName} — ${g.disambiguator}` : g.displayName;
+  for (let depth = 2; depth <= 6; depth++) {
+    const byLabel = new Map<string, ProjectGroup[]>();
+    for (const g of result) {
+      const label = labelOf(g);
+      const bucket = byLabel.get(label);
+      if (bucket) bucket.push(g);
+      else byLabel.set(label, [g]);
+    }
+    const colliding = Array.from(byLabel.values()).filter(
+      (gs) => gs.length > 1
+    );
+    if (colliding.length === 0) break;
+    for (const gs of colliding) {
+      for (const g of gs) {
+        const parts = (g.paths[0] ?? "").split(/[\\/]/).filter(Boolean);
+        parts.pop(); // basename
+        const suffix = parts.slice(-depth).join("/");
+        if (suffix) g.disambiguator = suffix;
+      }
     }
   }
 
