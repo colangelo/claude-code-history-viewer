@@ -128,7 +128,7 @@
   "archive.create.subagentSessions": "子代理工作階段 ({{count}})",
   "archive.settings.link": "封存管理器",
   "archive.settings.linkDescription": "在清理前管理並保存您的對話歷史",
-  "archive.web.title": "封存瀏覽器",
+  "archive.web.title": "CCHV 封存瀏覽器",
   "archive.web.subtitle": "連線至 cchv 封存中樞，瀏覽並搜尋其他裝置封存的對話紀錄。",
   "archive.web.urlLabel": "中樞 URL",
   "archive.web.urlPlaceholder": "http://100.x.x.x:8787",

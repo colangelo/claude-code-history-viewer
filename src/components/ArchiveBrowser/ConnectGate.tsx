@@ -123,6 +123,13 @@ export function ConnectGate() {
               {t("archive.web.title")}
             </h1>
             <span
+              data-testid="app-version"
+              className="text-px12 text-muted-foreground shrink-0"
+              title={`cchv-v${__APP_VERSION__}`}
+            >
+              v{__APP_VERSION__}
+            </span>
+            <span
               className="text-px12 font-mono text-muted-foreground truncate"
               title={config.url}
             >
@@ -150,7 +157,16 @@ export function ConnectGate() {
         className="w-full max-w-sm space-y-4 rounded-lg border border-border bg-background p-6"
       >
         <div className="space-y-1">
-          <h1 className="text-base font-semibold">{t("archive.web.title")}</h1>
+          <div className="flex items-baseline gap-2">
+            <h1 className="text-base font-semibold">{t("archive.web.title")}</h1>
+            <span
+              data-testid="app-version"
+              className="text-px12 text-muted-foreground"
+              title={`cchv-v${__APP_VERSION__}`}
+            >
+              v{__APP_VERSION__}
+            </span>
+          </div>
           <p className="text-xs text-muted-foreground">{t("archive.web.subtitle")}</p>
         </div>
         <div className="space-y-1">

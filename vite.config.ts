@@ -4,6 +4,13 @@ import react from "@vitejs/plugin-react";
 // import { visualizer } from "rollup-plugin-visualizer";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import { readFileSync } from "fs";
+
+// package.json is the version source of truth (see CLAUDE.md Version
+// Management); baked in at build time so the UI can identify the deploy.
+const pkg = JSON.parse(
+  readFileSync(path.resolve(__dirname, "package.json"), "utf8")
+) as { version: string };
 
 // https://vite.dev/config/
 export default defineConfig(async () => {
@@ -14,6 +21,9 @@ export default defineConfig(async () => {
 
   return {
   base: "./",
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     react(),
     tailwindcss(),
