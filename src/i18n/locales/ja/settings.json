@@ -556,6 +556,8 @@
   "settings.archiveHub.browser.messages.empty": "このセッションにはメッセージがありません",
   "settings.archiveHub.browser.messages.loadMore": "もっと見る",
   "settings.archiveHub.browser.messages.progress": "{{total}}件中{{loaded}}件のメッセージ",
+  "settings.archiveHub.browser.messages.loadEarlier": "前のメッセージを読み込む",
+  "settings.archiveHub.browser.messages.progressRange": "{{total}}件中{{from}}–{{to}}件目",
   "settings.archiveHub.journal.tab.journal": "ジャーナル",
   "settings.archiveHub.journal.tab.browse": "ブラウズ",
   "settings.archiveHub.journal.tabsLabel": "アーカイブ表示",

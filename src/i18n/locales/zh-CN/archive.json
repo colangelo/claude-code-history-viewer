@@ -132,7 +132,7 @@
   "archive.web.subtitle": "连接 cchv 归档中心，浏览和搜索从其他设备归档的对话历史。",
   "archive.web.urlLabel": "中心 URL",
   "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
-  "archive.web.tokenLabel": "Bearer 令牌",
+  "archive.web.tokenLabel": "读取令牌（可选）",
   "archive.web.tokenPlaceholder": "只读令牌",
   "archive.web.connect": "连接",
   "archive.web.connecting": "连接中...",

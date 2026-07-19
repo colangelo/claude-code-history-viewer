@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-19T09:53:48.192Z
- * 총 키 개수: 1880
+ * 생성 시간: 2026-07-19T11:20:48.640Z
+ * 총 키 개수: 1882
  * Namespace 수: 11
  */
 
@@ -635,7 +635,7 @@ export type SessionKeys =
   | 'sessionPicker.title';
 
 /**
- * settings namespace의 번역 키 (585개)
+ * settings namespace의 번역 키 (587개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -660,9 +660,11 @@ export type SettingsKeys =
   | 'settings.archiveHub.browser.backToProjects'
   | 'settings.archiveHub.browser.backToSessions'
   | 'settings.archiveHub.browser.messages.empty'
+  | 'settings.archiveHub.browser.messages.loadEarlier'
   | 'settings.archiveHub.browser.messages.loadMore'
   | 'settings.archiveHub.browser.messages.loading'
   | 'settings.archiveHub.browser.messages.progress'
+  | 'settings.archiveHub.browser.messages.progressRange'
   | 'settings.archiveHub.browser.projects.empty'
   | 'settings.archiveHub.browser.projects.loading'
   | 'settings.archiveHub.browser.projects.title'
@@ -3056,9 +3058,11 @@ export type TranslationKey =
   | 'settings.archiveHub.browser.backToProjects'
   | 'settings.archiveHub.browser.backToSessions'
   | 'settings.archiveHub.browser.messages.empty'
+  | 'settings.archiveHub.browser.messages.loadEarlier'
   | 'settings.archiveHub.browser.messages.loadMore'
   | 'settings.archiveHub.browser.messages.loading'
   | 'settings.archiveHub.browser.messages.progress'
+  | 'settings.archiveHub.browser.messages.progressRange'
   | 'settings.archiveHub.browser.projects.empty'
   | 'settings.archiveHub.browser.projects.loading'
   | 'settings.archiveHub.browser.projects.title'

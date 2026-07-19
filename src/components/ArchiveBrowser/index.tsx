@@ -15,6 +15,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, GitBranch, Loader2, X } from "lucide-react";
@@ -80,6 +81,13 @@ export interface SessionOpenContext {
   project_path?: string | null;
   machine_hostname?: string | null;
   provider?: string | null;
+}
+
+/** Where to land inside a session opened from a search hit (issue #20):
+ * open the page containing `position` and highlight `messageId`. */
+export interface SessionOpenTarget {
+  position: number;
+  messageId?: number;
 }
 
 /** Localized role label for the message gutter; unknown roles pass through. */
@@ -181,6 +189,12 @@ export function ArchiveBrowser({
   const [openSession, setOpenSession] = useState<OpenSession | null>(null);
   const [messages, setMessages] = useState<HubMessage[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  // Offset of messages[0] in the session (issue #20): a search hit opens the
+  // page CONTAINING the match, so the loaded window need not start at 0.
+  const [windowStart, setWindowStart] = useState(0);
+  const [highlightMessageId, setHighlightMessageId] = useState<number | null>(null);
+  // Scroll-once flag: consumed by the effect that centers the matched message.
+  const pendingScrollRef = useRef<number | null>(null);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
 
@@ -292,15 +306,28 @@ export function ArchiveBrowser({
   );
 
   const openSessionRef = useCallback(
-    (ref: number | string, label: string, context?: SessionOpenContext) => {
+    (
+      ref: number | string,
+      label: string,
+      context?: SessionOpenContext,
+      target?: SessionOpenTarget
+    ) => {
       const generation = ++messagesGenerationRef.current;
+      // Land on the page containing the target (older hubs send no position
+      // → page 1 exactly as before).
+      const start = target
+        ? Math.floor(target.position / PAGE_SIZE) * PAGE_SIZE
+        : 0;
       setOpenSession({ ref, label });
       setMessages([]);
       setTotalCount(null);
+      setWindowStart(start);
+      setHighlightMessageId(target?.messageId ?? null);
+      pendingScrollRef.current = target?.messageId ?? null;
       setMessagesError(null);
       setIsLoadingMessages(true);
       hubApi
-        .sessionMessages(config, ref, { limit: PAGE_SIZE, offset: 0 })
+        .sessionMessages(config, ref, { limit: PAGE_SIZE, offset: start })
         .then((page) => {
           if (messagesGenerationRef.current !== generation) return;
           setMessages(page.messages);
@@ -419,7 +446,7 @@ export function ArchiveBrowser({
     hubApi
       .sessionMessages(config, openSession.ref, {
         limit: PAGE_SIZE,
-        offset: messages.length,
+        offset: windowStart + messages.length,
       })
       .then((page) => {
         if (messagesGenerationRef.current !== generation) return;
@@ -434,7 +461,48 @@ export function ArchiveBrowser({
         if (messagesGenerationRef.current !== generation) return;
         setIsLoadingMessages(false);
       });
-  }, [config, openSession, messages.length, isLoadingMessages]);
+  }, [config, openSession, messages.length, isLoadingMessages, windowStart]);
+
+  // Extend the window upward when it doesn't start at the session's beginning
+  // (a search hit landed mid-session).
+  const handleLoadEarlier = useCallback(() => {
+    if (!openSession || isLoadingMessages || windowStart === 0) return;
+    const generation = messagesGenerationRef.current;
+    const fetchOffset = Math.max(0, windowStart - PAGE_SIZE);
+    const fetchLimit = windowStart - fetchOffset;
+    setIsLoadingMessages(true);
+    hubApi
+      .sessionMessages(config, openSession.ref, {
+        limit: fetchLimit,
+        offset: fetchOffset,
+      })
+      .then((page) => {
+        if (messagesGenerationRef.current !== generation) return;
+        setMessages((prev) => [...page.messages, ...prev]);
+        setWindowStart(fetchOffset);
+        setTotalCount(page.totalCount);
+      })
+      .catch((err) => {
+        if (messagesGenerationRef.current !== generation) return;
+        setMessagesError(String(err));
+      })
+      .finally(() => {
+        if (messagesGenerationRef.current !== generation) return;
+        setIsLoadingMessages(false);
+      });
+  }, [config, openSession, isLoadingMessages, windowStart]);
+
+  // Center the matched message once its page has rendered.
+  useEffect(() => {
+    const id = pendingScrollRef.current;
+    if (id == null || !messages.some((m) => m.id === id)) return;
+    pendingScrollRef.current = null;
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-msg-id="${id}"]`)
+        ?.scrollIntoView({ block: "center" });
+    });
+  }, [messages]);
 
   const runSearch = useCallback(
     (query: string) => {
@@ -489,11 +557,20 @@ export function ArchiveBrowser({
       // Land the user ON the session — a hit activated from the Journal view
       // used to open it invisibly behind the feed.
       setView("browse");
-      openSessionRef(hit.session_id, hit.session_summary ?? hit.session_id, {
-        project_path: hit.project_path,
-        machine_hostname: hit.machine_hostname,
-        provider: hit.provider,
-      });
+      openSessionRef(
+        hit.session_id,
+        hit.session_summary ?? hit.session_id,
+        {
+          project_path: hit.project_path,
+          machine_hostname: hit.machine_hostname,
+          provider: hit.provider,
+        },
+        // Land on the matched message when the hub says where it is
+        // (cchv-v0.10.1+); older hubs → page 1 as before.
+        hit.position != null
+          ? { position: hit.position, messageId: hit.message_id }
+          : undefined
+      );
     },
     [openSessionRef]
   );
@@ -503,6 +580,45 @@ export function ArchiveBrowser({
     setAnchorDate(hit.entry_date);
     setAnchorNonce((n) => n + 1);
   }, []);
+
+  // `/` focuses the search input from anywhere non-editable (issue #21).
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = document.activeElement;
+      const editable =
+        el instanceof HTMLElement &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT" ||
+          el.isContentEditable);
+      if (editable) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Arrow-key navigation on the Journal|Browse tablist (issue #21).
+  const handleTablistKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const tabs = Array.from(
+        e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      );
+      if (tabs.length === 0) return;
+      const current = tabs.findIndex((tab) => tab === document.activeElement);
+      const base = current >= 0 ? current : view === "journal" ? 0 : 1;
+      const delta = e.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(base + delta + tabs.length) % tabs.length]!;
+      next.focus();
+      next.click();
+    },
+    [view]
+  );
 
   // Dismiss the current results without clearing the query input.
   const handleClearSearch = useCallback(() => {
@@ -523,6 +639,8 @@ export function ArchiveBrowser({
     setOpenSession(null);
     setMessages([]);
     setTotalCount(null);
+    setWindowStart(0);
+    setHighlightMessageId(null);
     setMessagesError(null);
   }, []);
 
@@ -531,6 +649,8 @@ export function ArchiveBrowser({
     setOpenSession(null);
     setMessages([]);
     setTotalCount(null);
+    setWindowStart(0);
+    setHighlightMessageId(null);
     setMessagesError(null);
     setIsLoadingMessages(false);
   }, []);
@@ -602,7 +722,8 @@ export function ArchiveBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasMoreMessages = totalCount !== null && messages.length < totalCount;
+  const hasMoreMessages =
+    totalCount !== null && windowStart + messages.length < totalCount;
 
   return (
     <div
@@ -611,6 +732,7 @@ export function ArchiveBrowser({
     >
       <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 shrink-0">
         <input
+          ref={searchInputRef}
           data-testid="archive-search-input"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -705,6 +827,14 @@ export function ArchiveBrowser({
                   <span>{hit.project_name ?? hit.project_path}</span>
                   {" · "}
                   <span>{hit.machine_hostname}</span>
+                  {hit.timestamp && (
+                    <>
+                      {" · "}
+                      <span title={hit.timestamp}>
+                        {humanizeTimestamp(hit.timestamp)}
+                      </span>
+                    </>
+                  )}
                 </p>
               </button>
             </li>
@@ -718,6 +848,7 @@ export function ArchiveBrowser({
           role="tablist"
           aria-label={t("settings.archiveHub.journal.tabsLabel")}
           className="flex items-center gap-1"
+          onKeyDown={handleTablistKeyDown}
         >
           <button
             type="button"
@@ -1042,10 +1173,16 @@ export function ArchiveBrowser({
                   className="ml-auto shrink-0 text-px12 text-muted-foreground tabular-nums"
                   data-testid="message-progress"
                 >
-                  {t("settings.archiveHub.browser.messages.progress", {
-                    loaded: formatCount(messages.length),
-                    total: formatCount(totalCount),
-                  })}
+                  {windowStart > 0
+                    ? t("settings.archiveHub.browser.messages.progressRange", {
+                        from: formatCount(windowStart + 1),
+                        to: formatCount(windowStart + messages.length),
+                        total: formatCount(totalCount),
+                      })
+                    : t("settings.archiveHub.browser.messages.progress", {
+                        loaded: formatCount(messages.length),
+                        total: formatCount(totalCount),
+                      })}
                 </p>
               )}
             </div>
@@ -1070,6 +1207,19 @@ export function ArchiveBrowser({
                   {t("settings.archiveHub.browser.messages.empty")}
                 </p>
               )}
+            {openSession && windowStart > 0 && (
+              <div className="px-2 pt-1 w-full max-w-4xl mx-auto">
+                <button
+                  type="button"
+                  data-testid="archive-load-earlier"
+                  onClick={handleLoadEarlier}
+                  disabled={isLoadingMessages}
+                  className="w-full rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
+                >
+                  {t("settings.archiveHub.browser.messages.loadEarlier")}
+                </button>
+              </div>
+            )}
             {/* Reading-measure column: don't span the full pane on wide screens. */}
             <ArchiveRenderContext.Provider value={true}>
               <div className="px-2 py-1 space-y-1 w-full max-w-4xl mx-auto">
@@ -1081,7 +1231,14 @@ export function ArchiveBrowser({
                   const showGutter =
                     role != null && role !== (prev?.role ?? prev?.message_type);
                   return (
-                    <div key={row.id}>
+                    <div
+                      key={row.id}
+                      data-msg-id={row.id}
+                      className={cn(
+                        row.id === highlightMessageId &&
+                          "ring-2 ring-accent/70 rounded-md"
+                      )}
+                    >
                       {showGutter && (
                         <div
                           data-testid="message-gutter"

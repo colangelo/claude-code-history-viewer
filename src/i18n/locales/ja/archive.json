@@ -132,7 +132,7 @@
   "archive.web.subtitle": "他のマシンからアーカイブされた会話履歴を閲覧・検索するには、cchv アーカイブハブに接続してください。",
   "archive.web.urlLabel": "ハブURL",
   "archive.web.urlPlaceholder": "http://100.x.x.x:8787",
-  "archive.web.tokenLabel": "ベアラートークン",
+  "archive.web.tokenLabel": "読み取りトークン（任意）",
   "archive.web.tokenPlaceholder": "読み取り専用トークン",
   "archive.web.connect": "接続",
   "archive.web.connecting": "接続中...",
