@@ -96,10 +96,16 @@ pub fn to_ingest_message(
     }
 }
 
-/// The hub truncates `search_text` to 512 KiB at ingest (tsvector limit);
-/// sending more than that is pure wire waste — a 40 MiB tool result would
-/// triple-ship (raw + content + `search_text`) and blow the body limit.
-const SEARCH_TEXT_MAX_BYTES: usize = 512 * 1024;
+/// The hub clamps `search_text` at ingest; sending more than it will keep is
+/// pure wire waste — a 40 MiB tool result would triple-ship (raw + content +
+/// `search_text`) and blow the body limit.
+///
+/// Must match `hub::ingest::SEARCH_TEXT_MAX_BYTES` (64 KiB since 2026-07-19,
+/// when the binding cost turned out to be GIN maintenance rather than the
+/// tsvector size limit — see the note there). The hub re-clamps regardless, so
+/// a stale daemon is only wasteful, never wrong; keeping the two equal means
+/// the bytes are dropped before they cross the network.
+const SEARCH_TEXT_MAX_BYTES: usize = 64 * 1024;
 
 fn clamped_search_text(m: &ClaudeMessage) -> String {
     let mut text = history_core::search_text::search_text(m);
