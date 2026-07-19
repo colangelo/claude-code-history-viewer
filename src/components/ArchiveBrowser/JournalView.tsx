@@ -297,8 +297,10 @@ export function JournalView({
       : label.absolute;
   };
 
+  // The row is capped + centered so on ultrawide screens the rail sits NEXT
+  // to the reading column instead of marooned at the viewport edge.
   return (
-    <div className="flex flex-1 min-h-0 gap-6 w-full">
+    <div className="flex flex-1 min-h-0 gap-6 w-full max-w-[80rem] mx-auto">
       {/* Wide screens: the quick-nav dates become a left timeline rail beside
           the reading column — the flank space works instead of sitting empty.
           Below xl the horizontal pills row (further down) takes over. */}
