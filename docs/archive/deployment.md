@@ -303,6 +303,25 @@ their close exactly one trigger, an inbound line from an attended session here,
 and reads our silence as *still-owed*. So no deploy log, green check, or
 byte-identical CSS run on their side will ever stand in for the line.
 
+> **Screenshots narrow the eyeball item; they never discharge it — and a written
+> PNG is not evidence that a state changed.** On the v0.10.6 chip look (thread
+> `0f5b4d7c`) a scripted expand-click fell through to a broad `article` fallback
+> locator, no-op'd without raising, and still wrote a file: the collapsed and
+> "expanded" shots were byte-identical in both schemes (caught on the other side
+> by hashing them, not by eye). If a shot is meant to be a distinct leg of
+> evidence, **assert it differs from the previous one** before counting it.
+> In this instance nothing was lost — topic chips render *outside* the
+> `expanded` branch in `JournalEntryCard.tsx`, so the collapsed shot already
+> covers the rose target and the expanded view adds only open-questions and
+> session links, which carry no `--tag*` token. Read the component before
+> re-shooting; the code can retire a missing screenshot that a rerun cannot.
+>
+> Two hygiene rules for those artifacts, both from the same thread: don't park
+> them in `/tmp` (reboot-volatile on macOS — re-shoot at look-time instead of
+> assuming they survived), and **never embed a hub token in the capture script**
+> — read it from `~/.config/cchv/` the way `journal_verify.py` does, so nothing
+> mode-644 in a shared path ever holds a live credential.
+
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
 > tailnet ingress via `tailscale serve` on `:8788`. A failing loopback `:8787`
