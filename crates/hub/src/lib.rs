@@ -8,6 +8,7 @@ pub mod auth;
 pub mod browse;
 pub mod config;
 pub mod embed;
+pub mod embed_sweep;
 pub mod error;
 pub mod fts;
 pub mod health;
@@ -157,6 +158,12 @@ pub async fn run() -> anyhow::Result<()> {
     if let Some(dir) = &config.embed_model_dir {
         tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");
         state = state.with_embedder(std::sync::Arc::new(embed::CandleEmbedder::new(dir.clone())));
+        // Startup + interval + nudge-driven embedding sweep (bootstrap of
+        // pre-existing entries is just the first pass).
+        tokio::spawn(embed_sweep::run_sweeper(
+            state.clone(),
+            std::time::Duration::from_secs(300),
+        ));
     }
     if let Some(dir) = &config.static_dir {
         tracing::info!(dir = %dir.display(), "serving static archive webapp at /");

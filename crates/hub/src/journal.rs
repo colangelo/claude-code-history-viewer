@@ -339,6 +339,10 @@ pub async fn create(
     .execute(&state.pool)
     .await?;
 
+    // Fresh content should become semantically searchable promptly: nudge the
+    // embedding sweep (no-op when no sweeper is running).
+    state.embed_nudge.notify_one();
+
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
