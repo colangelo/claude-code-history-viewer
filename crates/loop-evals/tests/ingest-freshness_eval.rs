@@ -28,7 +28,6 @@ use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
@@ -64,11 +63,7 @@ async fn spawn(machine_ids: &[Uuid]) -> TestHub {
         tokens.insert(token_for(*id), *id);
     }
 
-    let state = hub::AppState {
-        pool: pool.clone(),
-        tokens: Arc::new(tokens),
-        trusted_identities: Arc::new(Vec::new()),
-    };
+    let state = hub::AppState::new(pool.clone(), tokens, Vec::new());
     let app = hub::router(state, None);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

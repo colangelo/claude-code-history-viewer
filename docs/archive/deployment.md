@@ -140,6 +140,30 @@ exactly the pre-static behavior. First visit shows a connect screen (hub URL
 + read token, persisted in that browser's localStorage) — with same-origin
 hosting the URL is just the page's own origin.
 
+### Optional: semantic journal search (embed model directory)
+
+Semantic + hybrid `mode=` on the `/v1/search` journal leg needs a local
+sentence-embedding model on disk — the hub embeds in-process on CPU (no
+network, no keys). Absent/broken directory = keyword-only with
+`journal_degraded: true` on semantic requests, never an outage.
+
+Stage the model once (bge-small-en-v1.5, ~128 MB total):
+
+```bash
+MODEL_DIR=~/.config/cchv/embed-model   # any path; m4m house convention
+mkdir -p "$MODEL_DIR" && cd "$MODEL_DIR"
+for f in config.json tokenizer.json model.safetensors; do
+  curl -sL --fail -O "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/$f"
+done
+```
+
+Then `embed_model_dir = "<MODEL_DIR>"` in `hub.toml`, or
+`HUB_EMBED_MODEL_DIR=<MODEL_DIR>` in env mode (TOML mode ignores env, same
+precedence as every other hub setting). The model loads lazily on first use;
+a background sweep embeds journal entries at startup, on an interval, and
+after journal writes. Embeddings are derived data — `DELETE FROM
+journal_embeddings` is always safe (the sweep regenerates).
+
 > **House deployment:** bind the hub to the node's tailscale IP (not `0.0.0.0`),
 > follow the tailnet-services pattern (`~/_sync/dev/CONTEXT/PATTERNS/
 > tailnet-services.md` — ideally Tailscale Serve `:443` for in-tailnet TLS), and

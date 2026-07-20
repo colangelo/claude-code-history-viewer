@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod browse;
 pub mod config;
+pub mod embed;
 pub mod error;
 pub mod fts;
 pub mod health;
@@ -148,11 +149,15 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let state = AppState::new(
+    let mut state = AppState::new(
         pool,
         config.token_map(),
         config.trust_tailscale_identity.clone(),
     );
+    if let Some(dir) = &config.embed_model_dir {
+        tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");
+        state = state.with_embedder(std::sync::Arc::new(embed::CandleEmbedder::new(dir.clone())));
+    }
     if let Some(dir) = &config.static_dir {
         tracing::info!(dir = %dir.display(), "serving static archive webapp at /");
     }

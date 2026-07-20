@@ -2,9 +2,9 @@
 
 ## 1. Embedder spike (de-risk D3 first)
 
-- [ ] 1.1 Candle spike: load bge-small-en-v1.5 (safetensors + tokenizer.json) from a dir, mean-pool + normalize, embed a sentence on CPU — measure compile-time cost, binary-size delta, and per-embed latency; record numbers in the PR/commit. If unacceptable (build breaks MSRV 1.77.2, binary balloons, or >200ms/embed), STOP and re-decide via the D3 trait firewall before proceeding
-- [ ] 1.2 `crates/hub/src/embed.rs`: `Embedder` trait (`fn embed(&self, text: &str) -> Result<Vec<f32>>` + model id + dim) with `CandleEmbedder` (lazy init from `embed_model_dir`/`HUB_EMBED_MODEL_DIR`, init failure → disabled state, never fatal) and a deterministic `StubEmbedder` for tests
-- [ ] 1.3 Config plumbing: `embed_model_dir` in `HubConfig` (toml + env, same precedence as every other setting); weights-fetch recipe documented (huggingface bge-small-en-v1.5 → dir layout) in deployment.md §2
+- [x] 1.1 Candle spike: load bge-small-en-v1.5 (safetensors + tokenizer.json) from a dir, mean-pool + normalize, embed a sentence on CPU — measure compile-time cost, binary-size delta, and per-embed latency; record numbers in the PR/commit. If unacceptable (build breaks MSRV 1.77.2, binary balloons, or >200ms/embed), STOP and re-decide via the D3 trait firewall before proceeding
+- [x] 1.2 `crates/hub/src/embed.rs`: `Embedder` trait (`fn embed(&self, text: &str) -> Result<Vec<f32>>` + model id + dim) with `CandleEmbedder` (lazy init from `embed_model_dir`/`HUB_EMBED_MODEL_DIR`, init failure → disabled state, never fatal) and a deterministic `StubEmbedder` for tests
+- [x] 1.3 Config plumbing: `embed_model_dir` in `HubConfig` (toml + env, same precedence as every other setting); weights-fetch recipe documented (huggingface bge-small-en-v1.5 → dir layout) in deployment.md §2
 
 ## 2. Storage + sweep
 
