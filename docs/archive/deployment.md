@@ -157,12 +157,43 @@ for f in config.json tokenizer.json model.safetensors; do
 done
 ```
 
-Then `embed_model_dir = "<MODEL_DIR>"` in `hub.toml`, or
-`HUB_EMBED_MODEL_DIR=<MODEL_DIR>` in env mode (TOML mode ignores env, same
-precedence as every other hub setting). The model loads lazily on first use;
-a background sweep embeds journal entries at startup, on an interval, and
-after journal writes. Embeddings are derived data — `DELETE FROM
+**Wire it on the branch the hub actually uses — this is a hard either/or, not
+two interchangeable options, and the wrong branch fails silently:**
+
+- **`HUB_CONFIG` is set → TOML only. The env var is ignored entirely.**
+  `HubConfig::load()` returns as soon as it has parsed the file; it never
+  merges env. Put `embed_model_dir = "<MODEL_DIR>"` in that TOML.
+  The house m4m LaunchAgent is this branch — `cchv-launch hub` renders
+  `hub.runtime.toml` and exports `HUB_CONFIG`, so exporting
+  `HUB_EMBED_MODEL_DIR` there does nothing.
+- **`HUB_CONFIG` unset → env only.** Set `HUB_EMBED_MODEL_DIR=<MODEL_DIR>`
+  (alongside `DATABASE_URL` etc.).
+
+Setting the wrong one yields a *fully green* deploy — clean `healthz`, green
+Gatus check, no error line anywhere — with semantic search silently off. The
+only honest check is a paraphrase probe (below). Same precedence as every
+other hub setting (`static_dir`/`HUB_STATIC_DIR`, …).
+
+The model loads lazily on first use; a background sweep embeds journal
+entries at startup, on an interval, and after journal writes. **Budget tens of
+seconds for the first sweep, not "a few"** — CPU embedding of 101 entries took
+~37 s on m4m (model loaded → `embedding sweep pass` logged once with
+`embedded=101 failed=0`). The gap reads like a hang; it is not, do not roll
+back through it. Embeddings are derived data — `DELETE FROM
 journal_embeddings` is always safe (the sweep regenerates).
+
+Verify it is really on — deploy assertions and symbol probes cannot see a
+feature wired off, so run a paraphrase probe whose wording does not appear in
+the text (`scope=journal`): `mode=keyword` should return **0** hits and
+`mode=semantic`/`mode=hybrid` should return several. The keyword zero is what
+makes the semantic hits mean anything. Also check `mode=` omitted still
+returns the old keyword result, byte-compatible.
+
+**`journal_degraded` is ABSENT on healthy responses, not `false`** (the field
+is `skip_serializing_if = "Option::is_none"`, so pre-`mode=` responses stay
+byte-identical). Grepping for `"journal_degraded": false` finds nothing on a
+healthy hub — absence is the healthy reading; presence with `true` means the
+semantic leg fell back to keyword.
 
 > **House deployment:** bind the hub to the node's tailscale IP (not `0.0.0.0`),
 > follow the tailnet-services pattern (`~/_sync/dev/CONTEXT/PATTERNS/
@@ -186,7 +217,10 @@ journal_embeddings` is always safe (the sweep regenerates).
 > the cross-Mac `scp`, and — the expensive one — the "swap `<sha>`" ambiguity
 > between *pushed* and *actually staged on m4m* that has cost round-trips
 > before. Only when no release asset exists does the old path apply: build
-> locally → stage on m4m → relay → swap.
+> locally → stage on m4m → relay → swap. **Proven end-to-end on `cchv-v0.12.0`**
+> (2026-07-21, thread 3dc909f8): the first tag after the CI change, all three
+> assets uploaded by `github-actions[bot]`, and infra's `shasum -a 256 -c`
+> consumed the `.sha256` straight from download with no massaging.
 >
 > **The digest proves what was installed, never which rev it is.** A macos-14
 > runner build and a local Mac build of the same rev are differently
