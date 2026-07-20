@@ -151,8 +151,12 @@ pub async fn sweep(pool: &PgPool, embedder: &dyn Embedder) -> Result<SweepStats,
         }
     }
     if stats.embedded > 0 || stats.failed > 0 {
-        tracing::info!(embedded = stats.embedded, failed = stats.failed,
-            model = embedder.model_id(), "embedding sweep pass");
+        tracing::info!(
+            embedded = stats.embedded,
+            failed = stats.failed,
+            model = embedder.model_id(),
+            "embedding sweep pass"
+        );
     }
     Ok(stats)
 }
@@ -168,8 +172,8 @@ pub async fn run_sweeper(state: AppState, interval: Duration) {
             tracing::warn!(error = %e, "embedding sweep pass failed");
         }
         tokio::select! {
-            _ = tokio::time::sleep(interval) => {}
-            _ = state.embed_nudge.notified() => {}
+            () = tokio::time::sleep(interval) => {}
+            () = state.embed_nudge.notified() => {}
         }
     }
 }

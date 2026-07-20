@@ -466,7 +466,7 @@ impl JournalMode {
 }
 
 /// Reciprocal-rank-fusion constant (the standard k=60): rank-based fusion
-/// needs no score normalization between ts_rank and cosine.
+/// needs no score normalization between `ts_rank` and cosine.
 const RRF_K: f64 = 60.0;
 
 /// A keyword/semantic hit paired with its journal-row id (ids drive fusion
@@ -503,7 +503,10 @@ pub async fn search_journal(
         return Ok((hits.into_iter().map(|r| r.hit).collect(), true));
     };
 
-    let (start, end) = (offset.max(0) as usize, (offset.max(0) + limit) as usize);
+    // `top_k` = offset+limit rows from each ranking fill the requested page
+    // from either side.
+    let top_k: i64 = offset.max(0) + limit.max(0);
+    let (start, end) = (offset.max(0) as usize, top_k as usize);
     match mode {
         JournalMode::Keyword => unreachable!("handled above"),
         JournalMode::Semantic => {
@@ -516,9 +519,7 @@ pub async fn search_journal(
             Ok((hits_for_ranked(state, &page).await?, false))
         }
         JournalMode::Hybrid => {
-            // Fuse the top `offset+limit` of each ranking — enough to fill
-            // the requested page from either side.
-            let keyword = keyword_hits(state, q, scope, end as i64, 0).await?;
+            let keyword = keyword_hits(state, q, scope, top_k, 0).await?;
             let mut scores: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
             let mut hit_by_id: std::collections::HashMap<i64, JournalHit> =
                 std::collections::HashMap::new();

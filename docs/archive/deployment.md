@@ -703,18 +703,22 @@ curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/identities" \
 - **Incremental sync (MVP):** a changed session file is re-parsed in full and
   re-sent; the hub's idempotent ingest drops duplicates. Byte-offset
   "parse only new lines" and `notify`-based watching are planned optimizations.
-- **Semantic search (pgvector) = the recommended next retrieval lever; MCP context
-  server = OPTIONAL (de-scoped 2026-07-19).** The schema already reserves a
-  `message_embeddings` side table so embeddings land without a breaking migration.
-  **Why semantic search:** a 2026-07-19 recall spot-check of cchv-find over the live
-  archive found keyword recall strong (6/6 known journal entries via exact terms) but
-  **paraphrase/semantic recall ~0/6** — the hub's `websearch_to_tsquery('simple', …)`
-  does no stemming (`deploying`≠`deployed`, confirmed: `deploying`→1 hit vs `deployed`→10)
-  and AND-s terms, so natural-language "I vaguely remember we discussed X" queries return
-  nothing or common-word noise. **Scope it journal-first:** the ~92 distilled journal
-  entries are a tiny, high-signal, human-phrased corpus — embedding *them* (cheap) fixes
-  the "what did we do about X" misses directly; message-level embeddings (100k+ rows) are
-  a bigger, later phase only if journal-level proves insufficient. **MCP context server:**
+- **JOURNAL-LEVEL SEMANTIC SEARCH SHIPPED (cchv-v0.12.0, 2026-07-21):**
+  hub-local candle embedder (bge-small-en-v1.5, CLS pooling + bge query prefix),
+  `journal_embeddings` side table (migration `0004`, plain `real[]` — no
+  pgvector at this scale), `mode=keyword|semantic|hybrid` on the `/v1/search`
+  journal leg (RRF k=60, graceful `journal_degraded` fallback). Acceptance
+  rerun of the 2026-07-19 six-query paraphrase probe against the live corpus
+  (101 entries, real weights): **5/6 targets in top-5 via hybrid (4× rank-1,
+  1× rank-2) vs 0/6 keyword baseline**; the sixth query's target entry no
+  longer exists in the regenerated corpus (its analogue describes the PR
+  *submission*, not the *acceptance* the query asks about) — verified as
+  ground-truth drift, not model choice, by rerunning under bge-base (3.3×
+  larger: also missed) and all three pooling configs. Model staging recipe:
+  §2 "semantic journal search". **Message-scale embeddings remain the later
+  phase** — that's where pgvector/`halfvec` earns its keep. The schema already
+  reserves a `message_embeddings` side table so those land without a breaking
+  migration. **MCP context server:**
   its intended job — an agent pulling archive context as native tools — is already
   delivered by the hub read API + the `cchv-find` skill (journal-first retrieval), so it
   is now optional; build it only if a **non-Claude-Code MCP client** (Desktop/Cursor/…)

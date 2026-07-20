@@ -210,7 +210,14 @@ async fn keyword_mode_is_byte_compatible() {
     let m = hub.machine_id;
     let p = format!("/tmp/mode-{m}/compat");
     seed_session(&hub, &p, &format!("compat-{m}"), "2026-07-01").await;
-    post_entry(&hub, &p, "2026-07-01", "Compat headline", "Compat haystack summary.").await;
+    post_entry(
+        &hub,
+        &p,
+        "2026-07-01",
+        "Compat headline",
+        "Compat haystack summary.",
+    )
+    .await;
 
     let q = format!("/v1/search?q=haystack&scope=journal&project={}", enc(&p));
     let (status_default, body_default) = get_raw(&hub, &q).await;
@@ -374,7 +381,14 @@ async fn semantic_without_embedder_degrades_to_keyword() {
     let m = hub.machine_id;
     let p = format!("/tmp/mode-{m}/deg");
     seed_session(&hub, &p, &format!("deg-{m}"), "2026-07-06").await;
-    post_entry(&hub, &p, "2026-07-06", "Degraded headline", "Degraded needle summary.").await;
+    post_entry(
+        &hub,
+        &p,
+        "2026-07-06",
+        "Degraded headline",
+        "Degraded needle summary.",
+    )
+    .await;
 
     let (status, body) = get_raw(
         &hub,
