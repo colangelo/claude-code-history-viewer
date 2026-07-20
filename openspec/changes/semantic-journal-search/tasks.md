@@ -23,7 +23,7 @@
 
 ## 4. Clients
 
-- [ ] 4.1 Webapp: `hubApi.journalSearch` sends `mode=hybrid` (+ optional `journal_degraded` surfaced as a subtle hint in the search section); vitest for the param + degraded flag parse
+- [x] 4.1 Webapp: `hubApi.journalSearch` sends `mode=hybrid` (+ optional `journal_degraded` surfaced as a subtle hint in the search section); vitest for the param + degraded flag parse
 - [ ] 4.2 cchv-find skill (`~/_sync/dev/CONTEXT/SKILLS/cchv-find/SKILL.md`): document `mode=` with guidance (hybrid default for recall questions; keyword for exact-term lookups) — post-deploy, after live verification
 
 ## 5. Quality gate + acceptance + release prep

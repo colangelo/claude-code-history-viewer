@@ -221,6 +221,7 @@ export function ArchiveBrowser({
   );
   const [searchHits, setSearchHits] = useState<HubSearchHit[] | null>(null);
   const [journalHits, setJournalHits] = useState<JournalSearchHit[]>([]);
+  const [journalDegraded, setJournalDegraded] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -527,6 +528,7 @@ export function ArchiveBrowser({
       setIsSearching(true);
       setSearchError(null);
       setJournalHits([]);
+      setJournalDegraded(false);
       hubApi
         .search(config, query)
         .then((hits) => {
@@ -545,13 +547,15 @@ export function ArchiveBrowser({
       // block (or an unreachable one) simply yields no journal section.
       hubApi
         .journalSearch(config, query)
-        .then((hits) => {
+        .then((result) => {
           if (searchGenerationRef.current !== generation) return;
-          setJournalHits(hits);
+          setJournalHits(result.hits);
+          setJournalDegraded(result.degraded);
         })
         .catch(() => {
           if (searchGenerationRef.current !== generation) return;
           setJournalHits([]);
+          setJournalDegraded(false);
         });
     },
     [config]
@@ -641,6 +645,7 @@ export function ArchiveBrowser({
     ++searchGenerationRef.current;
     setSearchHits(null);
     setJournalHits([]);
+    setJournalDegraded(false);
     setSearchError(null);
     setIsSearching(false);
   }, []);
@@ -802,6 +807,14 @@ export function ArchiveBrowser({
         >
           <p className="px-1 text-px12 font-medium text-info uppercase tracking-wide">
             {t("settings.archiveHub.journal.searchSection")}
+            {journalDegraded && (
+              <span
+                data-testid="journal-search-degraded"
+                className="ml-2 normal-case font-normal tracking-normal text-muted-foreground"
+              >
+                {t("settings.archiveHub.journal.searchDegraded")}
+              </span>
+            )}
           </p>
           <ul className="space-y-1">
             {journalHits.map((hit, index) => (

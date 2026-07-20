@@ -580,6 +580,7 @@
   "settings.archiveHub.journal.clearDate": "清除日期",
   "settings.archiveHub.journal.dateNavTitle": "跳转到日期",
   "settings.archiveHub.journal.searchSection": "日志",
+  "settings.archiveHub.journal.searchDegraded": "语义搜索不可用 — 仅显示关键词匹配",
   "settings.archiveHub.identity.showWorktrees": "显示工作树",
   "settings.archiveHub.identity.worktree": "工作树",
   "settings.archiveHub.identity.linked": "已链接",

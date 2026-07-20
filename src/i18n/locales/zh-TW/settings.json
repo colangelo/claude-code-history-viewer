@@ -580,6 +580,7 @@
   "settings.archiveHub.journal.clearDate": "清除日期",
   "settings.archiveHub.journal.dateNavTitle": "跳至日期",
   "settings.archiveHub.journal.searchSection": "日誌",
+  "settings.archiveHub.journal.searchDegraded": "語義搜尋不可用 — 僅顯示關鍵字匹配",
   "settings.archiveHub.identity.showWorktrees": "顯示工作樹",
   "settings.archiveHub.identity.worktree": "工作樹",
   "settings.archiveHub.identity.linked": "已連結",

@@ -580,6 +580,7 @@
   "settings.archiveHub.journal.clearDate": "Clear date",
   "settings.archiveHub.journal.dateNavTitle": "Jump to day",
   "settings.archiveHub.journal.searchSection": "Journal",
+  "settings.archiveHub.journal.searchDegraded": "Semantic ranking unavailable — keyword matches only",
   "settings.archiveHub.identity.showWorktrees": "Show worktrees",
   "settings.archiveHub.identity.worktree": "worktree",
   "settings.archiveHub.identity.linked": "linked",

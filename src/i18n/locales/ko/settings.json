@@ -580,6 +580,7 @@
   "settings.archiveHub.journal.clearDate": "날짜 지우기",
   "settings.archiveHub.journal.dateNavTitle": "날짜로 이동",
   "settings.archiveHub.journal.searchSection": "저널",
+  "settings.archiveHub.journal.searchDegraded": "시맨틱 검색을 사용할 수 없음 — 키워드 일치만 표시",
   "settings.archiveHub.identity.showWorktrees": "워크트리 표시",
   "settings.archiveHub.identity.worktree": "워크트리",
   "settings.archiveHub.identity.linked": "연결됨",

@@ -170,6 +170,16 @@ export interface JournalSearchHit extends Omit<JournalEntry, "status"> {
   rank: number;
 }
 
+/**
+ * The journal block of a search plus the hub's degradation indicator:
+ * `degraded` is `true` when a semantic/hybrid request fell back to
+ * keyword-only results (embedder or embeddings unavailable hub-side).
+ */
+export interface JournalSearchResult {
+  hits: JournalSearchHit[];
+  degraded: boolean;
+}
+
 export interface HubJournalOptions {
   project?: string;
   /** In identity scope: `false` excludes worktree-only member paths. */
@@ -388,16 +398,23 @@ export const hubApi = {
    * alongside {@link search}, so at the default every user search paid for the
    * message leg twice. Scoping each call to the block it reads halves that.
    * A pre-journal hub ignores the unknown param and returns the bare array,
-   * which still degrades to `[]` below.
+   * which still degrades to an empty result below.
+   *
+   * `mode=hybrid` fuses keyword FTS with semantic (embedding) ranking on
+   * hubs that support it (cchv-v0.12.0+); older hubs ignore the param.
+   * `degraded: true` means the hub fell back to keyword-only because its
+   * embedder or embeddings were unavailable — recall quality dropped, the
+   * results are still valid.
    */
   async journalSearch(
     config: HubConfig,
     query: string,
     options?: HubSearchOptions
-  ): Promise<JournalSearchHit[]> {
+  ): Promise<JournalSearchResult> {
     const url = hubUrl(config, "/v1/search", {
       q: query,
       scope: "journal",
+      mode: "hybrid",
       machine: options?.machine,
       provider: options?.provider,
       project: options?.project,
@@ -410,9 +427,9 @@ export const hubApi = {
     const res = await hubGet(url, config);
     const data = (await res.json()) as
       | HubSearchHit[]
-      | { journal?: JournalSearchHit[] };
-    if (Array.isArray(data)) return [];
-    return data.journal ?? [];
+      | { journal?: JournalSearchHit[]; journal_degraded?: boolean };
+    if (Array.isArray(data)) return { hits: [], degraded: false };
+    return { hits: data.journal ?? [], degraded: data.journal_degraded === true };
   },
 
   /**
