@@ -611,6 +611,23 @@ async fn member_path_with_stale_unfingerprinted_rows_is_never_suggested() {
     stale.messages[0].provider = "codex".into();
     ingest(&hub, &stale).await;
 
+    // A genuine orphan: same basename, fingerprinted nowhere. It must SURVIVE
+    // the exclusion — a blunt "suppress every suggestion" regression would pass
+    // the negative assertion below just as well, so pin what should stay too.
+    let dead = format!("/tmp/id-{m}/dual-dead/repo");
+    let mut orphan = seeded_batch(
+        &hub,
+        &dead,
+        None,
+        false,
+        &format!("dual-dead-{m}"),
+        "2026-06-01T12:00:00Z",
+        "dual dead text",
+    );
+    orphan.projects[0].git_root_commit = None;
+    orphan.projects[0].git_is_worktree = None;
+    ingest(&hub, &orphan).await;
+
     let key = format!("g:{}|github.com/acme/dual", root_hex(hub.machine_id));
     let identities = get_json(&hub, "/v1/identities").await;
     let id = identities
@@ -628,12 +645,22 @@ async fn member_path_with_stale_unfingerprinted_rows_is_never_suggested() {
     assert_eq!(member_paths, vec![path.as_str()]);
     // A path fingerprinted anywhere is never an orphan: an alias for it
     // would be redundant at best, conflicting at worst.
-    let self_suggested = id["suggestions"]
+    let orphan_paths: Vec<&str> = id["suggestions"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|s| s["kind"] == json!("orphan_path") && s["project_path"] == json!(path));
-    assert!(!self_suggested, "member path suggested as its own orphan");
+        .filter(|s| s["kind"] == json!("orphan_path"))
+        .map(|s| s["project_path"].as_str().unwrap())
+        .collect();
+    assert!(
+        !orphan_paths.contains(&path.as_str()),
+        "member path suggested as its own orphan, got {orphan_paths:?}"
+    );
+    assert!(
+        orphan_paths.contains(&dead.as_str()),
+        "the exclusion is targeted, not a blanket suppression: the never-fingerprinted \
+         path must still be suggested, got {orphan_paths:?}"
+    );
 }
 
 #[tokio::test]
