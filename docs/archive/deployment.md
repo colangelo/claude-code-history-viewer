@@ -291,11 +291,21 @@ recipe's CSS byte-identity report narrows *what is owed*, never discharges it:
 unchanged CSS means the outstanding eyeball item is still the same one, changed
 CSS means a fresh look is owed.
 
-**Currently owed: nothing** (2026-07-19, relay `8451d81a`). The user looked at
-the live hub themselves, in a real window, through `cchv-v0.11.1` and confirmed
-all three open items at once: the v0.11.0 Locations block, the v0.11.1 toolbar
-hierarchy, and the long-pending `cchv-v0.10.6` rose topic chips. The backlog
-reopens on the next CSS-changing deploy.
+**Discharged 2026-07-19 (relay `8451d81a`): the three items that close named.**
+The user looked at the live hub themselves, in a real window, through
+`cchv-v0.11.1` and confirmed all three at once: the v0.11.0 Locations block, the
+v0.11.1 toolbar hierarchy, and the long-pending `cchv-v0.10.6` rose topic chips.
+The backlog reopens on the next CSS-changing deploy.
+
+**Still owed: two older claims the close did not name** — the `cchv-v0.10.4`
+ultrawide rail/feed centering (`4a0fc78`) and the `cchv-v0.10.5` selected-day +
+date-pill contrast in **both** themes (`7af316f`). The infra side asked whether
+our global "the backlog is empty" sentence swallowed them (relay `513e4dd8`);
+the answer is no, and the reason is the rule itself. Each carries a *condition*
+the confirmed pass gives no evidence of meeting — an ultrawide viewport, and a
+light/dark toggle — and a global sentence that closes an unnamed item is exactly
+the inference our own close-in-pieces rule forbids. They are cheap to retire:
+one wide window plus one theme toggle on any future look, relayed by name.
 
 Note what did *not* close it: the scripted screenshot set below is what finally
 retired the chips item only in the sense that it stopped being needed — the
