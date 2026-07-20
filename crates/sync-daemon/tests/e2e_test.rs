@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::Arc;
 
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;

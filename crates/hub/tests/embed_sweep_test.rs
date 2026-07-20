@@ -174,7 +174,7 @@ async fn post_entry(hub: &TestHub, path: &str, date: &str, status: &str, summary
     assert_eq!(resp.status(), 200, "journal entry create");
 }
 
-/// (journal_entry_id, model, content_hash) rows for this test's project paths.
+/// `(journal_entry_id, model, content_hash)` rows for this test's project paths.
 async fn embedding_rows(pool: &PgPool, machine_id: Uuid) -> Vec<(i64, String, String)> {
     sqlx::query(
         r"
