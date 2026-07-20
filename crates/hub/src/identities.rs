@@ -189,11 +189,18 @@ pub async fn list(
 
     if params.suggestions.unwrap_or(true) {
         // Orphans: fingerprint-less paths not already claimed by an alias.
+        // A path fingerprinted under ANY key is excluded even when stale
+        // rows for it (other provider, pre-identity archive) carry a NULL
+        // key: it is already a member somewhere, and an alias for it would
+        // be redundant at best, conflicting at worst.
         let orphan_paths = sqlx::query_scalar::<_, String>(
             r"
             SELECT DISTINCT project_path FROM projects
             WHERE identity_key IS NULL
               AND project_path NOT IN (SELECT project_path FROM project_identity_aliases)
+              AND project_path NOT IN (
+                  SELECT project_path FROM projects WHERE identity_key IS NOT NULL
+              )
             ",
         )
         .fetch_all(&state.pool)
