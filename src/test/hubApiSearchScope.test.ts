@@ -41,17 +41,30 @@ describe("hubApi search scoping", () => {
     expect(hits).toHaveLength(1);
   });
 
-  it("asks for scope=journal and reads the journal block", async () => {
+  it("asks for scope=journal + mode=hybrid and reads the journal block", async () => {
     const fetchMock = stubFetch({ results: [], journal: [{ rank: 1 }] });
 
-    const hits = await hubApi.journalSearch(config, "needle");
+    const result = await hubApi.journalSearch(config, "needle");
 
-    expect(requestedUrl(fetchMock).searchParams.get("scope")).toBe("journal");
-    expect(hits).toHaveLength(1);
+    const url = requestedUrl(fetchMock);
+    expect(url.searchParams.get("scope")).toBe("journal");
+    expect(url.searchParams.get("mode")).toBe("hybrid");
+    expect(result.hits).toHaveLength(1);
+    expect(result.degraded).toBe(false);
+  });
+
+  it("surfaces the hub's journal_degraded flag", async () => {
+    stubFetch({ results: [], journal: [{ rank: 1 }], journal_degraded: true });
+    await expect(hubApi.journalSearch(config, "needle")).resolves.toMatchObject({
+      degraded: true,
+    });
   });
 
   it("yields no journal hits when the hub omits the block", async () => {
     stubFetch([{ message_key: "m1" }]);
-    await expect(hubApi.journalSearch(config, "needle")).resolves.toEqual([]);
+    await expect(hubApi.journalSearch(config, "needle")).resolves.toEqual({
+      hits: [],
+      degraded: false,
+    });
   });
 });
