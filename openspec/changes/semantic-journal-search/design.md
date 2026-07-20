@@ -119,7 +119,7 @@ response (additive, absent otherwise). Webapp + cchv-find default to
 
 ### D6. Version and rollout
 
-`cchv-v0.11.0`. Hub-only swap per §2b + stage the model dir once
+`cchv-v0.12.0`. Hub-only swap per §2b + stage the model dir once
 (`~/.config/cchv/embed-model/` on m4m; relay includes the fetch
 recipe). Migration `0004` auto-runs (additive, no extension). Rollback:
 previous binary ignores the table; embeddings are derived data
