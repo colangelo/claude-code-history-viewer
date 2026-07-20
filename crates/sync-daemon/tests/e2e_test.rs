@@ -61,11 +61,7 @@ async fn daemon_to_hub_to_search() {
     let token = format!("e2e-{}", identity.machine_id);
     let mut tokens = HashMap::new();
     tokens.insert(token.clone(), identity.machine_id);
-    let state = hub::AppState {
-        pool: pool.clone(),
-        tokens: Arc::new(tokens),
-        trusted_identities: Arc::new(Vec::new()),
-    };
+    let state = hub::AppState::new(pool.clone(), tokens, Vec::new());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let base = format!("http://{addr}");

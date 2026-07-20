@@ -15,11 +15,11 @@
 
 ## 3. Query modes
 
-- [ ] 3.1 `mode` param on `SearchParams` (`keyword` default | `semantic` | `hybrid`; unknown → 400); journal leg only
-- [ ] 3.2 Semantic ranking: embed query, load active-model vectors (+ entry ids), cosine in-process, top-N best-first mapped into `JournalHit` with `rank` = similarity
-- [ ] 3.3 Hybrid: RRF (k=60) over keyword + semantic rank lists; `rank` = RRF score
-- [ ] 3.4 Degradation: embedder disabled / zero embeddings / model mismatch → keyword results + additive `journal_degraded: true` on the response (absent otherwise); never an error
-- [ ] 3.5 Integration tests: mode=keyword byte-compat (replay pre-change request shape), semantic surfaces a hash-known entry for a paraphrase the FTS misses (stub embedder with contrived vectors), hybrid fuses, degraded path returns 200 + flag, unknown mode 400
+- [x] 3.1 `mode` param on `SearchParams` (`keyword` default | `semantic` | `hybrid`; unknown → 400); journal leg only
+- [x] 3.2 Semantic ranking: embed query, load active-model vectors (+ entry ids), cosine in-process, top-N best-first mapped into `JournalHit` with `rank` = similarity
+- [x] 3.3 Hybrid: RRF (k=60) over keyword + semantic rank lists; `rank` = RRF score
+- [x] 3.4 Degradation: embedder disabled / zero embeddings / model mismatch → keyword results + additive `journal_degraded: true` on the response (absent otherwise); never an error
+- [x] 3.5 Integration tests: mode=keyword byte-compat (replay pre-change request shape), semantic surfaces a hash-known entry for a paraphrase the FTS misses (stub embedder with contrived vectors), hybrid fuses, degraded path returns 200 + flag, unknown mode 400
 
 ## 4. Clients
 

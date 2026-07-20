@@ -442,20 +442,132 @@ pub struct JournalHit {
     pub rank: f32,
 }
 
-/// Ranked FTS over `entry`-status journal rows for the `/v1/search` journal
-/// block. `skip` rows have a NULL `search_text` and are filtered out anyway, so
-/// they never match. The project scope carries either a plain `project_path`
-/// match or a pre-resolved identity path set (see `identity_filter`).
+/// Journal retrieval mode for the `/v1/search` journal block. `Keyword` is
+/// the default and byte-compatible with pre-mode behavior; the other two are
+/// defined in `openspec/specs/semantic-search/spec.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JournalMode {
+    Keyword,
+    Semantic,
+    Hybrid,
+}
+
+impl JournalMode {
+    pub fn parse(s: Option<&str>) -> Result<Self, HubError> {
+        match s.unwrap_or("keyword") {
+            "keyword" => Ok(Self::Keyword),
+            "semantic" => Ok(Self::Semantic),
+            "hybrid" => Ok(Self::Hybrid),
+            other => Err(HubError::BadRequest(format!(
+                "unknown mode `{other}` (expected `keyword`, `semantic`, or `hybrid`)"
+            ))),
+        }
+    }
+}
+
+/// Reciprocal-rank-fusion constant (the standard k=60): rank-based fusion
+/// needs no score normalization between ts_rank and cosine.
+const RRF_K: f64 = 60.0;
+
+/// A keyword/semantic hit paired with its journal-row id (ids drive fusion
+/// and are not serialized).
+#[derive(FromRow)]
+struct RankedRow {
+    id: i64,
+    #[sqlx(flatten)]
+    hit: JournalHit,
+}
+
+/// Ranked journal block for `/v1/search`. Returns the hits plus a degraded
+/// flag: `true` when a semantic/hybrid request fell back to keyword because
+/// the embedder or embeddings were unavailable (never an error). The project
+/// scope carries either a plain `project_path` match or a pre-resolved
+/// identity path set (see `identity_filter`).
 pub async fn search_journal(
     state: &AppState,
     q: &str,
     scope: &crate::identity_filter::ProjectScope,
     limit: i64,
     offset: i64,
-) -> Result<Vec<JournalHit>, HubError> {
-    // Prefix variant for plain queries (issue #19) — see `fts::prefix_tsquery`.
+    mode: JournalMode,
+) -> Result<(Vec<JournalHit>, bool), HubError> {
+    if mode == JournalMode::Keyword {
+        let hits = keyword_hits(state, q, scope, limit, offset).await?;
+        return Ok((hits.into_iter().map(|r| r.hit).collect(), false));
+    }
+
+    // Semantic ranking over the scoped active-model vectors; `None` = the
+    // capability is unavailable right now → keyword results + degraded flag.
+    let Some(ranked) = semantic_ranked(state, q, scope).await? else {
+        let hits = keyword_hits(state, q, scope, limit, offset).await?;
+        return Ok((hits.into_iter().map(|r| r.hit).collect(), true));
+    };
+
+    let (start, end) = (offset.max(0) as usize, (offset.max(0) + limit) as usize);
+    match mode {
+        JournalMode::Keyword => unreachable!("handled above"),
+        JournalMode::Semantic => {
+            let page: Vec<(i64, f64)> = ranked
+                .iter()
+                .skip(start)
+                .take(end - start)
+                .map(|(id, sim)| (*id, f64::from(*sim)))
+                .collect();
+            Ok((hits_for_ranked(state, &page).await?, false))
+        }
+        JournalMode::Hybrid => {
+            // Fuse the top `offset+limit` of each ranking — enough to fill
+            // the requested page from either side.
+            let keyword = keyword_hits(state, q, scope, end as i64, 0).await?;
+            let mut scores: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
+            let mut hit_by_id: std::collections::HashMap<i64, JournalHit> =
+                std::collections::HashMap::new();
+            for (pos, row) in keyword.into_iter().enumerate() {
+                *scores.entry(row.id).or_default() += 1.0 / (RRF_K + (pos + 1) as f64);
+                hit_by_id.insert(row.id, row.hit);
+            }
+            for (pos, (id, _sim)) in ranked.iter().take(end).enumerate() {
+                *scores.entry(*id).or_default() += 1.0 / (RRF_K + (pos + 1) as f64);
+            }
+            let mut fused: Vec<(i64, f64)> = scores.into_iter().collect();
+            fused.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.0.cmp(&a.0))
+            });
+            let page: Vec<(i64, f64)> = fused.into_iter().skip(start).take(end - start).collect();
+            // Reuse hits already fetched by the keyword leg; fetch the rest.
+            let missing: Vec<i64> = page
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| !hit_by_id.contains_key(id))
+                .collect();
+            hit_by_id.extend(hits_by_ids(state, &missing).await?);
+            let mut out = Vec::with_capacity(page.len());
+            for (id, score) in page {
+                if let Some(mut hit) = hit_by_id.remove(&id) {
+                    hit.rank = score as f32;
+                    out.push(hit);
+                }
+            }
+            Ok((out, false))
+        }
+    }
+}
+
+/// The pre-mode FTS ranking, unchanged except for carrying the row id.
+/// `skip` rows have a NULL `search_text` and are filtered out anyway, so
+/// they never match. Prefix variant for plain queries (issue #19) — see
+/// `fts::prefix_tsquery`.
+async fn keyword_hits(
+    state: &AppState,
+    q: &str,
+    scope: &crate::identity_filter::ProjectScope,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<RankedRow>, HubError> {
     let prefix = crate::fts::prefix_tsquery(q);
-    let hits = sqlx::query_as::<_, JournalHit>(
+    let hits = sqlx::query_as::<_, RankedRow>(
         r"
         WITH q AS (
             SELECT CASE
@@ -463,7 +575,7 @@ pub async fn search_journal(
                 ELSE websearch_to_tsquery('simple', $1) || to_tsquery('simple', $6)
             END AS tsq
         )
-        SELECT entry_date, project_path, headline, summary, topics,
+        SELECT id, entry_date, project_path, headline, summary, topics,
                open_questions, session_ids, model, generated_at,
                ts_rank(text_search, q.tsq) AS rank
         FROM q, journal_entries
@@ -485,4 +597,105 @@ pub async fn search_journal(
     .await?;
 
     Ok(hits)
+}
+
+/// Full best-first semantic ranking of the scoped entries, or `None` when
+/// the capability is unavailable (no embedder configured, embed failure, or
+/// no active-model vectors in scope) — the caller degrades to keyword.
+/// Exact in-process cosine over the whole (journal-scale) set; vectors whose
+/// dimension mismatches the query are skipped defensively.
+async fn semantic_ranked(
+    state: &AppState,
+    q: &str,
+    scope: &crate::identity_filter::ProjectScope,
+) -> Result<Option<Vec<(i64, f32)>>, HubError> {
+    let Some(embedder) = state.embedder.as_ref() else {
+        return Ok(None);
+    };
+    let query_vec = match embedder.embed(&crate::embed::query_text(q)) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %format!("{e:#}"), "query embed unavailable; degrading");
+            return Ok(None);
+        }
+    };
+
+    let rows = sqlx::query(
+        r"
+        SELECT e.journal_entry_id, e.embedding
+        FROM journal_embeddings e
+        JOIN journal_entries je ON je.id = e.journal_entry_id
+        WHERE e.model = $1
+          AND je.status = 'entry'
+          AND ($2::text IS NULL OR je.project_path = $2)
+          AND ($3::text[] IS NULL OR je.project_path = ANY($3))
+        ",
+    )
+    .bind(embedder.model_id())
+    .bind(&scope.plain)
+    .bind(scope.paths.as_deref())
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut ranked: Vec<(i64, f32)> = rows
+        .iter()
+        .filter_map(|row| {
+            use sqlx::Row;
+            let id: i64 = row.get(0);
+            let embedding: Vec<f32> = row.get(1);
+            crate::embed::cosine(&query_vec, &embedding).map(|sim| (id, sim))
+        })
+        .collect();
+    if ranked.is_empty() {
+        return Ok(None);
+    }
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.0.cmp(&a.0))
+    });
+    Ok(Some(ranked))
+}
+
+/// Fetch full journal hits for `(id, score)` pairs, preserving the given
+/// order and stamping `rank` with the mode's score.
+async fn hits_for_ranked(
+    state: &AppState,
+    ranked: &[(i64, f64)],
+) -> Result<Vec<JournalHit>, HubError> {
+    let ids: Vec<i64> = ranked.iter().map(|(id, _)| *id).collect();
+    let mut by_id = hits_by_ids(state, &ids).await?;
+    Ok(ranked
+        .iter()
+        .filter_map(|(id, score)| {
+            by_id.remove(id).map(|mut hit| {
+                hit.rank = *score as f32;
+                hit
+            })
+        })
+        .collect())
+}
+
+/// Load journal hits keyed by row id (`rank` left at 0 for the caller to
+/// stamp with the active mode's score).
+async fn hits_by_ids(
+    state: &AppState,
+    ids: &[i64],
+) -> Result<std::collections::HashMap<i64, JournalHit>, HubError> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows = sqlx::query_as::<_, RankedRow>(
+        r"
+        SELECT id, entry_date, project_path, headline, summary, topics,
+               open_questions, session_ids, model, generated_at,
+               0.0::float4 AS rank
+        FROM journal_entries
+        WHERE id = ANY($1)
+        ",
+    )
+    .bind(ids)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.id, r.hit)).collect())
 }

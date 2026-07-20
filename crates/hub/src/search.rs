@@ -30,6 +30,9 @@ pub struct SearchParams {
     /// `all` (default) | `messages` | `journal`. Controls whether the additive
     /// `journal` block is included and whether the message search runs.
     pub scope: Option<String>,
+    /// Journal retrieval mode: `keyword` (default, byte-compatible) |
+    /// `semantic` | `hybrid`. The message leg is unaffected.
+    pub mode: Option<String>,
 }
 
 /// One search hit with its session + project + machine context.
@@ -67,6 +70,12 @@ pub struct SearchResults {
     /// at `scope=all` (default) and `scope=journal`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub journal: Option<Vec<crate::journal::JournalHit>>,
+    /// Additive degradation indicator: present (`true`) only when a
+    /// `semantic`/`hybrid` request fell back to keyword results because the
+    /// embedder or embeddings were unavailable. Absent otherwise, keeping
+    /// every pre-mode response byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journal_degraded: Option<bool>,
 }
 
 fn parse_bound(s: Option<&str>, which: &str) -> Result<Option<DateTime<Utc>>, HubError> {
@@ -103,6 +112,9 @@ pub async fn search(
             )))
         }
     };
+    // Validated regardless of scope: an unknown mode is a client error even
+    // when the journal leg is skipped.
+    let mode = crate::journal::JournalMode::parse(params.mode.as_deref())?;
 
     // Resolve the project filter once (plain vs `identity:<key>` expansion)
     // and share it between the message and journal legs.
@@ -123,19 +135,19 @@ pub async fn search(
 
     // Additive journal block: present for `all` (default) and `journal`, absent
     // for `messages`.
-    let journal = if want_journal {
-        Some(
-            crate::journal::search_journal(
-                &state,
-                &params.q,
-                &project_scope,
-                page.limit,
-                page.offset,
-            )
-            .await?,
+    let (journal, journal_degraded) = if want_journal {
+        let (hits, degraded) = crate::journal::search_journal(
+            &state,
+            &params.q,
+            &project_scope,
+            page.limit,
+            page.offset,
+            mode,
         )
+        .await?;
+        (Some(hits), degraded.then_some(true))
     } else {
-        None
+        (None, None)
     };
 
     Ok(Json(SearchResults {
@@ -143,6 +155,7 @@ pub async fn search(
         limit: page.limit,
         offset: page.offset,
         journal,
+        journal_degraded,
     }))
 }
 
