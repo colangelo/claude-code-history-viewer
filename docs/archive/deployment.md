@@ -153,14 +153,24 @@ hosting the URL is just the page's own origin.
 > **Ship the binary as a release asset with a `.sha256` — that is the default
 > path for a tagged release.** (Was: "not deployed from the GitHub Release";
 > that is now false for tagged releases. Established on the v0.11.2 deploy,
-> 2026-07-20, thread 51a74a49.) Attach `cchv-hub-<sha>` plus its `.sha256` to
-> the `cchv-vX.Y.Z` release; infra downloads it, checks the digest against the
-> asset's `.sha256` *and* the GitHub API's own `digest` field, and stages it at
-> `~/.config/cchv/staging/cchv-hub-<sha>`. This removes the local cargo build,
+> 2026-07-20, thread 51a74a49.) The workflow attaches
+> `cchv-hub-<version>-aarch64-apple-darwin` (`<version>` = the tag minus the
+> `cchv-v` prefix) plus its `.sha256` to the `cchv-vX.Y.Z` release — that exact
+> string is what to grep the release for; infra downloads it, checks the digest
+> against the asset's `.sha256` *and* the GitHub API's own `digest` field, and
+> stages it at `~/.config/cchv/staging/`. This removes the local cargo build,
 > the cross-Mac `scp`, and — the expensive one — the "swap `<sha>`" ambiguity
 > between *pushed* and *actually staged on m4m* that has cost round-trips
 > before. Only when no release asset exists does the old path apply: build
 > locally → stage on m4m → relay → swap.
+>
+> **The digest proves what was installed, never which rev it is.** A macos-14
+> runner build and a local Mac build of the same rev are differently
+> linker-signed files, so a matching `.sha256` only says infra installed what we
+> published. Naming the rev on the *installed* file still takes a symbol probe
+> (`strings -a`, as for the sync-daemon below), so keep announcing the
+> added/removed strings per rev in the handoff — the release asset does not
+> make that line redundant.
 >
 > Either way, **do not `cp` a new binary over the live one in place.** macOS
 > caches the code signature per inode; overwriting in place with a
