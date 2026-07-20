@@ -63,4 +63,5 @@ directly fixes the measured misses.
   binary; table sits inert.
 - **Deploy**: hub-only swap per `deployment.md` §2b + a one-time model
   weights directory staged next to the binary (`HUB_EMBED_MODEL_DIR`).
-- **Version**: ships as `cchv-v0.11.0` (minor: new feature + migration).
+- **Version**: ships as `cchv-v0.12.0` (minor: new feature + migration;
+  v0.11.x was consumed by the release train while this change was drafted).
