@@ -965,9 +965,15 @@ export function ArchiveBrowser({
                 const identityInfo = group.identityKey
                   ? identities.find((i) => i.identity_key === group.identityKey)
                   : undefined;
+                // A path already listed under LOCATIONS must not double as
+                // a suggestion (guards against hubs predating the
+                // fingerprinted-anywhere orphan exclusion).
                 const orphanSuggestions =
                   identityInfo?.suggestions.filter(
-                    (s) => s.kind === "orphan_path" && s.project_path
+                    (s) =>
+                      s.kind === "orphan_path" &&
+                      s.project_path &&
+                      !group.paths.includes(s.project_path)
                   ) ?? [];
                 return (
                   <li key={group.key}>

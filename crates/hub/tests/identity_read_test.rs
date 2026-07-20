@@ -573,6 +573,70 @@ async fn identities_listing_carries_members_aliases_and_orphan_suggestions() {
 }
 
 #[tokio::test]
+async fn member_path_with_stale_unfingerprinted_rows_is_never_suggested() {
+    let hub = spawn().await;
+    let m = hub.machine_id;
+    let path = format!("/tmp/id-{m}/dual/repo");
+
+    // Fingerprinted claude row → the path is a member of its identity.
+    ingest(
+        &hub,
+        &seeded_batch(
+            &hub,
+            &path,
+            Some("git@github.com:acme/dual.git"),
+            false,
+            &format!("dual-claude-{m}"),
+            "2026-07-10T12:00:00Z",
+            "dual claude text",
+        ),
+    )
+    .await;
+
+    // Same path, different provider, archived WITHOUT a fingerprint — the
+    // stale pre-identity rows that made live prod suggest a path to itself.
+    let mut stale = seeded_batch(
+        &hub,
+        &path,
+        None,
+        false,
+        &format!("dual-codex-{m}"),
+        "2026-07-01T12:00:00Z",
+        "dual codex text",
+    );
+    stale.projects[0].provider = "codex".into();
+    stale.projects[0].git_root_commit = None;
+    stale.projects[0].git_is_worktree = None;
+    stale.sessions[0].provider = "codex".into();
+    stale.messages[0].provider = "codex".into();
+    ingest(&hub, &stale).await;
+
+    let key = format!("g:{}|github.com/acme/dual", root_hex(hub.machine_id));
+    let identities = get_json(&hub, "/v1/identities").await;
+    let id = identities
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["identity_key"] == json!(key))
+        .expect("identity listed");
+    let member_paths: Vec<&str> = id["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|mem| mem["project_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(member_paths, vec![path.as_str()]);
+    // A path fingerprinted anywhere is never an orphan: an alias for it
+    // would be redundant at best, conflicting at worst.
+    let self_suggested = id["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["kind"] == json!("orphan_path") && s["project_path"] == json!(path));
+    assert!(!self_suggested, "member path suggested as its own orphan");
+}
+
+#[tokio::test]
 async fn alias_with_unknown_key_is_rejected() {
     let hub = spawn().await;
     let resp = client()
