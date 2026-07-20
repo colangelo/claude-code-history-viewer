@@ -150,12 +150,22 @@ hosting the URL is just the page's own origin.
 
 ## 2b. House deployment: swapping the m4m hub binary
 
-> The always-on m4m hub is **not** deployed from the GitHub Release. The path is:
-> build locally → stage in `~/.config/cchv/staging/cchv-hub-<sha>` → relay
-> home-network (infra) → binary swap. **Do not `cp` a new binary over the live
-> one in place.** macOS caches the code signature per inode; overwriting in place
-> with a differently-linker-signed binary trips the kernel's signature check and
-> the process is killed on every spawn with `OS_REASON_CODESIGNING`. A hung
+> **Ship the binary as a release asset with a `.sha256` — that is the default
+> path for a tagged release.** (Was: "not deployed from the GitHub Release";
+> that is now false for tagged releases. Established on the v0.11.2 deploy,
+> 2026-07-20, thread 51a74a49.) Attach `cchv-hub-<sha>` plus its `.sha256` to
+> the `cchv-vX.Y.Z` release; infra downloads it, checks the digest against the
+> asset's `.sha256` *and* the GitHub API's own `digest` field, and stages it at
+> `~/.config/cchv/staging/cchv-hub-<sha>`. This removes the local cargo build,
+> the cross-Mac `scp`, and — the expensive one — the "swap `<sha>`" ambiguity
+> between *pushed* and *actually staged on m4m* that has cost round-trips
+> before. Only when no release asset exists does the old path apply: build
+> locally → stage on m4m → relay → swap.
+>
+> Either way, **do not `cp` a new binary over the live one in place.** macOS
+> caches the code signature per inode; overwriting in place with a
+> differently-linker-signed binary trips the kernel's signature check and the
+> process is killed on every spawn with `OS_REASON_CODESIGNING`. A hung
 > `launchctl kickstart -k` then wedges the job in `spawn scheduled`.
 
 Working sequence (validated on m4m 2026-07-13, thread 7938448b):
@@ -626,6 +636,13 @@ next scan pass —
 > `0.10.7`) while `aa16b77` is staged-but-not-swapped on the daemon. The chip is
 > maximally misleading in exactly this state — it names a rev whose daemon half
 > is not running.
+>
+> As of the v0.11.2 deploy (2026-07-20) the chip and the **hub** binary name the
+> same rev again, because both halves moved in one swap. That agreement is a
+> coincidence of that deploy, **not** a property of the system: the next
+> static-only release re-opens the divergence silently, so keep probing the
+> installed file. The **sync-daemon** half of `aa16b77` is still owed on both
+> Macs — the chip says nothing about it either way.
 
 ## 4. Verify end-to-end
 
