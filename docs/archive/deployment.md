@@ -289,8 +289,21 @@ Visual/layout changes cannot be verified this way; a rendering claim needs a
 human at a real window. Say so explicitly instead of marking it green. The
 recipe's CSS byte-identity report narrows *what is owed*, never discharges it:
 unchanged CSS means the outstanding eyeball item is still the same one, changed
-CSS means a fresh look is owed. Currently owed: the rose topic chips
-(`cchv-v0.10.6`, `bb40c41`) in a real window.
+CSS means a fresh look is owed.
+
+**Currently owed: nothing** (2026-07-19, relay `8451d81a`). The user looked at
+the live hub themselves, in a real window, through `cchv-v0.11.1` and confirmed
+all three open items at once: the v0.11.0 Locations block, the v0.11.1 toolbar
+hierarchy, and the long-pending `cchv-v0.10.6` rose topic chips. The backlog
+reopens on the next CSS-changing deploy.
+
+Note what did *not* close it: the scripted screenshot set below is what finally
+retired the chips item only in the sense that it stopped being needed — the
+close came from a person's eyes, per the rule in the next paragraph. And
+`v0.11.1` shipped **byte-identical CSS** (`11ef16ad84bc`, same as `v0.11.0` —
+every utility it needed was already emitted by the earlier build), so it would
+have read "clean" to any headless check while the item was still open. The
+split earned its keep here rather than being ceremony.
 
 Closing that item is **ours to announce, not theirs to infer.** The infra side
 holds a standing UNVERIFIED caveat on every v0.10.6+ deploy and words its own
