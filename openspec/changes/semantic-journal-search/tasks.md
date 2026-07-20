@@ -8,10 +8,10 @@
 
 ## 2. Storage + sweep
 
-- [ ] 2.1 `migrations/0004_journal_embeddings.sql`: `journal_embeddings` (id, journal_entry_id FK → journal_entries ON DELETE CASCADE, model TEXT, dim SMALLINT, embedding REAL[], content_hash TEXT, created_at; UNIQUE (journal_entry_id, model)); plain types only — applies on vanilla Postgres
-- [ ] 2.2 Content-hash function over (headline, summary, topics, open_questions) — stable serialization, unit-tested; `skip`-status rows excluded
-- [ ] 2.3 Sweep task in hub: find `entry`-status rows whose active-model embedding is missing or hash-stale → embed → upsert; run at startup, on interval, and nudged after `POST /v1/journal/entries`; runtime `sqlx::query*` (SQLX_OFFLINE-safe per journal.rs convention); per-entry failure isolation + tracing
-- [ ] 2.4 Integration tests (stub embedder): bootstrap embeds existing entries; regenerated entry re-embeds (hash change); skip rows excluded; model change re-embeds; deleting all embedding rows self-heals
+- [x] 2.1 `migrations/0004_journal_embeddings.sql`: `journal_embeddings` (id, journal_entry_id FK → journal_entries ON DELETE CASCADE, model TEXT, dim SMALLINT, embedding REAL[], content_hash TEXT, created_at; UNIQUE (journal_entry_id, model)); plain types only — applies on vanilla Postgres
+- [x] 2.2 Content-hash function over (headline, summary, topics, open_questions) — stable serialization, unit-tested; `skip`-status rows excluded
+- [x] 2.3 Sweep task in hub: find `entry`-status rows whose active-model embedding is missing or hash-stale → embed → upsert; run at startup, on interval, and nudged after `POST /v1/journal/entries`; runtime `sqlx::query*` (SQLX_OFFLINE-safe per journal.rs convention); per-entry failure isolation + tracing
+- [x] 2.4 Integration tests (stub embedder): bootstrap embeds existing entries; regenerated entry re-embeds (hash change); skip rows excluded; model change re-embeds; deleting all embedding rows self-heals
 
 ## 3. Query modes
 
