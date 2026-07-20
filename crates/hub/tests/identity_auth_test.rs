@@ -4,7 +4,6 @@
 
 use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 
 const LOGIN: &str = "acolangelo1@gmail.com";
@@ -23,11 +22,7 @@ async fn spawn(trusted: Vec<String>) -> String {
         .expect("connect");
     hub::MIGRATOR.run(&pool).await.expect("migrate");
 
-    let state = hub::AppState {
-        pool,
-        tokens: Arc::new(HashMap::new()),
-        trusted_identities: Arc::new(trusted),
-    };
+    let state = hub::AppState::new(pool, HashMap::new(), trusted);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

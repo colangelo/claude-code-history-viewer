@@ -24,6 +24,12 @@ pub struct HubConfig {
     /// bearer-only. Ingest always requires a bearer token.
     #[serde(default)]
     pub trust_tailscale_identity: Vec<String>,
+    /// Directory holding the sentence-embedding model (config.json +
+    /// tokenizer.json + model.safetensors) for semantic journal search.
+    /// Unset, missing, or corrupt → semantic modes degrade to keyword;
+    /// never a startup failure.
+    #[serde(default)]
+    pub embed_model_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -41,8 +47,9 @@ fn default_bind_addr() -> String {
 impl HubConfig {
     /// Load from the TOML file at `HUB_CONFIG`, else from environment variables
     /// (`DATABASE_URL`, `HUB_BIND_ADDR`, optional `HUB_STATIC_DIR`, optional
-    /// comma-separated `HUB_TRUST_TAILSCALE_IDENTITY`, and optional
-    /// single-machine `HUB_TOKEN` + `HUB_MACHINE_ID`).
+    /// `HUB_EMBED_MODEL_DIR`, optional comma-separated
+    /// `HUB_TRUST_TAILSCALE_IDENTITY`, and optional single-machine
+    /// `HUB_TOKEN` + `HUB_MACHINE_ID`).
     pub fn load() -> anyhow::Result<Self> {
         if let Ok(path) = std::env::var("HUB_CONFIG") {
             let text = std::fs::read_to_string(&path)
@@ -66,6 +73,7 @@ impl HubConfig {
             });
         }
         let static_dir = std::env::var("HUB_STATIC_DIR").ok().map(PathBuf::from);
+        let embed_model_dir = std::env::var("HUB_EMBED_MODEL_DIR").ok().map(PathBuf::from);
         let trust_tailscale_identity = std::env::var("HUB_TRUST_TAILSCALE_IDENTITY")
             .map(|v| {
                 v.split(',')
@@ -81,6 +89,7 @@ impl HubConfig {
             tokens,
             static_dir,
             trust_tailscale_identity,
+            embed_model_dir,
         })
     }
 
