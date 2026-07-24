@@ -131,6 +131,19 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
     router
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
+        // API responses carry NO freshness metadata of their own, which lets a
+        // browser heuristically cache a `/v1/journal/entries` (or search/browse)
+        // GET and keep serving a stale copy across reloads — the "I refreshed
+        // and the journal still doesn't show yesterday" bug. `no-store` forbids
+        // caching outright so every read hits the hub. `if_not_present` leaves
+        // the static block's own `Cache-Control` untouched (assets stay
+        // `immutable`, `index.html` stays `no-cache`) — this outermost layer
+        // runs last on the response, after those inner layers have set theirs,
+        // so it only fills the gap on the `/v1/*` API surface.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .with_state(state)
 }
 

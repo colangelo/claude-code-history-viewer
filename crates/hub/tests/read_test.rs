@@ -168,6 +168,23 @@ async fn healthz_reports_ok_unauthenticated() {
 }
 
 #[tokio::test]
+async fn api_responses_are_no_store() {
+    // Every `/v1/*` response must forbid browser caching, or a reload can serve
+    // a stale journal/search/browse GET (the "refreshed but yesterday still
+    // missing" bug). Static assets set their own Cache-Control and are left
+    // untouched by the `if_not_present` layer (covered in static_test.rs).
+    let hub = spawn().await;
+    let resp = get(&hub, "/v1/healthz", &[], None).await;
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store"),
+        "API responses must be Cache-Control: no-store"
+    );
+}
+
+#[tokio::test]
 async fn search_returns_ranked_matches_with_context() {
     let hub = spawn().await;
     let b = batch(
