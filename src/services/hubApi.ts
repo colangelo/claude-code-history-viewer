@@ -240,7 +240,16 @@ function authHeaders(config: HubConfig): HeadersInit {
 }
 
 async function hubGet(url: URL, config: HubConfig): Promise<Response> {
-  const res = await fetch(url.toString(), { headers: authHeaders(config) });
+  // `cache: "no-store"` bypasses the browser HTTP cache on every read — the
+  // client-side pair to the hub's `Cache-Control: no-store` on `/v1/*`. Without
+  // it, a browser can serve a stale `/v1/journal/entries` (or search/browse)
+  // response after a reload, so a just-distilled day appears missing until a
+  // hard refresh. Archive reads are infrequent and tailnet-local, so skipping
+  // the cache costs nothing worth keeping.
+  const res = await fetch(url.toString(), {
+    headers: authHeaders(config),
+    cache: "no-store",
+  });
   if (!res.ok) {
     throw new Error(`hub request to ${url.pathname} failed: ${res.status}`);
   }

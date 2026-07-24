@@ -75,6 +75,10 @@ export function JournalView({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  // Bumped whenever the tab becomes visible again, so a feed left open for
+  // hours (across a nightly distill) self-refreshes on return instead of
+  // stranding the user on a stale snapshot until they manually reload.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const [date, setDate] = useState<string>(anchorDate ?? "");
   const [projectFilter, setProjectFilter] = useState<string>("");
@@ -156,6 +160,21 @@ export function JournalView({
     if (anchorDate != null) setDate(anchorDate);
   }, [anchorDate, anchorNonce]);
 
+  // Re-fetch the feed when the tab returns to the foreground (only on the
+  // hidden→visible edge, not on every window focus). Paired with the hub's
+  // `no-store` API responses, this is what keeps a long-open tab from showing
+  // a stale journal after a distill run.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        setRefreshNonce((n) => n + 1);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   // In identity scope the worktree toggle affects which member paths count.
   const includeWorktrees =
     projectFilter.startsWith("identity:") && !showWorktrees ? false : undefined;
@@ -191,7 +210,7 @@ export function JournalView({
         if (generationRef.current !== generation) return;
         setIsLoading(false);
       });
-  }, [config, date, projectFilter, includeWorktrees, mergeProjectOptions, mergeKnownDates]);
+  }, [config, date, projectFilter, includeWorktrees, refreshNonce, mergeProjectOptions, mergeKnownDates]);
 
   const handleLoadMore = useCallback(() => {
     if (isLoading) return;
