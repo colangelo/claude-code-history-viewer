@@ -388,6 +388,23 @@ light/dark toggle — and a global sentence that closes an unnamed item is exact
 the inference our own close-in-pieces rule forbids. They are cheap to retire:
 one wide window plus one theme toggle on any future look, relayed by name.
 
+**2026-07-24, webapp `v0.12.0` → `v0.13.0` swap (thread `c8109762`): CSS
+byte-identical.** Both trees ship the *same* chunk `archive-BBzvspm0.css` —
+same name **and** same bytes (sha256 `5ac5d2de786c…` on the staged v0.13.0 tree
+and on the v0.12.0 preswap backup; re-verified by infra, home-network
+`e1bd473`). Only the JS entry chunk flipped (`archive-BAfYulLt.js` →
+`archive-Dc0q_4px.js`, for the embedded version string), so the
+v0.10.4/v0.10.5 backlog above carries forward untouched — no new eyeball item.
+
+> **Gotcha: a "CSS DIFFERS" report line with blank hashes is an extraction
+> failure, not a diff.** Our swap report for this deploy printed
+> `CSS DIFFERS (->)` with *empty* hash values — the compare step failed to
+> extract the hashes and the report defaulted to "differs" instead of
+> "unknown". Infra caught it by hashing both trees (byte-identical, above).
+> Treat any differs-verdict whose evidence fields are blank as *no verdict*:
+> re-hash the two chunks by hand before recording anything, and never let it
+> re-open (or silently carry) the eyeball backlog.
+
 Note what did *not* close it: the scripted screenshot set below is what finally
 retired the chips item only in the sense that it stopped being needed — the
 close came from a person's eyes, per the rule in the next paragraph. And
