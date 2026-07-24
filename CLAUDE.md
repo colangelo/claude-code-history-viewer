@@ -182,14 +182,21 @@ only. The per-platform WebUI server binaries are **dispatch-only** (nothing
 consumes them today): `gh workflow run server-release.yml --ref cchv-vX.Y.Z`
 builds and attaches them to that tag's release on demand.
 
-The always-on **m4m hub is NOT deployed from that release**. The real path is:
-build locally → stage in `~/.config/cchv/staging/` → relay home-network (infra)
-→ binary swap per `docs/archive/deployment.md`. The GitHub Release is for
-reproducibility and non-local hosts.
+For a **tagged** release the workflow also builds and attaches the hub binary
+`cchv-hub-<version>-aarch64-apple-darwin` + `.sha256` (macos-14 job, since the
+v0.11.2/v0.12.0 CI change). The always-on **m4m hub IS deployed from that
+asset**: infra downloads it from the release, verifies the digest, stages it in
+`~/.config/cchv/staging/`, and does the codesign-aware swap per
+`docs/archive/deployment.md` §2b. The local-build → scp path is only the
+fallback when no release asset exists. Relay the deploy to home-network (infra)
+— the swap runs on m4m, not from your Mac.
 
 ```bash
-gh run list --workflow=server-release.yml --limit=1
-gh release view cchv-v0.6.0
+# NB: bare `gh` defaults to the UPSTREAM repo (jhlee0409) — always -R the fork
+# for our cchv-v* line, or you'll query upstream's v1.x releases and see nothing.
+FORK=colangelo/claude-code-history-viewer
+gh run list -R "$FORK" --workflow=server-release.yml --limit=1
+gh release view cchv-v0.13.0 -R "$FORK"   # expect 3 assets: hub bin + .sha256 + webapp
 ```
 
 #### Troubleshooting
