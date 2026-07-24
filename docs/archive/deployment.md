@@ -264,6 +264,21 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.hub.plist
 Verify: `curl -s https://m4m.cat-bluegill.ts.net:8788/v1/healthz` → `{"status":"ok",…}`
 and the process is running clean (fresh pid, no respawn churn).
 
+**2026-07-24, hub `v0.13.0` → `v0.13.1` swap (thread `497cf57c`): a new
+response header can be the swap-proof probe.** The release added
+`Cache-Control: no-store` to every `/v1/*` response (hub `28be09ca`), and
+infra used exactly that as the rev probe — header absent on
+`/v1/journal/entries` pre-swap, present post-swap — proving the new binary
+took without a `strings` symbol probe. When a rev ships an observable
+behavior change on a live endpoint, name it in the handoff as the probe; it
+beats symbol-grepping. sha256 `8be0384f…33a017d` agreed across the `.sha256`
+sidecar and the GitHub API digest; pid 10517; preswap backup
+`staging/cchv-hub-preswap-20260724-1244` (the 0.13.0 binary). `/v1/healthz`
+`{"db":"up","status":"ok"}`; `/v1/healthz/journal` 200, 5 groups all
+`stale:false`; the static index still serves `no-cache` (the SPA cache-split
+block untouched — `no-store` is scoped to `/v1/*`). Recorded infra-side in
+`hosts/m4m.md`, home-network `bd04e4e`.
+
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
 A webapp-only bump (`dist-archive/` contents, no Rust change) is **much cheaper
@@ -404,6 +419,13 @@ v0.10.4/v0.10.5 backlog above carries forward untouched — no new eyeball item.
 > Treat any differs-verdict whose evidence fields are blank as *no verdict*:
 > re-hash the two chunks by hand before recording anything, and never let it
 > re-open (or silently carry) the eyeball backlog.
+
+**2026-07-24, webapp `v0.13.0` → `v0.13.1` swap (thread `497cf57c`): verified
+by infra** — the live `index.html` references the new entry chunk
+`archive-0BmPzvZw.js`, backup `webapp-preswap-20260724-123924-cchv-v0.13.0`
+in place. The change was JS-only (`hubApi.ts` fetch `cache:'no-store'` +
+`JournalView` refocus refetch, `aa22bda7`), so no new eyeball item; the
+v0.10.4/v0.10.5 backlog above carries forward untouched.
 
 Note what did *not* close it: the scripted screenshot set below is what finally
 retired the chips item only in the sense that it stopped being needed — the
