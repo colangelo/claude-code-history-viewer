@@ -360,6 +360,9 @@ Post-swap verification (no restart involved, so all of it is client-visible):
   back. The excluded host stays observable (`excluded:true`) but cannot flip the
   verdict; this is the same form the Gatus `cchv-ingest` check has used since
   hub `36870b4`.
+- `/v1/healthz/journal` present (200 or a *legitimate* 503 — a real undrained
+  in-window day; check the body's `groups`). A 404 here means the deployed
+  binary predates `distiller-self-healing` (cchv-v0.13.0) — the swap didn't take.
 - the asset-list diff vs the backup touches only the chunks the change should
   touch — a client-only patch that moves other chunks is a red flag
 
@@ -548,19 +551,35 @@ equivalently.
 
 ## 3c. Journal-entries distiller (`scripts/cchv-distill.py`)
 
-> Daily launchd job on the hub machine (m4m) that distills archived sessions
-> into per-(date, project) journal entries (openspec `journal-entries`,
-> issue #12). Catch-up-based: the work list is `GET /v1/journal/pending`
-> (missing or dirty groups), so sleep/downtime and late-arriving syncs only
-> delay entries. **Install only after the hub carries the journal endpoints**
-> (migration `0002_journal_entries.sql`).
+> **Hourly** launchd job on the hub machine (m4m) that distills archived
+> sessions into per-(date, project) journal entries (openspec `journal-entries`
+> + `distiller-self-healing`, issues #12 and Gitea backlog). Catch-up-based: the
+> work list is `GET /v1/journal/pending` (missing or dirty groups), so
+> sleep/downtime and late-arriving syncs only delay entries. **Install only
+> after the hub carries the journal endpoints** (migration
+> `0002_journal_entries.sql`).
+>
+> **Self-healing cadence (`distiller-self-healing`).** The job ticks hourly
+> (`StartInterval 3600`), *not* nightly. This is what bounds journal staleness
+> to ~1h: some tick always lands after the 04:00 UTC logical day-close whatever
+> the DST offset (the retired 05:30-*local* calendar run fired 03:30 UTC under
+> CEST — before the close — and so never saw the day that just ended, the root
+> cause of the 2026-07-22→24 stall). An idle tick is one loopback
+> `GET /v1/journal/pending` + exit, no LLM call. Hub calls retry transient
+> failures (connection errors / 5xx, 3× / 30s; 4xx re-raised at once), so a pg
+> or DNS blip costs seconds not a whole run, and a failed tick recovers at the
+> next hour, never +24h.
 
 - **Install** (on m4m):
 
   ```bash
   install -m 755 scripts/cchv-distill.py ~/.local/bin/cchv-distill
   cp scripts/dev.cchv.distiller.plist ~/Library/LaunchAgents/
+  # first install:
   launchctl load ~/Library/LaunchAgents/dev.cchv.distiller.plist
+  # updating an already-loaded job (e.g. the StartInterval change) — reload:
+  launchctl bootout  gui/$(id -u)/dev.cchv.distiller 2>/dev/null || true
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.distiller.plist
   ```
 
   Requires `uv` on PATH (PEP 723 script). **LLM backend (default `aiproxy`):**
@@ -569,8 +588,9 @@ equivalently.
   `reasoning_effort=low`) — no `claude -p`, so no shared-OAuth contention (the
   old #13 failure mode when an interactive Claude session ran concurrently).
   `--backend claude` keeps `claude -p` (needs the `claude` CLI + `zsh -lc`
-  `CLAUDE_CONFIG_DIR`) as a fallback. Runs daily 05:30 + on load; logs
-  `/tmp/cchv-distiller.{log,err}`.
+  `CLAUDE_CONFIG_DIR`) as a fallback. Runs **hourly** (`StartInterval`) + on
+  load; logs `/tmp/cchv-distiller.{log,err}`. `CCHV_RETRY_SLEEP_SECS` tunes the
+  transient-retry backoff (default 30s).
 - **Secrets** (both same env → bao → 0600-cache floor shape):
   - **Hub token** — `$CCHV_HUB_TOKEN` → AppRole reading
     `kv/infra/cchv/hub-tokens/<host>_token` → `~/.config/cchv/distill-hub-token`
@@ -599,6 +619,17 @@ equivalently.
 - **Failure semantics**: schema-invalid LLM output is rejected locally and the
   group stays pending (retried next run); the hub validates independently.
   Exit code 1 when any group failed — visible in `/tmp/cchv-distiller.err`.
+- **Monitoring** (`distiller-self-healing`): `GET /v1/healthz/journal`
+  (unauthenticated, Gatus-shaped like `/v1/healthz/ingest`) is **503** when a
+  closed logical day *within the forward horizon* still has pending groups whose
+  latest data arrived more than `grace_secs` ago (default 7200), else **200**.
+  Two query params keep the policy in Gatus, no hub redeploy: `grace_secs` (how
+  long undrained work may sit) and `within_days` (default 7 — matches
+  `--horizon-days`; **essential**, since the archive holds hundreds of
+  never-auto-distilled historical pending groups that would otherwise pin it
+  red forever). This catches *all* stall modes — including runs that succeed but
+  distill nothing (the DST-race bug) — which a distiller-side dead-man ping
+  cannot. Relay a `cchv-journal` Gatus check to infra alongside `cchv-ingest`.
 
 ## 3d. Project identity (cchv-v0.10.0): rollout order
 
