@@ -39,24 +39,30 @@
 
 ## 3. Release + deploy (m4m)
 
-- [ ] 3.1 Bump `package.json` to 0.13.0, `just sync-version`, quality gate
-      (Phase 1 of Release Process), commit, tag `cchv-v0.13.0`, push
-      internal + origin
-- [ ] 3.2 Build hub, stage in `~/.config/cchv/staging/`, relay binary swap to
-      infra per `docs/archive/deployment.md` §2b; verify
-      `/v1/healthz/journal` live (200/503 as appropriate) after swap
-- [ ] 3.3 Install updated distiller: copy `scripts/cchv-distill.py` →
-      `~/.local/bin/cchv-distill`, install plist, `launchctl bootout` +
-      `bootstrap`; verify next tick logs (idle → "nothing pending", or
-      drains)
-- [ ] 3.4 Observe one natural post-04:00-UTC tick distilling yesterday
-      (closes the DST-race verification)
+- [x] 3.1 Bump `package.json` to 0.13.0, `just sync-version` (+ Cargo.lock),
+      quality gate (tsc, **927 vitest**, lint, i18n ✓ + Rust from §1.4),
+      release commit, tag `cchv-v0.13.0`, push internal + origin — CI
+      building hub asset on the fork.
+- [~] 3.2 CI built+attached `cchv-hub-0.13.0-aarch64-apple-darwin` + `.sha256`
+      to the `cchv-v0.13.0` release (run 30083872892, success). **RELAYED to
+      infra** (msg `694d6e40`, →home-network@m4m) to download+verify+swap per
+      §2b (sha256 `589ba332…`) + verify `/v1/healthz/journal` live. Live hub
+      still 0.12.0 (404s the new route) until infra swaps. AWAITING infra.
+- [x] 3.3 Installed updated distiller on m4m (`install` → `~/.local/bin`, plist
+      copied, `bootout`+`bootstrap`) — `run interval = 3600s`, RunAtLoad tick
+      drained pending (07-23 …, 07-22 …, 6 ok/0 failed). Hourly cadence LIVE;
+      **journal feed caught up through 07-23** (the reported stall is resolved).
+- [~] 3.4 DST-race fix structurally verified NOW: the reloaded hourly tick drew
+      07-23 groups the old nightly run never saw, and drained them. A natural
+      post-04:00-UTC tick distilling 07-24→yesterday is owed at the next
+      day-close (~05:00 UTC 07-25) as belt-and-suspenders.
 
 ## 4. Monitoring (infra relay)
 
-- [ ] 4.1 Relay to infra (home-network): add Gatus check for
-      `GET /v1/healthz/journal` (Host-header pattern like cchv-hub /
-      cchv-ingest checks); confirm green once deployed
+- [~] 4.1 **RELAYED to infra** (same msg `694d6e40`): add a `cchv-journal`
+      Gatus check for `/v1/healthz/journal` (Host-header pattern; no `?exclude=`
+      needed; keep `within_days=7`). Confirm green once the hub swap lands.
+      AWAITING infra.
 - [x] 4.2 Update `docs/archive/deployment.md` monitoring section with the new
       endpoint + grace semantics (§3c hourly cadence + retry + health endpoint;
       post-swap verification checklist; reload via bootout/bootstrap)
