@@ -29,7 +29,11 @@ use crate::state::AppState;
 /// message falls before this hour count toward the previous calendar day, so
 /// late-night work lands in the day it belongs to. Fixed default (04:00 UTC);
 /// nothing existing needs reconfiguring to get it.
-const DAY_START_HOUR: i32 = 4;
+///
+/// `pub(crate)` so `health::healthz_journal` folds days identically — the
+/// journal-staleness check must see the exact same closed-day boundary the
+/// distiller drains against.
+pub(crate) const DAY_START_HOUR: i32 = 4;
 
 /// Number of `topics` an `entry`-status row must carry (inclusive range).
 const MIN_TOPICS: usize = 3;

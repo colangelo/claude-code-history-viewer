@@ -728,3 +728,193 @@ async fn search_hits_carry_browse_order_position() {
         results[0]["message_key"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// journal staleness health — GET /v1/healthz/journal
+//
+// The endpoint is GLOBAL (no machine filter, by design — it monitors the whole
+// pipeline), so in the shared test DB we can't assert a global 200 (another
+// test's data may legitimately be stale). Each test therefore asserts on ITS
+// OWN uniquely-pathed group's presence / stale flag, which is isolation-robust.
+// A 503 assertion is safe only when this test forces its own group stale (a
+// stale group MUST flip the whole endpoint to 503); a 400 is safe because param
+// validation runs before the query.
+// ---------------------------------------------------------------------------
+
+async fn connect_pool() -> sqlx::PgPool {
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&test_db_url())
+        .await
+        .unwrap()
+}
+
+/// This machine's group for `project`, or panic if the endpoint didn't list it.
+fn find_group<'a>(body: &'a Value, project: &str) -> &'a Value {
+    body["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["project_path"] == Value::String(project.to_string()))
+        .unwrap_or_else(|| panic!("group {project} not listed in {body:?}"))
+}
+
+fn group_absent(body: &Value, project: &str) -> bool {
+    !body["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|g| g["project_path"] == Value::String(project.to_string()))
+}
+
+/// Ingest one closed-day session for this machine (project, session, one
+/// message), then push its logical day and data-arrival time via raw SQL —
+/// `first_message_time` sets the logical day, `messages.created_at` the arrival
+/// (both scoped by `machine_id`, so nothing else in the shared DB is touched).
+async fn seed_day(
+    hub: &TestHub,
+    pool: &sqlx::PgPool,
+    project: &str,
+    day_interval: &str,
+    arrival_interval: &str,
+) {
+    let b = batch(
+        hub,
+        vec![proj(project, "jh")],
+        vec![sess("s-jh", project)],
+        vec![msg(
+            "s-jh",
+            "k-jh",
+            0,
+            "2026-01-01T00:00:00Z",
+            "work happened",
+        )],
+    );
+    ingest(hub, &b).await;
+    sqlx::query(&format!(
+        "UPDATE sessions SET first_message_time = now() - interval '{day_interval}' WHERE machine_id = $1"
+    ))
+    .bind(hub.machine_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(&format!(
+        "UPDATE messages SET created_at = now() - interval '{arrival_interval}' WHERE machine_id = $1"
+    ))
+    .bind(hub.machine_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn journal_health_stale_closed_day_pages() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    let project = format!("/w/jh-stale-{}", hub.hostname);
+    // Closed, in-window day whose data arrived 3h ago (> the default 2h grace).
+    seed_day(&hub, &pool, &project, "1 day", "3 hours").await;
+
+    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    // A stale group forces the whole endpoint to 503 regardless of other data.
+    assert_eq!(resp.status(), 503);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stale");
+    assert_eq!(find_group(&body, &project)["stale"], Value::Bool(true));
+}
+
+#[tokio::test]
+async fn journal_health_fresh_within_grace_not_stale() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    let project = format!("/w/jh-fresh-{}", hub.hostname);
+    // Closed, in-window day whose data just arrived → pending but within grace.
+    seed_day(&hub, &pool, &project, "1 day", "1 minute").await;
+
+    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    // Present (it is pending) but not stale — the hourly tick still has time.
+    assert_eq!(find_group(&body, &project)["stale"], Value::Bool(false));
+}
+
+#[tokio::test]
+async fn journal_health_old_history_outside_window_ignored() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    let project = format!("/w/jh-old-{}", hub.hostname);
+    // 10 logical days ago, arrived 10 days ago: never auto-distilled, awaiting
+    // explicit backfill — must not page under the default 7-day horizon.
+    seed_day(&hub, &pool, &project, "10 days", "10 days").await;
+
+    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        group_absent(&body, &project),
+        "old day must not be evaluated"
+    );
+
+    // Widening the horizon to 30 days brings the same group into scope (proving
+    // the window — not some other filter — is what excluded it), and it's stale.
+    let resp = get(&hub, "/v1/healthz/journal", &[("within_days", "30")], None).await;
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(find_group(&body, &project)["stale"], Value::Bool(true));
+}
+
+#[tokio::test]
+async fn journal_health_drained_day_absent() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    let project = format!("/w/jh-drained-{}", hub.hostname);
+    seed_day(&hub, &pool, &project, "1 day", "3 hours").await;
+    // Insert a journal entry for the group AFTER ingest: its default snapshot
+    // (pg_current_snapshot at insert) sees the session's ingest xid → not dirty
+    // → not pending → not evaluated, even though its arrival is 3h old.
+    sqlx::query(
+        "INSERT INTO journal_entries (entry_date, project_path, status, headline, summary, model, search_text)
+         SELECT ((s.first_message_time - make_interval(hours => 4)) AT TIME ZONE 'UTC')::date,
+                p.project_path, 'entry', 'h', 's', 'm', 'h s'
+         FROM sessions s JOIN projects p ON s.project_id = p.id
+         WHERE s.machine_id = $1",
+    )
+    .bind(hub.machine_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        group_absent(&body, &project),
+        "drained day must not be evaluated"
+    );
+}
+
+#[tokio::test]
+async fn journal_health_open_day_absent() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    let project = format!("/w/jh-open-{}", hub.hostname);
+    // The still-open logical day (first message == now) is never evaluated.
+    seed_day(&hub, &pool, &project, "0 seconds", "0 seconds").await;
+
+    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        group_absent(&body, &project),
+        "open day must not be evaluated"
+    );
+}
+
+#[tokio::test]
+async fn journal_health_rejects_bad_params() {
+    let hub = spawn().await;
+    for q in [
+        ("grace_secs", "abc"),
+        ("grace_secs", "0"),
+        ("within_days", "-1"),
+        ("within_days", "notanumber"),
+    ] {
+        let resp = get(&hub, "/v1/healthz/journal", &[q], None).await;
+        assert_eq!(resp.status(), 400, "param {q:?} must 400");
+    }
+}
