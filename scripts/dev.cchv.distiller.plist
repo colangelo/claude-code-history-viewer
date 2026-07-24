@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- dev.cchv.distiller — daily journal-entries distiller (docs/archive/deployment.md §3c).
-     Calendar job, NOT KeepAlive: the distiller is catch-up-based (work list derived
-     from hub data), so a missed tick is drained by the next run; launchd fires a
-     missed StartCalendarInterval once on wake. RunAtLoad adds login/boot catch-up. -->
+<!-- dev.cchv.distiller — hourly journal-entries distiller (docs/archive/deployment.md §3c).
+     Interval job, NOT KeepAlive: the distiller is catch-up-based (work list derived
+     from hub data), and an idle tick is one loopback query + exit (no LLM calls), so
+     it ticks hourly (StartInterval) rather than once nightly. Hourly ticks are what
+     make the pipeline self-healing: some tick always lands after the 04:00 UTC logical
+     day-close regardless of DST offset (the old 05:30-LOCAL calendar run fired 03:30
+     UTC under CEST — before the close — so it never saw yesterday), a failed tick
+     retries in <=1h instead of +24h, and late laptop-wake data is drained within the
+     hour. RunAtLoad adds login/boot catch-up; launchd fires a missed interval once on
+     wake. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
@@ -26,13 +32,8 @@
         <key>CLAUDE_CONFIG_DIR</key>
         <string>/Users/ac/.config/claude</string>
     </dict>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>5</integer>
-        <key>Minute</key>
-        <integer>30</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>3600</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>ThrottleInterval</key>
