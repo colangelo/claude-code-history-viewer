@@ -90,6 +90,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
     let mut router = Router::new()
         .route("/v1/healthz", get(health::healthz))
         .route("/v1/healthz/ingest", get(health::healthz_ingest))
+        .route("/v1/healthz/journal", get(health::healthz_journal))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/search", get(search::search))
         .route("/v1/journal/pending", get(journal::pending))

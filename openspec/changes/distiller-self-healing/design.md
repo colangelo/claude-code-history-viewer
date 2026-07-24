@@ -83,10 +83,24 @@ code + body). Semantics:
 - Compute pending groups for **closed** logical days (same CTE semantics as
   `journal::pending`, same `DAY_START_HOUR` fold), each joined with its latest
   data arrival `max(messages.created_at)` over the group's sessions.
+- **Bound to the distiller's forward horizon** (`within_days`, default 7,
+  matching the distiller's `--horizon-days`): only groups with
+  `entry_date >= logical_today - within_days` are evaluated. This is essential,
+  not cosmetic — the archive holds **hundreds of pending closed-day groups
+  going back months** (197 older than 7 days as of 2026-07-24, back to
+  2026-04-05) that the distiller *never auto-distills*; they await an explicit
+  `--backfill` and are not a stall. Without this bound the endpoint would be
+  503 forever and monitor nothing.
 - A group is `stale` when `now - latest_arrival > grace_secs` (default 7200,
-  `?grace_secs=` override parsed string-first → 400 on garbage, same pattern
-  as `stale_after_secs`). Any stale group → 503 `"stale"`, else 200 `"ok"`;
-  body lists groups for observability.
+  `?grace_secs=`/`?within_days=` overrides parsed string-first → 400 on
+  garbage, same pattern as `stale_after_secs`). Any in-window stale group →
+  503 `"stale"`, else 200 `"ok"`; body lists the evaluated (in-window pending)
+  groups for observability.
+- *Why two params?* `within_days` = "which days are the distiller's
+  responsibility to drain soon"; `grace_secs` = "how long after data arrives
+  before undrained counts as a stall". Orthogonal: a day inside the horizon
+  that got data 5 min ago is pending-but-fresh (green); the same day pending
+  3 h is stale (red).
 - *Why arrival-based grace instead of "pending exists"?* A day re-dirtied by a
   20:00 laptop wake is legitimately pending for up to an hour; grace keeps
   that green while the hourly tick drains it. *Why not a distiller dead-man
