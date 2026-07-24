@@ -204,6 +204,47 @@ def resolve_aiproxy_key() -> str:
 
 # --- hub client ---------------------------------------------------------------
 
+# Transient-failure retry for hub calls. The distiller now ticks hourly
+# (launchd StartInterval), so a tick that gives up is retried within the hour —
+# but a bounded in-tick retry rides out the sub-second-to-minute flakes (pg
+# connection resets, a hub restart mid-swap, tailnet DNS blips) that used to
+# abort a whole run. Retries cover connection errors, timeouts, and 5xx only;
+# a 4xx is a client error that a retry can't fix (e.g. a hub validation reject),
+# so it propagates immediately.
+RETRY_ATTEMPTS = 3
+# Env-tunable (like the other knobs) so a constrained window can shorten it and
+# tests can drive it to ~0; defaults to 30s.
+RETRY_SLEEP_SECS = float(os.environ.get("CCHV_RETRY_SLEEP_SECS", "30"))
+
+
+def _with_retry(what: str, fn):
+    """Call `fn()`, retrying transient hub failures up to `RETRY_ATTEMPTS`.
+
+    Transient = a `ConnectionError`/`Timeout`, or an `HTTPError` whose response
+    is a 5xx. A 4xx `HTTPError` (or any other exception) is re-raised at once —
+    retrying a client error just wastes the tick.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            return fn()
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status is not None and status < 500:
+                raise  # client error — a retry cannot help
+            last_exc = e
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+        if attempt < RETRY_ATTEMPTS:
+            log(
+                f"{what}: transient hub failure "
+                f"(attempt {attempt}/{RETRY_ATTEMPTS}: {last_exc}); "
+                f"retry in {RETRY_SLEEP_SECS}s"
+            )
+            time.sleep(RETRY_SLEEP_SECS)
+    assert last_exc is not None
+    raise last_exc
+
 
 @dataclass
 class Hub:
@@ -224,14 +265,24 @@ class Hub:
         return r
 
     def pending(self, from_date: str | None, limit: int) -> list[dict]:
-        return self.get("/v1/journal/pending", limit=limit, **{"from": from_date}).json()
+        return _with_retry(
+            "pending query",
+            lambda: self.get(
+                "/v1/journal/pending", limit=limit, **{"from": from_date}
+            ).json(),
+        )
 
     def session_messages(self, session_id: int) -> list[dict]:
         msgs: list[dict] = []
         offset = 0
         while True:
-            r = self.get(
-                f"/v1/sessions/{session_id}/messages", limit=500, offset=offset
+            r = _with_retry(
+                f"session {session_id} messages (offset {offset})",
+                # bind offset per-iteration (default arg) — the closure is called
+                # synchronously here, but this keeps it correct and lint-clean.
+                lambda o=offset: self.get(
+                    f"/v1/sessions/{session_id}/messages", limit=500, offset=o
+                ),
             )
             page = r.json()
             msgs.extend(page)
@@ -241,11 +292,22 @@ class Hub:
                 return msgs
 
     def post_entry(self, payload: dict) -> None:
-        r = self.session.post(
-            f"{self.url}/v1/journal/entries", json=payload, timeout=HTTP_TIMEOUT_SECS
-        )
-        if r.status_code >= 400:
-            raise RuntimeError(f"POST /v1/journal/entries {r.status_code}: {r.text[:500]}")
+        def attempt() -> None:
+            r = self.session.post(
+                f"{self.url}/v1/journal/entries",
+                json=payload,
+                timeout=HTTP_TIMEOUT_SECS,
+            )
+            if r.status_code >= 400:
+                # Raise an HTTPError (carrying the response) so `_with_retry`
+                # retries a 5xx but re-raises a 4xx; keep the body in the message
+                # for the failure log either way.
+                raise requests.HTTPError(
+                    f"POST /v1/journal/entries {r.status_code}: {r.text[:500]}",
+                    response=r,
+                )
+
+        _with_retry("post entry", attempt)
 
 
 # --- transcript building ------------------------------------------------------
