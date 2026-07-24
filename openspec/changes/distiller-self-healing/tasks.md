@@ -43,11 +43,14 @@
       quality gate (tsc, **927 vitest**, lint, i18n ✓ + Rust from §1.4),
       release commit, tag `cchv-v0.13.0`, push internal + origin — CI
       building hub asset on the fork.
-- [~] 3.2 CI built+attached `cchv-hub-0.13.0-aarch64-apple-darwin` + `.sha256`
-      to the `cchv-v0.13.0` release (run 30083872892, success). **RELAYED to
-      infra** (msg `694d6e40`, →home-network@m4m) to download+verify+swap per
-      §2b (sha256 `589ba332…`) + verify `/v1/healthz/journal` live. Live hub
-      still 0.12.0 (404s the new route) until infra swaps. AWAITING infra.
+- [x] 3.2 CI built+attached `cchv-hub-0.13.0-aarch64-apple-darwin` + `.sha256`
+      to the `cchv-v0.13.0` release (run 30083872892, success). Relayed to
+      infra (msg `694d6e40`, →home-network@m4m); **infra confirmed the swap
+      2026-07-24** (reply `ea44a351`): sha256 `589ba332…` verified against
+      sidecar + GitHub API digest, §2b codesign-aware sequence, hub pid 82735
+      stable. `/v1/healthz` ok, `/v1/healthz/journal` → 200 `{"status":"ok"}`
+      (was 404 on 0.12.0 — swap proven). Preswap backup:
+      `~/.config/cchv/staging/cchv-hub-preswap-20260724-1155`.
 - [x] 3.3 Installed updated distiller on m4m (`install` → `~/.local/bin`, plist
       copied, `bootout`+`bootstrap`) — `run interval = 3600s`, RunAtLoad tick
       drained pending (07-23 …, 07-22 …, 6 ok/0 failed). Hourly cadence LIVE;
@@ -59,10 +62,13 @@
 
 ## 4. Monitoring (infra relay)
 
-- [~] 4.1 **RELAYED to infra** (same msg `694d6e40`): add a `cchv-journal`
-      Gatus check for `/v1/healthz/journal` (Host-header pattern; no `?exclude=`
-      needed; keep `within_days=7`). Confirm green once the hub swap lands.
-      AWAITING infra.
+- [x] 4.1 Relayed to infra (same msg `694d6e40`); **infra confirmed
+      2026-07-24** (reply `ea44a351`): `cchv-journal` Gatus check live on mon
+      alongside cchv-hub/cchv-ingest (same IP-literal+Host-header path), URL
+      `/v1/healthz/journal?within_days=7` — `within_days=7` made explicit to
+      pin against server-default drift — 300s interval, ntfy alert, evaluating
+      green (411ms). home-network commit `a0c6912` (gatus.yaml + mon.md 26→27
+      endpoints + m4m.md hub-binary note).
 - [x] 4.2 Update `docs/archive/deployment.md` monitoring section with the new
       endpoint + grace semantics (§3c hourly cadence + retry + health endpoint;
       post-swap verification checklist; reload via bootout/bootstrap)
