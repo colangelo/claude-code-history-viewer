@@ -5,6 +5,9 @@
 //! `GET /v1/healthz/journal` — unauthenticated journal-distillation staleness,
 //! so the same monitor can alert when closed days sit undrained (the pipeline
 //! stalled) even while both checks above stay green.
+//! `GET /v1/healthz/stats` — unauthenticated statistics-mirror readiness,
+//! staleness **and watermark lag**, because a mirror can be recently refreshed
+//! and still be missing rows.
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -17,6 +20,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::error::HubError;
+use crate::mirror::MirrorState;
 use crate::state::AppState;
 
 pub async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
@@ -369,6 +373,176 @@ pub async fn healthz_journal(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// GET /v1/healthz/stats
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct StatsHealthParams {
+    /// Age past which the mirror counts as stale. Defaults to the mirror's
+    /// configured `stale_after_secs`. Raw string for the same reason as the
+    /// checks above — see [`parse_positive`].
+    pub stale_after_secs: Option<String>,
+    /// Rows the mirror may trail Postgres by before the check fails. **Absent
+    /// by default, and then lag is reported but never alerts** — under live
+    /// ingest a healthy mirror always trails by whatever arrived since its last
+    /// refresh, so any default here would be a guess about ingest rate dressed
+    /// up as a health rule. Setting it keeps that policy in the Gatus check,
+    /// where it can be tuned without redeploying the hub (same reasoning as
+    /// `healthz_ingest`'s `exclude`).
+    pub max_lag_rows: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StatsHealthResponse {
+    /// `ok` · `stale` (refreshed too long ago) · `lagging` (missing rows past
+    /// `max_lag_rows`) · `warming` (building, no data yet) · `unavailable` (the
+    /// mirror file could not be opened at all).
+    pub status: &'static str,
+    pub ready: bool,
+    pub stale_after_secs: i64,
+    pub refreshed_at: Option<DateTime<Utc>>,
+    pub age_seconds: Option<i64>,
+    /// Highest `messages.id` in the mirror.
+    pub mirror_max_id: Option<i64>,
+    /// Highest `messages.id` in Postgres. `null` when Postgres is unreachable —
+    /// which `/v1/healthz` already alerts on, so it is not double-counted here.
+    pub postgres_max_id: Option<i64>,
+    /// How many ids the mirror trails Postgres by. **This is why age alone is
+    /// not enough**: a refresher that runs on schedule but silently steps over
+    /// rows keeps the age at zero while the lag grows without bound.
+    pub lag_rows: Option<i64>,
+    pub max_lag_rows: Option<i64>,
+}
+
+/// Statistics-mirror health. Unauthenticated and Gatus-consumable (status code
+/// plus a flat body), mirroring the shape of the two checks above.
+///
+/// Deliberately reports both halves of "is this mirror trustworthy":
+/// **recency** (when it last refreshed) and **completeness** (how far its
+/// watermark trails Postgres). Silent incompleteness is the one genuinely new
+/// failure mode this change introduces — a refresh that skipped rows leaves no
+/// trace in the age — and the lag is a two-primary-key lookup, so there is no
+/// reason not to answer it.
+pub async fn healthz_stats(
+    State(state): State<AppState>,
+    Query(params): Query<StatsHealthParams>,
+) -> Result<(StatusCode, Json<StatsHealthResponse>), HubError> {
+    let configured = state
+        .mirror
+        .as_ref()
+        .map_or_else(default_mirror_stale_after, |m| m.stale_after_secs());
+    let stale_after_secs = parse_positive(
+        params.stale_after_secs.as_deref(),
+        "stale_after_secs",
+        i64::try_from(configured).unwrap_or(i64::MAX),
+    )?;
+    let max_lag_rows = params
+        .max_lag_rows
+        .as_deref()
+        .map(|raw| parse_non_negative(raw, "max_lag_rows"))
+        .transpose()?;
+
+    let Some(mirror) = state.mirror.as_ref() else {
+        // No mirror file at all: a disk-level fault, reported distinctly from a
+        // build in progress because the two need different operator responses.
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(StatsHealthResponse {
+                status: "unavailable",
+                ready: false,
+                stale_after_secs,
+                refreshed_at: None,
+                age_seconds: None,
+                mirror_max_id: None,
+                postgres_max_id: None,
+                lag_rows: None,
+                max_lag_rows,
+            }),
+        ));
+    };
+
+    // Runtime query, not `query!`: a PK lookup needs no offline metadata and the
+    // CI gate builds with `SQLX_OFFLINE` (see the note atop `journal.rs`).
+    let postgres_max_id: Option<i64> =
+        match sqlx::query_scalar::<_, i64>("SELECT coalesce(max(id), 0) FROM messages")
+            .fetch_one(&state.pool)
+            .await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                // Not this check's verdict to make: `/v1/healthz` owns database
+                // reachability, and reporting a null lag is more honest than
+                // reporting a mirror problem that is really a Postgres problem.
+                tracing::warn!(error = %e, "healthz/stats could not read the Postgres watermark");
+                None
+            }
+        };
+
+    let state_now = mirror.state();
+    let (ready, refreshed_at, age_seconds, mirror_max_id) = match state_now {
+        MirrorState::Ready {
+            max_id,
+            refreshed_at,
+        } => (true, Some(refreshed_at), state_now.age_secs(), Some(max_id)),
+        MirrorState::Warming => (false, None, None, None),
+    };
+    let lag_rows = mirror_max_id.zip(postgres_max_id).map(|(m, p)| p - m);
+
+    let status = if !ready {
+        "warming"
+    } else if age_seconds.is_some_and(|a| a > stale_after_secs) {
+        "stale"
+    } else if let (Some(limit), Some(lag)) = (max_lag_rows, lag_rows) {
+        if lag > limit {
+            "lagging"
+        } else {
+            "ok"
+        }
+    } else {
+        "ok"
+    };
+    let code = if status == "ok" {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    Ok((
+        code,
+        Json(StatsHealthResponse {
+            status,
+            ready,
+            stale_after_secs,
+            refreshed_at,
+            age_seconds,
+            mirror_max_id,
+            postgres_max_id,
+            lag_rows,
+            max_lag_rows,
+        }),
+    ))
+}
+
+/// Like [`parse_positive`], but zero is a meaningful value here:
+/// `max_lag_rows=0` says "any row the mirror is missing is an alert", which is
+/// the strictest sensible policy and not a typo. Rejecting it would leave 1 as
+/// the tightest expressible budget for no reason.
+fn parse_non_negative(raw: &str, name: &str) -> Result<i64, HubError> {
+    match raw.parse::<i64>() {
+        Ok(v) if v >= 0 => Ok(v),
+        _ => Err(HubError::BadRequest(format!(
+            "{name} must be a non-negative integer, got {raw:?}"
+        ))),
+    }
+}
+
+/// Fallback threshold when there is no mirror to read the configured one from.
+/// Only reachable in the `unavailable` branch, which is a 503 regardless.
+fn default_mirror_stale_after() -> u64 {
+    crate::config::MirrorConfig::default().stale_after_secs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +567,15 @@ mod tests {
     fn parse_positive_rejects_zero_and_negative() {
         assert!(parse_positive(Some("0"), "grace_secs", 7200).is_err());
         assert!(parse_positive(Some("-1"), "within_days", 7).is_err());
+    }
+
+    #[test]
+    fn parse_non_negative_accepts_zero_but_not_below() {
+        assert_eq!(parse_non_negative("0", "max_lag_rows").unwrap(), 0);
+        assert_eq!(parse_non_negative("500", "max_lag_rows").unwrap(), 500);
+        for bad in ["-1", "abc", ""] {
+            let err = parse_non_negative(bad, "max_lag_rows").unwrap_err();
+            assert!(matches!(err, HubError::BadRequest(m) if m.contains("max_lag_rows")));
+        }
     }
 }

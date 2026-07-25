@@ -652,25 +652,48 @@ pub fn session(
     }))
 }
 
-/// Resolve a session reference — numeric row id or provider session UUID —
+/// What a session reference resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionRef {
+    /// Exactly one archived session.
+    Found(i64),
+    /// Nothing in the mirror answers to it.
+    Absent,
+    /// A provider session id shared by several archived sessions — the same
+    /// session synced from more than one machine. Reported rather than resolved
+    /// arbitrarily, matching the browse endpoint: silently picking the lowest id
+    /// would report one machine's copy of the session as if it were the whole
+    /// thing.
+    Ambiguous(Vec<i64>),
+}
+
+/// Resolve a session reference — numeric row id or provider session id —
 /// against the mirror (Gitea #26).
 ///
 /// Same acceptance rule as the browse-side `resolve_session_ref`, but without
-/// touching Postgres, so an unknown UUID is a `404` rather than a parse `400`.
-pub fn resolve_session_ref(conn: &Connection, reference: &str) -> duckdb::Result<Option<i64>> {
+/// touching Postgres, so an unknown UUID is a `404` rather than a parse `400`,
+/// and a stats request stays answerable while Postgres is away.
+///
+/// Unlike the browse version, a numeric reference is *checked* rather than
+/// trusted: there is a mirror row to check it against right here, and the
+/// alternative is discovering the absence further down as an empty rollup.
+pub fn resolve_session_ref(conn: &Connection, reference: &str) -> duckdb::Result<SessionRef> {
     if let Ok(id) = reference.parse::<i64>() {
-        return conn
+        let found: Option<i64> = conn
             .query_row("SELECT id FROM sessions WHERE id = ?", [id], |r| r.get(0))
             .map(Some)
-            .or_else(none_if_absent);
+            .or_else(none_if_absent)?;
+        return Ok(found.map_or(SessionRef::Absent, SessionRef::Found));
     }
-    conn.query_row(
-        "SELECT id FROM sessions WHERE session_id = ? ORDER BY id LIMIT 1",
-        [reference],
-        |r| r.get(0),
-    )
-    .map(Some)
-    .or_else(none_if_absent)
+    let mut stmt = conn.prepare("SELECT id FROM sessions WHERE session_id = ? ORDER BY id")?;
+    let ids: Vec<i64> = stmt
+        .query_map([reference], |r| r.get(0))?
+        .collect::<duckdb::Result<_>>()?;
+    Ok(match ids.as_slice() {
+        [] => SessionRef::Absent,
+        [pk] => SessionRef::Found(*pk),
+        _ => SessionRef::Ambiguous(ids),
+    })
 }
 
 /// Expand a project identity key into its member paths, from the mirror.

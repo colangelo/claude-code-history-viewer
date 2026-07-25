@@ -93,12 +93,21 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         // CONTENT_TYPE: the alias POST sends application/json, which is not
         // preflight-safelisted once the request also carries Authorization.
         .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-        .expose_headers([HeaderName::from_static("x-total-count")]);
+        .expose_headers([
+            HeaderName::from_static("x-total-count"),
+            // Mirror staleness on `/v1/stats/*` (design D5). Same rule as
+            // `X-Total-Count`: a header a script may read has to be exposed
+            // explicitly, and the webapp calling the hub cross-origin is the
+            // only consumer these exist for.
+            HeaderName::from_static("x-stats-mirror-refreshed-at"),
+            HeaderName::from_static("x-stats-mirror-age-seconds"),
+        ]);
 
     let mut router = Router::new()
         .route("/v1/healthz", get(health::healthz))
         .route("/v1/healthz/ingest", get(health::healthz_ingest))
         .route("/v1/healthz/journal", get(health::healthz_journal))
+        .route("/v1/healthz/stats", get(health::healthz_stats))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/search", get(search::search))
         .route("/v1/journal/pending", get(journal::pending))
