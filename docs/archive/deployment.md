@@ -317,8 +317,9 @@ sidecar and the GitHub API digest; pid 10517; preswap backup
 block untouched — `no-store` is scoped to `/v1/*`). Recorded infra-side in
 `hosts/m4m.md`, home-network `bd04e4e`.
 
-**2026-07-25, hub `v0.13.1` → `v0.14.0` (thread `7bf6a920`) — RELAYED, awaiting
-infra.** Hub analytics: the swap-proof probe is a **new route**, which is
+**2026-07-25, hub `v0.13.1` → `v0.14.0` (thread `7bf6a920`) — binary swap
+LANDED 14:55, verified green; catch-up backfill + webapp swap still pending
+(follow-up thread `615a4b5a`).** Hub analytics: the swap-proof probe is a **new route**, which is
 stronger than a new header — `GET /v1/stats/global` 404s on `v0.13.1` (verified
 from ac-mbm5 pre-swap, 13 ms) and answers 200 on `v0.14.0`. Asset
 `cchv-hub-0.14.0-aarch64-apple-darwin`, sha256 `accf9daa…07b06b6`. Two things
@@ -335,6 +336,13 @@ that make this deploy unlike the others:
   generous `--max-time`, or a one-day window (`?from=…&to=…`), which is fast.
   Naming this in the relay is the difference between a verification and a
   false rollback.
+- **The CSS entry chunk was NOT a valid swap marker for this release.**
+  `assets/archive-BBzvspm0.css` is byte-identical between `v0.13.1` and
+  `v0.14.0`, so asserting on it passes on the *old* bundle — the v0.11.1
+  marker trap again, in a new costume. Before quoting entry-chunk hashes in a
+  relay, diff them against what is **live** and quote only the ones that
+  actually changed (here: `assets/archive-CEkkOQjO.js`, or the string
+  `stats/global`, which exists only in the new bundle).
 
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
