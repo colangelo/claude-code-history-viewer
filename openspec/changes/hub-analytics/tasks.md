@@ -61,8 +61,8 @@
 
 ## 8. Quality gate and deploy
 
-- [ ] 8.1 Run the frontend gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`, `pnpm run i18n:validate`
-- [ ] 8.2 Run the Rust gate: `cargo test -- --test-threads=1`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check`
+- [x] 8.1 Run the frontend gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`, `pnpm run i18n:validate`
+- [x] 8.2 Run the Rust gate: `cargo test -- --test-threads=1`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check`
 - [ ] 8.3 Merge `feature/hub-analytics` into `main` and cut a `cchv-v*` release per CLAUDE.md § Release Process
 - [ ] 8.4 Relay the deploy to infra: migration against pg1, hub binary swap on m4m per `docs/archive/deployment.md` §2b, then the webapp `static_dir` swap
 - [ ] 8.5 Verify live: statistics load in the deployed webapp and agree with the pre-deploy comparison
