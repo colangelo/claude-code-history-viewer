@@ -12,6 +12,24 @@ do X here" (Justfiles, git remotes, containers, secrets, docs, backlog, CI, seco
 it). Check PATTERNS before inventing a convention; check SKILLS before improvising a
 procedure.
 
+## Specs: OpenSpec, not ad-hoc design docs
+
+**This is a brownfield repo, so every non-trivial change is specced through
+OpenSpec** — `openspec new change "<kebab-name>"`, then the artifacts under
+`openspec/changes/<name>/` (`proposal.md`, `design.md`, `tasks.md`, plus the
+`specs/<capability>/spec.md` deltas). `tasks.md` *is* the implementation plan; don't
+write a second one somewhere else. Archive with the openspec archive flow when the
+change lands.
+
+The trap: general-purpose planning skills (Superpowers `brainstorming` →
+`writing-plans`, etc.) default to writing a design doc to
+`docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` and to their own plan format.
+**That default does not apply here** — the house rule wins, and a spec that lands
+outside `openspec/` is invisible to the delta/archive audit trail the workflow
+exists for. Use those skills for their *thinking* (the questions, the approach
+comparison) and then land the result as OpenSpec artifacts. The two design docs that
+already sit in `docs/superpowers/specs/` are historical, not a precedent to follow.
+
 ## Secrets
 
 Machine reads default to **OpenBao** — `bao kv get kv/<path>` (`BAO_ADDR` is
