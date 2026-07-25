@@ -1,0 +1,219 @@
+## Context
+
+Deliverable 1 of the web-only pivot. The strategic reasoning — why the desktop
+is being cut, why cliproxyapi's Usage Keeper is not a substitute, why analytics
+must precede deletion — lives in
+`docs/superpowers/specs/2026-07-25-web-only-pivot-and-analytics-design.md` and is
+not repeated here. This document covers only *how* to build the hub-side
+analytics.
+
+Current state: `messages` already carries `model`, the four token columns,
+`cost_usd`, `duration_ms`, `stop_reason`, `provider`, `machine_id`, `timestamp`,
+`is_sidechain`, plus normalized `content` and raw-fidelity `raw` JSONB. The
+retired desktop implementation (`src-tauri/src/commands/stats.rs`, 6.0k LOC)
+computes the same metrics by mmap-scanning JSONL; it stays in the tree until
+Deliverable 2 and serves as the verification oracle.
+
+Two constraints shape everything below:
+
+1. **The corpus already exists.** ~9 months of history is ingested (back to
+   2025-10-09 via Time Machine backfill). Any new derived data must be
+   *backfillable over stored rows*, because re-ingesting the whole archive to
+   populate a column is not acceptable.
+2. **Usage must be deduplicated.** One assistant response occupies several
+   stored rows carrying an identical `usage` block. A plain `SUM` over-reports.
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- Serve token/cost, per-project, tool/skill, and activity statistics from
+  Postgres, matching the desktop oracle's numbers.
+- Make the provider message id a first-class queryable column, since dedup
+  cannot be expressed without it.
+- Extract tool/skill invocations once, at ingest, so query time never scans JSONB.
+- Migrate the existing analytics UI into the webapp with its types intact.
+
+**Non-Goals:**
+
+- Deleting `src-tauri` (Deliverable 2) or retrospective synthesis (Deliverable 3).
+- Changing `crates/history-core/src/models/stats.rs`. The stat types are reused
+  verbatim; that is what keeps the UI port mechanical.
+- Replacing Usage Keeper, which measures spend through the proxy and has no
+  project attribution.
+- Byte-exact `raw` passthrough (a pre-existing planned enhancement — see risks).
+
+## Decisions
+
+### D1 — The provider message id is read from `raw->>'messageId'`
+
+**This corrects the arc design doc, which said `raw->'message'->>'id'`.** That
+path returns NULL for every row.
+
+`raw` is not the original JSONL line. `crates/sync-daemon/src/convert.rs:94`
+sets `raw: serde_json::to_value(m)` where `m` is a **normalized, flat**
+`ClaudeMessage` — the nested `message` object of the source format is gone. In
+`ClaudeMessage`, the field is `message_id` with `#[serde(rename = "messageId")]`
+(`crates/history-core/src/models/message.rs:132`), so the JSONB key is
+`messageId` at the top level.
+
+Its runtime semantics are what matters, and the source comment ("File history
+snapshot fields") is misleading. `TryFrom<RawLogEntry>` (message.rs:203, 240)
+computes `message_id: msg.id.clone().or(log_entry.message_id)` — the **assistant
+`msg_…` id wins**, falling back to the file-history-snapshot `messageId`. This
+dual-purpose field is exactly what `stats.rs:1500` dedups on, so reproducing the
+oracle means reproducing this precedence.
+
+*Alternatives considered:*
+
+- **Add `message_id` to `IngestMessage`** (the wire type currently has no such
+  field). Rejected *for this deliverable*: it needs a daemon rollout on every
+  machine, and it does nothing for the 9 months already stored, which still need
+  a `raw`-derived backfill. Worth doing later as a robustness follow-up, at which
+  point the column becomes authoritative and `raw` extraction is the fallback.
+- **`raw->'message'->>'id'`** — wrong, as established above.
+
+### D2 — Do not "clean up" the dual-purpose field
+
+A future refactor separating the assistant id from the snapshot `messageId`
+would silently change dedup grouping. File-history-snapshot rows carry no
+`usage`, so they cannot corrupt token totals today, but the coupling must be
+documented at both ends rather than tidied away.
+
+### D3 — `message_id` is a real backfilled column, not a generated column
+
+A `GENERATED ALWAYS AS (raw->>'messageId') STORED` column is tempting — it
+self-maintains and cannot drift. It is rejected because it welds the schema to
+the current `raw` format, which the ingestion spec already flags as slated to
+change to byte-exact passthrough. Under that change a generated column silently
+starts producing NULLs (or the wrong value) archive-wide with no migration step
+to notice it.
+
+A plain nullable `TEXT` column populated at ingest and backfilled once keeps the
+extraction rule in Rust, where the `raw`-format change will have to be handled
+anyway.
+
+### D4 — Tool extraction is hub-side at ingest, from normalized `content`
+
+The daemon has the parsed message and could ship a compact tool list, which
+would be cheaper. Rejected for the same reason as D1: daemon-side extraction
+cannot populate the existing corpus without a full re-ingest, and it makes tool
+statistics depend on every machine's daemon version.
+
+Extracting hub-side from the stored normalized `content` means one code path
+serves both live ingest and the backfill of existing rows, and old daemons need
+no upgrade. The wire protocol is unchanged by this deliverable.
+
+Query-time extraction (a GIN index over `raw`) was rejected outright: tool stats
+are requested per project and globally over the whole archive, so this is the
+hot path, not an occasional lookup.
+
+### D5 — Dedup is a CTE applied before aggregation, not a post-filter
+
+Every usage rollup runs over a deduplicated relation:
+
+```sql
+WITH deduped AS (
+  SELECT DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text))
+         session_id, input_tokens, output_tokens,
+         cache_creation_tokens, cache_read_tokens, cost_usd, ...
+  FROM messages
+  WHERE <scope and window predicates>
+  ORDER BY session_id, COALESCE(message_id, uuid, id::text), seq
+)
+SELECT ... FROM deduped
+```
+
+The `COALESCE` chain reproduces the oracle's precedence exactly: `message_id`,
+else `uuid`, else count the row unconditionally (the row `id` is unique, so a
+row with neither identifier is never collapsed into another).
+
+Counting distinct identifiers in the aggregate instead (`SUM(...) FILTER` with a
+window function) was considered; the CTE is chosen because it keeps the dedup
+rule in one place that every endpoint composes, rather than repeated per metric
+where one omission silently over-reports.
+
+### D6 — Statistics are scoped by project identity, not project path
+
+Per-project endpoints key on `identity_key` and fold every path and machine
+belonging to it, reusing the existing `project-identity` grouping. Keying on
+`project_path` would report a moved or cloned repository as several unrelated
+projects — the exact defect the identity work already fixed for browsing.
+
+### D7 — Timezone is a request parameter
+
+Daily buckets and the hour/day heatmap are meaningless in UTC for a user in
+`Europe/Rome`. Bucketing is done server-side with an IANA timezone supplied by
+the caller (defaulting to UTC), so Postgres does the `AT TIME ZONE` conversion
+next to the index rather than shipping rows to the client to re-bucket.
+
+### D8 — Verification against the oracle is a first-class task, not a spot check
+
+The gate for Deliverable 2 is that hub and desktop agree. This is done by
+running both over the same scope and window and diffing the stat structs — the
+same types on both sides make this a structural comparison, not eyeballing
+charts. Disagreement blocks the cut.
+
+### D9 — The UI migrates with its types, and loses its math
+
+`crates/history-core/src/models/stats.rs` is unchanged, so the TypeScript types
+mirroring it (`src/types/analytics.ts`) are unchanged too, and the hand-rolled
+charts (no chart library in `package.json`) port as-is. What changes:
+`services/analyticsApi.ts` switches from Tauri `invoke` to hub HTTP, and
+`AnalyticsDashboard/utils/*` — client-side aggregation over locally-read
+messages — is deleted as each metric moves to SQL, not ported.
+
+## Risks / Trade-offs
+
+- **`uuid` fallback is not stable across re-parses** → `history-core` fills a
+  missing provider uuid with a random v4 (`message.rs:217`, and
+  `convert.rs` excludes `uuid` from `message_key` for exactly this reason). Within
+  a stored corpus the value is fixed, so queries are self-consistent; but a
+  re-ingest after a re-parse can regroup dedup for providers lacking real uuids.
+  Accepted: identical behavior to the oracle. Providers with real ids are
+  unaffected.
+- **Backfilling `message_id` over the whole corpus may be expensive** → measure
+  the row count and the JSONB extraction cost first, run it in batches, and add
+  the index concurrently. If it proves prohibitive, the column can be populated
+  forward-only with backfill deferred, at the cost of incomplete history until
+  it completes.
+- **`raw` is slated to become byte-exact original lines** → that change breaks
+  the `raw->>'messageId'` extraction. Mitigated by D3 (rule lives in Rust, not
+  in a generated column) and by cross-referencing this decision from the
+  ingestion spec so the enhancement cannot land without addressing it.
+- **`cost_usd` is absent for most providers** → cost totals must be presented as
+  "cost where reported", never silently treated as zero, or per-provider cost
+  comparisons will be misleading.
+- **Tool-extraction backfill and live ingest can disagree** → they share one code
+  path (D4); a divergence is a bug, and the idempotence scenario in the ingestion
+  spec is the regression test.
+- **Two agents on this repo** → this change is developed in the
+  `feature/hub-analytics` worktree to avoid the shared-tree contention that
+  already dropped a commit once.
+
+## Migration Plan
+
+1. Migration `0005`: add nullable `messages.message_id`; create
+   `message_tool_uses`. Both additive, no rewrite of existing columns.
+2. Deploy hub with extraction active at ingest — new rows populate immediately,
+   before any backfill runs.
+3. Backfill in batches: `message_id` from `raw->>'messageId'`, tool rows from
+   stored `content`. Progress is observable and resumable; the job is
+   idempotent and re-runnable.
+4. Create the `message_id` index concurrently once the backfill has drained.
+5. Enable `/v1/stats/*`; verify against the desktop oracle (D8).
+6. Ship the webapp Analytics tab as a `static_dir` swap.
+
+**Rollback:** the endpoints are additive and the webapp tab degrades on `404`,
+so reverting the hub binary is sufficient; the migration can stay in place
+harmlessly since nothing else reads the new column or table.
+
+## Open Questions
+
+- Backfill magnitude for `message_id` and tool rows is unmeasured. Step 3 must
+  begin with a `COUNT` and an `EXPLAIN` before the batch job is sized. This is a
+  measurement, not a design decision, so it does not block implementation.
+- Whether per-session statistics need pagination. The desktop had
+  `PaginatedTokenStats` for listing many sessions' stats; the hub endpoints here
+  are single-session and single-project, so pagination is deferred until the UI
+  shows it is needed.
