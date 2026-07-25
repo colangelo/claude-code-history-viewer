@@ -28,7 +28,8 @@
 
 use crate::config::MirrorConfig;
 use chrono::{DateTime, Utc};
-use duckdb::Connection;
+use duckdb::types::Value;
+use duckdb::{params_from_iter, Connection};
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -99,6 +100,20 @@ impl RefreshOutcome {
 
 /// How many messages to pull from Postgres per round trip.
 const FETCH_CHUNK: i64 = 50_000;
+
+/// How many rows go into one `INSERT` statement.
+///
+/// **Not a tuning knob — a correctness floor.** `DuckDB` pins a 256 KiB block
+/// per `INSERT` statement for as long as the enclosing transaction is open, so
+/// one statement per row costs ~370 KiB of memory *per row*: measured, 676
+/// single-row inserts exhausted a 256 MB limit, and 2,753 rows exhausted the
+/// 1 GB default. A cold build of the real archive (2.8M messages) would have
+/// needed terabytes and instead failed a few thousand rows in — permanently,
+/// since the mirror would never finish and `/v1/stats/*` would answer 503
+/// forever. Batching amortizes that block across many rows; at 500 the
+/// generated SQL and its bind list stay small while the per-statement cost
+/// stops mattering. `mirror_scale_test` holds this down.
+const INSERT_BATCH: usize = 500;
 
 pub struct Mirror {
     /// Single owning connection. `DuckDB` permits one read-write handle to a
@@ -171,14 +186,25 @@ impl Mirror {
             "SET memory_limit='{}'; SET threads={};",
             cfg.memory_limit, cfg.threads
         ))?;
-        // NB: no `LOAD icu`. IANA timezone support is in DuckDB core as of
-        // 1.5.5; the extension is absent from the bundled build and loading it
-        // would attempt a runtime download (design D7).
+        // NB: no `LOAD icu`, and no `AT TIME ZONE` anywhere downstream. The
+        // extension is absent from the bundled build, cannot be statically
+        // linked from the published crate, and `AT TIME ZONE` needs it for
+        // *every* zone including UTC — so local-time bucketing is done from
+        // Rust-computed offset spans instead (design D7, and see
+        // `duckdb_capability_test`, which fails the build if either reappears).
         Ok(conn)
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Configured age past which `/v1/healthz/stats` calls the mirror stale.
+    /// Read from here rather than threaded into `AppState` separately, because
+    /// the mirror already owns its configuration and a second copy would be a
+    /// second thing to keep in step.
+    pub fn stale_after_secs(&self) -> u64 {
+        self.cfg.stale_after_secs
     }
 
     /// A second handle to the same database, for concurrent reads.
@@ -439,46 +465,7 @@ impl Mirror {
     fn insert_messages(&self, rows: &[MessageRow]) -> anyhow::Result<usize> {
         let conn = self.conn.lock().expect("mirror connection poisoned");
         let before: i64 = conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?;
-        in_transaction(&conn, || {
-            let mut stmt = conn.prepare(
-                r"INSERT OR IGNORE INTO messages
-                   (id, session_id, message_id, uuid, provider, model, role, ts_utc,
-                    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                    cost_usd, group_key, conversational, usage_row)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?,
-                           coalesce(?, ?, CAST(? AS VARCHAR)), ? IS NOT NULL, NULL)",
-            )?;
-            for r in rows {
-                stmt.execute(duckdb::params![
-                    r.id,
-                    r.session_id,
-                    r.message_id,
-                    r.uuid,
-                    r.provider,
-                    r.model,
-                    r.role,
-                    // Bound as text and cast: DuckDB has no BIGINT -> TIMESTAMP
-                    // conversion, so epoch micros would fail here. Naive UTC,
-                    // not RFC3339 — the column is a plain TIMESTAMP and a zone
-                    // suffix would have to be interpreted by the ICU code path
-                    // this design avoids.
-                    r.timestamp
-                        .map(|t| t.naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string()),
-                    r.input_tokens,
-                    r.output_tokens,
-                    r.cache_creation_tokens,
-                    r.cache_read_tokens,
-                    r.cost_usd,
-                    // group_key = coalesce(message_id, uuid, id)
-                    r.message_id,
-                    r.uuid,
-                    r.id,
-                    // conversational = role IS NOT NULL
-                    r.role,
-                ])?;
-            }
-            Ok(())
-        })?;
+        in_transaction(&conn, || insert_all(&conn, rows))?;
         let after: i64 = conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?;
         Ok((after - before).max(0) as usize)
     }
@@ -492,23 +479,7 @@ impl Mirror {
         .fetch_all(pg)
         .await?;
         let conn = self.conn.lock().expect("mirror connection poisoned");
-        in_transaction(&conn, || {
-            let mut stmt = conn.prepare(
-                "INSERT OR REPLACE INTO projects
-                   (id, project_path, project_name, identity_key, git_worktree)
-                 VALUES (?, ?, ?, ?, ?)",
-            )?;
-            for r in &rows {
-                stmt.execute(duckdb::params![
-                    r.id,
-                    r.project_path,
-                    r.project_name,
-                    r.identity_key,
-                    r.git_worktree
-                ])?;
-            }
-            Ok(())
-        })
+        in_transaction(&conn, || insert_all(&conn, &rows))
     }
 
     /// Manual identity aliases — the second half of the identity expansion
@@ -529,14 +500,7 @@ impl Mirror {
         // path the operator has just detached.
         in_transaction(&conn, || {
             conn.execute_batch("DELETE FROM project_identity_aliases")?;
-            let mut stmt = conn.prepare(
-                "INSERT OR REPLACE INTO project_identity_aliases (id, identity_key, project_path)
-                 VALUES (?, ?, ?)",
-            )?;
-            for r in &rows {
-                stmt.execute(duckdb::params![r.id, r.identity_key, r.project_path])?;
-            }
-            Ok(())
+            insert_all(&conn, &rows)
         })
     }
 
@@ -547,16 +511,7 @@ impl Mirror {
         .fetch_all(pg)
         .await?;
         let conn = self.conn.lock().expect("mirror connection poisoned");
-        in_transaction(&conn, || {
-            let mut stmt = conn.prepare(
-                "INSERT OR REPLACE INTO sessions (id, project_id, session_id, summary)
-                 VALUES (?, ?, ?, ?)",
-            )?;
-            for r in &rows {
-                stmt.execute(duckdb::params![r.id, r.project_id, r.session_id, r.summary])?;
-            }
-            Ok(())
-        })
+        in_transaction(&conn, || insert_all(&conn, &rows))
     }
 
     async fn refresh_tool_uses(&self, pg: &PgPool, from_id: i64) -> anyhow::Result<usize> {
@@ -571,27 +526,7 @@ impl Mirror {
         let conn = self.conn.lock().expect("mirror connection poisoned");
         let before: i64 =
             conn.query_row("SELECT count(*) FROM message_tool_uses", [], |r| r.get(0))?;
-        in_transaction(&conn, || {
-            let mut stmt = conn.prepare(
-                r"INSERT OR IGNORE INTO message_tool_uses
-                   (message_ref, seq, session_id, tool_name, skill_name, subagent_type,
-                    tool_use_id, is_error)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            )?;
-            for r in &rows {
-                stmt.execute(duckdb::params![
-                    r.message_ref,
-                    r.seq,
-                    r.session_id,
-                    r.tool_name,
-                    r.skill_name,
-                    r.subagent_type,
-                    r.tool_use_id,
-                    r.is_error
-                ])?;
-            }
-            Ok(())
-        })?;
+        in_transaction(&conn, || insert_all(&conn, &rows))?;
         let after: i64 =
             conn.query_row("SELECT count(*) FROM message_tool_uses", [], |r| r.get(0))?;
         Ok((after - before).max(0) as usize)
@@ -609,23 +544,7 @@ impl Mirror {
         let before: i64 = conn.query_row("SELECT count(*) FROM message_tool_results", [], |r| {
             r.get(0)
         })?;
-        in_transaction(&conn, || {
-            let mut stmt = conn.prepare(
-                r"INSERT OR IGNORE INTO message_tool_results
-                   (message_ref, seq, session_id, tool_use_id, is_error)
-                   VALUES (?, ?, ?, ?, ?)",
-            )?;
-            for r in &rows {
-                stmt.execute(duckdb::params![
-                    r.message_ref,
-                    r.seq,
-                    r.session_id,
-                    r.tool_use_id,
-                    r.is_error
-                ])?;
-            }
-            Ok(())
-        })?;
+        in_transaction(&conn, || insert_all(&conn, &rows))?;
         let after: i64 = conn.query_row("SELECT count(*) FROM message_tool_results", [], |r| {
             r.get(0)
         })?;
@@ -750,6 +669,58 @@ pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::tim
         }
         tokio::time::sleep(interval).await;
     }
+}
+
+/// A table the mirror pulls from Postgres, from the insert side.
+///
+/// Exists so every mirrored table goes through [`insert_all`] and inherits its
+/// batching. The alternative — a hand-written loop per table — is what allowed
+/// the per-row-statement memory blowup to be fixed in one place and survive in
+/// four others.
+trait Mirrored {
+    /// Everything up to the rows: `INSERT OR IGNORE INTO t (a, b, …) VALUES `.
+    /// The conflict clause is part of it because it differs per table: append-only
+    /// tables IGNORE (idempotent re-reads over the overlap window), small
+    /// wholly-refreshed ones REPLACE.
+    const INSERT_PREFIX: &'static str;
+    /// One row's placeholder tuple, repeated once per row in a batch.
+    const ROW: &'static str;
+    /// This row's binds, in `ROW` order.
+    fn binds(&self) -> Vec<Value>;
+}
+
+/// Insert `rows` in [`INSERT_BATCH`]-sized multi-row statements.
+fn insert_all<T: Mirrored>(conn: &Connection, rows: &[T]) -> anyhow::Result<()> {
+    for chunk in rows.chunks(INSERT_BATCH) {
+        let mut sql = String::from(T::INSERT_PREFIX);
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push(',');
+            }
+            sql.push_str(T::ROW);
+        }
+        let binds: Vec<Value> = chunk.iter().flat_map(Mirrored::binds).collect();
+        conn.prepare(&sql)?.execute(params_from_iter(binds))?;
+    }
+    Ok(())
+}
+
+// Bind helpers: `NULL` in Postgres has to arrive as `Value::Null`, not as an
+// empty string or a zero.
+fn text(v: Option<&str>) -> Value {
+    v.map_or(Value::Null, |s| Value::Text(s.to_string()))
+}
+
+fn int(v: Option<i64>) -> Value {
+    v.map_or(Value::Null, Value::BigInt)
+}
+
+fn dbl(v: Option<f64>) -> Value {
+    v.map_or(Value::Null, Value::Double)
+}
+
+fn boolean(v: Option<bool>) -> Value {
+    v.map_or(Value::Null, Value::Boolean)
 }
 
 /// Run `body` inside an explicit `DuckDB` transaction, rolling back if it fails.
@@ -895,6 +866,50 @@ struct MessageRow {
     cost_usd: Option<f64>,
 }
 
+impl Mirrored for MessageRow {
+    const INSERT_PREFIX: &'static str = "INSERT OR IGNORE INTO messages
+        (id, session_id, message_id, uuid, provider, model, role, ts_utc,
+         input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+         cost_usd, group_key, conversational, usage_row) VALUES ";
+    /// The last three expressions are the derived columns: `group_key` is the
+    /// dedup key, `conversational` is "this row is a turn, not bookkeeping", and
+    /// `usage_row` starts NULL for `compute_derived` to decide.
+    const ROW: &'static str = "(?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?,
+         coalesce(?, ?, CAST(? AS VARCHAR)), ? IS NOT NULL, NULL)";
+
+    fn binds(&self) -> Vec<Value> {
+        vec![
+            Value::BigInt(self.id),
+            Value::BigInt(self.session_id),
+            text(self.message_id.as_deref()),
+            text(self.uuid.as_deref()),
+            text(self.provider.as_deref()),
+            text(self.model.as_deref()),
+            text(self.role.as_deref()),
+            // Bound as text and cast: DuckDB has no BIGINT -> TIMESTAMP
+            // conversion, so epoch micros would fail here. Naive UTC, not
+            // RFC3339 — the column is a plain TIMESTAMP and a zone suffix would
+            // have to be interpreted by the ICU code path this design avoids.
+            text(
+                self.timestamp
+                    .map(|t| t.naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+                    .as_deref(),
+            ),
+            int(self.input_tokens),
+            int(self.output_tokens),
+            int(self.cache_creation_tokens),
+            int(self.cache_read_tokens),
+            dbl(self.cost_usd),
+            // group_key = coalesce(message_id, uuid, id)
+            text(self.message_id.as_deref()),
+            text(self.uuid.as_deref()),
+            Value::BigInt(self.id),
+            // conversational = role IS NOT NULL
+            text(self.role.as_deref()),
+        ]
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct ProjectRow {
     id: i64,
@@ -904,11 +919,41 @@ struct ProjectRow {
     git_worktree: bool,
 }
 
+impl Mirrored for ProjectRow {
+    const INSERT_PREFIX: &'static str = "INSERT OR REPLACE INTO projects
+        (id, project_path, project_name, identity_key, git_worktree) VALUES ";
+    const ROW: &'static str = "(?, ?, ?, ?, ?)";
+
+    fn binds(&self) -> Vec<Value> {
+        vec![
+            Value::BigInt(self.id),
+            text(self.project_path.as_deref()),
+            text(self.project_name.as_deref()),
+            text(self.identity_key.as_deref()),
+            Value::Boolean(self.git_worktree),
+        ]
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct AliasRow {
     id: i64,
     identity_key: String,
     project_path: String,
+}
+
+impl Mirrored for AliasRow {
+    const INSERT_PREFIX: &'static str =
+        "INSERT OR REPLACE INTO project_identity_aliases (id, identity_key, project_path) VALUES ";
+    const ROW: &'static str = "(?, ?, ?)";
+
+    fn binds(&self) -> Vec<Value> {
+        vec![
+            Value::BigInt(self.id),
+            Value::Text(self.identity_key.clone()),
+            Value::Text(self.project_path.clone()),
+        ]
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -917,6 +962,21 @@ struct SessionRow {
     project_id: Option<i64>,
     session_id: Option<String>,
     summary: Option<String>,
+}
+
+impl Mirrored for SessionRow {
+    const INSERT_PREFIX: &'static str =
+        "INSERT OR REPLACE INTO sessions (id, project_id, session_id, summary) VALUES ";
+    const ROW: &'static str = "(?, ?, ?, ?)";
+
+    fn binds(&self) -> Vec<Value> {
+        vec![
+            Value::BigInt(self.id),
+            int(self.project_id),
+            text(self.session_id.as_deref()),
+            text(self.summary.as_deref()),
+        ]
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -931,6 +991,26 @@ struct ToolUseRow {
     seq: i32,
 }
 
+impl Mirrored for ToolUseRow {
+    const INSERT_PREFIX: &'static str = "INSERT OR IGNORE INTO message_tool_uses
+        (message_ref, seq, session_id, tool_name, skill_name, subagent_type,
+         tool_use_id, is_error) VALUES ";
+    const ROW: &'static str = "(?, ?, ?, ?, ?, ?, ?, ?)";
+
+    fn binds(&self) -> Vec<Value> {
+        vec![
+            Value::BigInt(self.message_ref),
+            Value::Int(self.seq),
+            int(self.session_id),
+            text(self.tool_name.as_deref()),
+            text(self.skill_name.as_deref()),
+            text(self.subagent_type.as_deref()),
+            text(self.tool_use_id.as_deref()),
+            boolean(self.is_error),
+        ]
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct ToolResultRow {
     message_ref: i64,
@@ -938,4 +1018,20 @@ struct ToolResultRow {
     tool_use_id: Option<String>,
     is_error: Option<bool>,
     seq: i32,
+}
+
+impl Mirrored for ToolResultRow {
+    const INSERT_PREFIX: &'static str = "INSERT OR IGNORE INTO message_tool_results
+        (message_ref, seq, session_id, tool_use_id, is_error) VALUES ";
+    const ROW: &'static str = "(?, ?, ?, ?, ?)";
+
+    fn binds(&self) -> Vec<Value> {
+        vec![
+            Value::BigInt(self.message_ref),
+            Value::Int(self.seq),
+            int(self.session_id),
+            text(self.tool_use_id.as_deref()),
+            boolean(self.is_error),
+        ]
+    }
 }
