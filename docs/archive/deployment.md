@@ -490,6 +490,33 @@ the run, both worth knowing before the next swap:
   after a short pause before escalating; the first I/O error is not a wedged
   job (that failure mode is the hung `kickstart -k` described above).
 
+**PENDING next swap — the release carrying `345f3459` (honest browse lists):
+probe set, pre-measured baseline, and a header-grep trap.** Infra measured the
+pre-swap baseline on m4m against the live `v0.15.0` hub at 2026-07-25 19:03Z
+(thread `82f10631`, recorded infra-side in `hosts/m4m.md`, home-network
+`739f098`), so each probe below has a verified old-binary reading to flip
+against:
+
+- `GET /v1/sessions?projectid=1` → 200 today, **must become 400** naming the
+  unknown field (`deny_unknown_fields`). Clean and discriminating as written —
+  this is the primary rev probe.
+- `GET /v1/sessions?project_id=999999999&limit=3` → today returns the SAME
+  three rows as unfiltered `limit=3` (ids 272 / 590461 / 590033 at baseline);
+  **must become an empty list**.
+- `GET /v1/sessions?limit=1` and `GET /v1/projects?limit=1` → today carry no
+  `X-Total-Count` response header; **must carry one**. ⚠ **Do not assert this
+  with an unanchored grep.** Every response from the current `v0.15.0` hub
+  already contains `access-control-expose-headers: x-total-count` as CORS
+  config — present even where the header itself is absent — so
+  `curl -D - … | grep -i x-total-count` passes on the OLD binary and would
+  report a swap that never happened. Fourth member of the marker-trap family
+  (v0.11.1 class fragment, v0.14.0 CSS chunk, v0.15.0 installed-file re-hash).
+  Anchor on the header line itself: `grep -iE '^x-total-count:'`, or read
+  `curl -sw '%{header_json}'` and check the key.
+- `GET /v1/sessions/<uuid>/messages?limitt=1` → 200 today, **must become
+  400**. (The messages endpoint already sent `X-Total-Count` pre-fix, so the
+  header is not a probe there.)
+
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
 A webapp-only bump (`dist-archive/` contents, no Rust change) is **much cheaper
