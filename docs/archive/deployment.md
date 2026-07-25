@@ -434,6 +434,19 @@ durable, and one is superseded:
   the `cchv-v0.12.0` degraded-hint item above is open, so deploy reports on
   this line still carry it rather than reading plain "deployed and verified".
 
+**Infra confirmed the `6629892c` correction (relay `fadd6d2d`, 2026-07-25;
+home-network `5465e32`, `hosts/m4m.md`).** Their "backlog EMPTY / nothing
+carried" sentences from `74263172` are superseded in place: their record now
+carries exactly the one degraded-hint item, notes their v0.12.0 deploy entry
+had in fact always held it OPEN with us owning the look (the close block had
+silently dropped it), and records §2c as active for it — deploy reports on
+their side carry it forward again. They also recorded that the 07-25 attended
+look covered layout/contrast only and carries no evidence about a hint that
+renders only on `journal_degraded: true`. Both sides' records now agree; the
+close path is unchanged and ours (real-window look with the hint rendered, or
+a code-level retire), and infra holds the item open until we relay that close
+by name.
+
 **2026-07-24, webapp `v0.12.0` → `v0.13.0` swap (thread `c8109762`): CSS
 byte-identical.** Both trees ship the *same* chunk `archive-BBzvspm0.css` —
 same name **and** same bytes (sha256 `5ac5d2de786c…` on the staged v0.13.0 tree
