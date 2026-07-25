@@ -58,12 +58,19 @@ existed only to hide an 18 s computation. At 0.4 s you simply run the query.
   (119 MB for 2.8M messages), refreshed incrementally from Postgres.
 - `/v1/stats/*` reads only from the mirror. The Postgres rollups are **replaced,
   not kept as a fallback** — two ports of eight rollups would drift.
-- A background refresher appends rows `WHERE id > max_id` on an interval and
-  computes the two derived booleans for the new rows only.
+- A background refresher appends new rows on an interval — idempotently, over an
+  overlap window behind the watermark, so rows whose transactions commit out of
+  order are never silently skipped — and computes the two derived booleans for
+  the new rows only.
+- Incremental refresh covers **inserts only**. Operations that UPDATE mirrored
+  columns in Postgres (`hub backfill-analytics` is the live example) require a
+  mirror rebuild: a new `hub mirror rebuild` subcommand builds the file aside
+  and swaps it in without interrupting serving.
 - While no mirror exists, `/v1/stats/*` returns `503` with `Retry-After`. The
   file survives restarts, so only the first start after deploy pays the build.
 - Mirror staleness is reported on **response headers**, and a new
-  `GET /v1/healthz/stats` makes it monitorable.
+  `GET /v1/healthz/stats` reports age **and watermark lag against Postgres**, so
+  completeness is monitorable, not just recency.
 - `GET /v1/stats/sessions/{id}` accepts a session UUID as well as the numeric row
   id, matching `GET /v1/sessions/{id}/messages` (Gitea #26).
 

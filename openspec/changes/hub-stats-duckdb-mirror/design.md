@@ -16,7 +16,7 @@ comparison is conservative, not flattering.
 ingest ──▶ Postgres (system of record; unchanged)
                 │
                 │  refresher, every N minutes:
-                │  SELECT … WHERE id > max_id   ← incremental, append-only
+                │  SELECT … WHERE id > watermark − overlap   ← incremental, idempotent
                 ▼
           DuckDB mirror  (~/.config/cchv/stats-mirror.duckdb, 119 MB)
           • narrow projection + usage_row / conversational, computed at refresh
@@ -26,9 +26,13 @@ ingest ──▶ Postgres (system of record; unchanged)
 ```
 
 The mirror holds a 13-column projection of `messages` (only the columns the
-rollups touch), `sessions(id, project_id)`, `projects`, and both tool tables
-whole (~137k rows each). It is derived state: deletable and rebuildable at any
-time, and it never becomes an authority for anything.
+rollups touch), `sessions` including the provider session identifier, `projects`
+plus the project-identity tables, and both tool tables whole (~137k rows each).
+The projection is deliberately wide enough that **every identifier a stats
+endpoint accepts resolves from the mirror alone** — session row id, session
+UUID, identity key — otherwise "stats survive a Postgres outage" would quietly
+hold for only one of the three endpoints. It is derived state: deletable and
+rebuildable at any time, and it never becomes an authority for anything.
 
 ## D1 — Why a second engine at all, given the single-store principle
 
@@ -50,21 +54,45 @@ why it *removes* machinery instead of adding it. The staleness and sync concerns
 it introduces are the same two the cache design introduced — not a new class of
 risk.
 
-## D2 — Incremental refresh is append-only, and provably so
+## D2 — Incremental refresh: append-only for inserts; updates are out of contract
 
 `usage_row` means "is this the lowest-id row of its dedup group", where the group
 is `(session_id, COALESCE(message_id, uuid, id::text))`.
 
-Postgres ids are monotonic. An appended row therefore can never become the
-minimum of a group that already exists, so **appending never invalidates a
-previously computed `usage_row`**. Refresh is a pure append plus a computation
-over only the new rows; no history is recomputed and there is no invalidation
-path to get wrong.
+Postgres ids are monotonic, so a newly **inserted** row can never become the
+minimum of a group that already exists — appending never invalidates a
+previously computed `usage_row`. Time Machine backfill (old timestamps under new
+ids) is covered by the same argument: such a row joins its group with a higher
+id and correctly reads `false`.
 
-This holds for the awkward case too. Time Machine backfill inserts rows with
-*old* timestamps under *new* ids; such a row joins its group with a higher id and
-correctly reads `false`. The rule is "lowest id seen so far", which is exactly
-what the current Postgres implementation computes over whatever is in the table.
+But the naive reading of "append what's new" — `WHERE id > max_id`, advance the
+watermark, done — is wrong in two ways, both caught in spec review:
+
+**Out-of-order commit visibility.** Ids are allocated at insert time, but
+transactions commit out of order, and several daemons plus the distiller write
+concurrently. A refresh that runs while a lower-id transaction is still
+uncommitted records a watermark above those rows; when they commit they are
+below the watermark and would be skipped **forever, silently** — the exact
+silent-staleness failure this design claims to guard against, invisible to an
+age-based health check. The refresh therefore re-scans an **overlap window**
+behind the watermark (by id, or by ingest `created_at` over the last several
+minutes), and mirror inserts are **idempotent** (`INSERT OR IGNORE` on the
+primary key), which makes the overlap free and leaves the group-minimum argument
+untouched. The health endpoint additionally reports watermark lag (mirror max id
+vs Postgres `max(id)`), so a stuck or lagging watermark is observable.
+
+**Updates.** Append-only is sound for inserts only, and Postgres-side UPDATEs of
+mirrored columns are not hypothetical: `hub backfill-analytics` — run against
+production this very morning — is an `UPDATE messages SET message_id = …` over
+existing rows. After such an update, Postgres regroups those rows under a shared
+`message_id` while the mirror still holds them as singleton groups, and the
+mirror **over-counts tokens** — precisely the bug this capability exists to
+prevent. Chasing row-level updates is not worth the machinery. Updates are
+instead **out of contract**: any operation that updates mirrored columns in
+Postgres requires a mirror rebuild; `hub mirror rebuild` exists for exactly
+that, builds the new file aside while stats keep serving from the old one, and
+swaps atomically. The runbook note rides next to the `backfill-analytics`
+instructions so the two operations travel together.
 
 ## D3 — Compute `usage_row` globally, not per window
 
@@ -84,6 +112,15 @@ instead of a `503`. Rejected: it means maintaining two ports of eight rollups
 forever, they will drift, and the oracle gate would have to cover both. The
 mirror file survives restarts, so the unavailable window is the first start after
 deploy and nothing else.
+
+The deletion is gated, though. While both implementations still exist, they run
+against the same live data and their outputs are diffed field by field — the
+**differential gate**: exact equality expected everywhere, except that windowed
+comparisons may differ for the ≤10 boundary groups D3 measures. A differential
+against the very implementation being replaced catches porting errors more
+directly than the desktop oracle can (the oracle exists to catch semantic drift
+against an *independent* implementation, and still runs). Sequence:
+differential gate → delete the Postgres rollups → oracle gate.
 
 ## D5 — Staleness on headers, not in the body
 
@@ -112,6 +149,8 @@ refresh failure is not read as a credential failure.
 | Mirror corrupt | move aside timestamped (never delete), rebuild, log loudly |
 | Postgres unreachable at refresh | keep serving; age header climbs; no exit |
 | Refresh overruns its interval | single-flight; skip the tick |
+| Rows committed out of order | overlap re-scan + idempotent insert picks them up next tick |
+| Mirrored columns UPDATEd in Postgres (e.g. `backfill-analytics`) | out of contract — operator runs `hub mirror rebuild`; stats serve from the old mirror until the new file swaps in |
 | Disk full | refresh fails, keep serving, log |
 
 Silent staleness is the one genuinely new failure mode, so it gets
@@ -129,22 +168,33 @@ tool counts ≤ oracle's).
 
 This is why the change must precede #23 — Deliverable 2 deletes the oracle.
 
-Beyond the gate: the existing endpoint tests port onto the new path with the same
-fixtures and expectations (no second implementation retained); a new
-incremental-refresh test appends both a row joining an existing dedup group and a
-backfilled row carrying an old timestamp under a new id, asserting D2; and a
-cold-start test asserts `503` then `200`. CI needs no new services —
-`archive-tests.yml` already runs Postgres, which is what the mirror reads *from*.
+**The differential gate runs first** (see D4): old and new implementations over
+the same data, exact equality modulo D3's ≤10 boundary groups, before the
+Postgres rollups are deleted.
+
+Beyond the two gates: the existing endpoint tests port onto the new path with the
+same fixtures and expectations (no second implementation retained); the
+incremental-refresh tests assert D2 in all three shapes — a row joining an
+existing dedup group, a backfilled row carrying an old timestamp under a new id,
+and a **lower-id row becoming visible after higher ids were already mirrored**
+(the out-of-order commit case, exercised via the overlap re-scan and asserted to
+land exactly once); a rebuild test asserts a `message_id` UPDATE is reflected
+after `hub mirror rebuild` with serving uninterrupted; and a cold-start test
+asserts `503` then `200`. CI needs no new services — `archive-tests.yml` already
+runs Postgres, which is what the mirror reads *from*.
 
 ## Risks
 
 | Risk | Handling |
 |---|---|
+| Silent incompleteness (skipped rows) | overlap re-scan + idempotent inserts; watermark lag on `/v1/healthz/stats` |
 | Silent staleness | age headers + `/v1/healthz/stats` + a Gatus check relayed to infra |
-| Binary size / CI build time | bundled DuckDB grows the ~15 MB hub binary; confirm the macos-14 release job still fits before tagging |
+| ICU / timezone support | `AT TIME ZONE` with IANA zones is an extension concern in DuckDB; verify the bundled crate links ICU statically and works **offline**, as the very first task — the one finding that could force a redesign of daily/heatmap rather than a fix |
+| Binary size / CI build time | bundled DuckDB compiles libduckdb from source: expect **tens of MB** on the binary and the macos-14 release job growing from ~4 min toward ~20 min, not a rounding error. Measured up front in task 1.2; if unacceptable, the prebuilt-libduckdb route is the fallback |
+| Sync DuckDB API on an async server | rollups run on `spawn_blocking` with cloned connections; without this every stats request parks a tokio worker for ~0.4 s and nothing in the gates would catch it |
 | Disk on m4m | 119 MB today, grows with the archive — headroom check goes in the deploy relay |
-| DuckDB memory on a shared box | set an explicit `memory_limit`; m4m also runs the distiller and daemon |
-| Port fidelity | the oracle gate |
+| DuckDB resources on a shared box | set explicit `memory_limit` **and** `threads`; m4m also runs the distiller and daemon |
+| Port fidelity | differential gate against the outgoing implementation, then the oracle gate |
 
 ## Deployment note
 

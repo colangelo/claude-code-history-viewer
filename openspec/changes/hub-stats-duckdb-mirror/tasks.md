@@ -5,19 +5,21 @@ This file is the implementation plan. Measurements referenced below are in
 
 ## 1. Dependency and groundwork
 
-- [ ] 1.1 Add `duckdb` (bundled) to `crates/hub`. Record the resulting binary size and the `cargo build --release -p hub` wall time before and after — the macos-14 release job has to keep fitting, and this is the one dependency in the change that could break CI rather than tests
-- [ ] 1.2 Confirm disk headroom on m4m for the mirror (119 MB at today's scale, growing with the archive) and note the figure for the deploy relay
-- [ ] 1.3 Add mirror settings to `HubConfig`: file path (default under the hub config dir), refresh interval, DuckDB `memory_limit`, and the staleness threshold used by the health endpoint. All optional with defaults, so an existing `hub.toml` keeps working untouched
+- [ ] 1.1 **Verify timezone support before anything else is built.** `AT TIME ZONE` with IANA zones is ICU territory in DuckDB; the spike used the CLI, which auto-loads ICU — the bundled *crate* may not. Confirm from `duckdb-rs` with `bundled` that IANA-tz conversion works **offline** (no runtime extension download). This is the one finding that could force a redesign of daily/heatmap rather than a fix, which is why it is task one
+- [ ] 1.2 Add `duckdb` (bundled) to `crates/hub`. Record binary size and `cargo build --release -p hub` wall time before and after. **Set expectations correctly:** bundled DuckDB compiles libduckdb from source — tens of MB on the binary and the macos-14 release job growing from ~4 min toward ~20 min is the realistic outcome, not a failure. If the numbers are unacceptable, decide the prebuilt-libduckdb route *here*, before group 2
+- [ ] 1.3 Confirm disk headroom on m4m for the mirror (119 MB at today's scale, growing with the archive) and note the figure for the deploy relay
+- [ ] 1.4 Add mirror settings to `HubConfig`: file path (default under the hub config dir), refresh interval, overlap window size, DuckDB `memory_limit` **and `threads`** (m4m is shared with the distiller and daemon), and the staleness threshold used by the health endpoint. All optional with defaults, so an existing `hub.toml` keeps working untouched
 
 ## 2. The mirror module
 
-- [ ] 2.1 Create `crates/hub/src/mirror.rs` owning the file and nothing else: `open_or_create`, `state() -> Warming | Ready { max_id, refreshed_at }`, `refresh() -> RefreshReport`. It MUST NOT know anything about statistics
-- [ ] 2.2 Define the mirror schema: the 13 `messages` columns the rollups read plus the derived `usage_row` and `conversational` booleans, `sessions(id, project_id)`, `projects`, `message_tool_uses`, `message_tool_results`
+- [ ] 2.1 Create `crates/hub/src/mirror.rs` owning the file and nothing else: `open_or_create`, `state() -> Warming | Ready { max_id, refreshed_at }`, `refresh() -> RefreshReport`, `rebuild()`. It MUST NOT know anything about statistics
+- [ ] 2.2 Define the mirror schema: the 13 `messages` columns the rollups read plus the derived `usage_row` and `conversational` booleans; `sessions` **including the provider session identifier**; `projects` **plus the project-identity tables** — every identifier a stats endpoint accepts (row id, session UUID, identity key) must resolve from the mirror alone, or the Postgres-outage scenario silently holds for only one endpoint; `message_tool_uses`; `message_tool_results`. Primary keys on mirrored row ids so inserts can be idempotent
 - [ ] 2.3 Implement the full build: pull each table from Postgres and populate the mirror. Measured at 227 s for 2.8M messages, network-bound
-- [ ] 2.4 Implement incremental refresh: append rows `WHERE id > max_id`, computing the derived booleans for the new rows only (design D2). Never recompute existing rows
+- [ ] 2.4 Implement incremental refresh with the **overlap re-scan**: fetch rows from an overlap window behind the watermark (by id, or by ingest `created_at` over the last several minutes — ids are allocated at insert but commit out of order under concurrent ingest, so `WHERE id > max_id` alone skips rows forever), insert with `INSERT OR IGNORE`, and compute the derived booleans for genuinely new rows only (design D2)
 - [ ] 2.5 Guard refresh with single-flight — a tick arriving while one runs is skipped, not queued
 - [ ] 2.6 On an unopenable or corrupt mirror, move the file aside under a timestamped name and rebuild. Never delete
-- [ ] 2.7 Unit-test D2 directly: append a row that joins an existing dedup group and assert it is not usage-bearing; append a row with an older timestamp under a newer id (the Time Machine backfill shape) and assert the group's totals are unchanged
+- [ ] 2.7 Unit-test D2 in all three shapes: a row that joins an existing dedup group is not usage-bearing; a row with an older timestamp under a newer id (the Time Machine backfill shape) leaves its group's totals unchanged; **a lower-id row becoming visible after higher ids were already mirrored is picked up by the overlap re-scan exactly once**
+- [ ] 2.8 Add the `hub mirror rebuild` subcommand (main.rs already has the subcommand pattern): build a fresh mirror aside, swap atomically, keep serving from the old file throughout. Test that a `message_id` UPDATE on existing Postgres rows is reflected after rebuild with no over-counted usage. Document the rebuild requirement in `docs/archive/deployment.md` **next to the `backfill-analytics` instructions** — the two operations travel together (design D2)
 
 ## 3. Background refresher
 
@@ -30,21 +32,23 @@ This file is the implementation plan. Measurements referenced below are in
 - [ ] 4.1 Port `materialize_scope` to the mirror, computing the derived booleans at refresh rather than per request (design D3)
 - [ ] 4.2 Port the eight rollups — totals, active session time, daily, heatmap, models, providers, top projects, and the single-pass tools/skills/subagents — keeping the existing function signatures and `history-core` return types
 - [ ] 4.3 Preserve every semantic the current implementation documents: `cost_usd` reported as "where reported" rather than coalesced to zero; active session time as summed gaps with the 30-minute idle cap, not raw span; `conversational` gating on `role IS NOT NULL`; and outcome resolution as `COALESCE(r.is_error, u.is_error, false)` with outcomes collapsed by `bool_or` on `(session_id, tool_use_id)` **before** the join, or the join fans out
-- [ ] 4.4 Delete the Postgres rollup implementation. It is replaced, not kept as a fallback (design D4)
-- [ ] 4.5 Port the existing endpoint tests onto the new path with the same fixtures and expectations — no second implementation retained for comparison
+- [ ] 4.4 Run rollups on `spawn_blocking` with cloned connections (or a small pool) — duckdb-rs is synchronous, and without this every stats request parks a tokio worker for ~0.4 s. Nothing in the gates would catch it; it has to be built in, not discovered under load
+- [ ] 4.5 **Differential gate (design D4): run BEFORE deleting anything.** Both implementations over the same live data, outputs diffed field by field. Expect exact equality everywhere except windowed comparisons of the ≤10 boundary groups D3 measures. Record the result in this change
+- [ ] 4.6 Delete the Postgres rollup implementation. It is replaced, not kept as a fallback (design D4)
+- [ ] 4.7 Port the existing endpoint tests onto the new path with the same fixtures and expectations — no second implementation retained
 
 ## 5. Endpoint surface
 
 - [ ] 5.1 Serve `/v1/stats/*` from the mirror; return `503` with `Retry-After` while warming
 - [ ] 5.2 Add `X-Stats-Mirror-Refreshed-At` and `X-Stats-Mirror-Age-Seconds` to every `/v1/stats/*` response. Headers, not body fields — a new field on the `history-core` stat types breaks struct literals in `src-tauri`, which `rust-tests.yml` builds (design D5)
-- [ ] 5.3 Add unauthenticated `GET /v1/healthz/stats` reporting readiness and age, non-success past the threshold, in the Gatus-consumable shape `/v1/healthz/journal` already uses
-- [ ] 5.4 **Gitea #26**: change `/v1/stats/sessions/{id}` to `Path<String>` resolved through `resolve_session_ref`, so a UUID and a row id both work and an unknown UUID returns `404` rather than a parse `400`
-- [ ] 5.5 Test the warming path (`503` then `200` without a restart), the staleness headers, the health endpoint at both states, and #26's four cases: known row id, known UUID, unknown row id, unknown UUID
+- [ ] 5.3 Add unauthenticated `GET /v1/healthz/stats` reporting readiness, age, **and watermark lag (mirror max id vs Postgres `max(id)` — a cheap PK lookup)**, non-success past the staleness threshold, in the Gatus-consumable shape `/v1/healthz/journal` already uses. Age alone cannot distinguish a healthy mirror from one silently skipping rows
+- [ ] 5.4 **Gitea #26**: accept both a session UUID and a row id on `/v1/stats/sessions/{id}` (`Path<String>`), resolved **against the mirror** — same acceptance rule as `resolve_session_ref`, but without touching Postgres at serve time, so an unknown UUID returns `404` rather than a parse `400` and the Postgres-outage scenario stays true for all three endpoints
+- [ ] 5.5 Test the warming path (`503` then `200` without a restart), the staleness headers, the health endpoint in all three states (warming, fresh, lagging), and #26's four cases: known row id, known UUID, unknown row id, unknown UUID
 
 ## 6. Verification gate
 
 - [ ] 6.1 Re-point the `hub-analytics` oracle harness (task 6.1 of that change) at the DuckDB implementation
-- [ ] 6.2 Require the same verdict as before: exact agreement on token, cost, message, session and activity fields, with both documented divergences still one-directional — hub success rate ≤ oracle's (D10), hub tool counts ≤ oracle's (D12)
+- [ ] 6.2 Require the same verdict as before: exact agreement on token, cost, message, session and activity fields, with both documented divergences still one-directional — hub success rate ≤ oracle's (D10), hub tool counts ≤ oracle's (D12). **One new allowance:** windowed comparisons may differ for the ≤10 dedup groups that straddle a date boundary (design D3) — that delta is accepted and recorded, not a failure
 - [ ] 6.3 Compare per-project statistics for a multi-machine, multi-path identity and per-session statistics for a tool-heavy session, as the original gate did
 - [ ] 6.4 Record the comparison in this change. **This gate must pass before #23 is started** — Deliverable 2 deletes the oracle, and after that there is nothing independent to diff against
 - [ ] 6.5 Measure the deployed endpoint and record it against the 18.0 s baseline: archive-wide, the webapp's default 30-day window, per-project, and per-session
@@ -57,5 +61,5 @@ This file is the implementation plan. Measurements referenced below are in
 - [ ] 7.4 Merge to `main` and cut a `cchv-v*` release per CLAUDE.md § Release Process, remembering `Cargo.lock` (the recurring miss `just sync-version` does not cover)
 - [ ] 7.5 Relay the deploy to infra as a §2b binary swap, **split per home-network #34** so no single handler run exceeds the 900 s ceiling. The relay MUST state that `/v1/stats/*` returns `503 warming` for roughly four minutes after the swap while the first mirror builds, and that this is expected rather than a rollback trigger
 - [ ] 7.6 Relay a Gatus check for `/v1/healthz/stats` to infra
-- [ ] 7.7 Verify live: statistics load in the deployed webapp, the measured timings from 6.5 hold in production, and the staleness headers advance as the refresher runs
+- [ ] 7.7 Verify live: statistics load in the deployed webapp, the measured timings from 6.5 hold in production, the staleness headers advance as the refresher runs, and the watermark lag on `/v1/healthz/stats` tracks near zero under live ingest
 - [ ] 7.8 Close Gitea #24 and #26 with the measured before/after
