@@ -9,6 +9,7 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::embed::Embedder;
+use crate::mirror::Mirror;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,6 +26,11 @@ pub struct AppState {
     /// entries become semantically searchable without waiting an interval).
     /// Always present; notifying with no sweep listening is a no-op.
     pub embed_nudge: Arc<Notify>,
+    /// The statistics read model. `None` means the mirror could not be opened
+    /// at all (a disk-level fault) — every other subsystem keeps working and
+    /// `/v1/stats/*` answers 503, which is the same answer a warming mirror
+    /// gives, so there is one degraded shape rather than two.
+    pub mirror: Option<Arc<Mirror>>,
 }
 
 impl AppState {
@@ -39,12 +45,19 @@ impl AppState {
             trusted_identities: Arc::new(trusted_identities),
             embedder: None,
             embed_nudge: Arc::new(Notify::new()),
+            mirror: None,
         }
     }
 
     /// Attach an embedder (builder-style so existing constructions stay valid).
     pub fn with_embedder(mut self, embedder: Arc<dyn Embedder>) -> Self {
         self.embedder = Some(embedder);
+        self
+    }
+
+    /// Attach the statistics mirror (builder-style, same reason).
+    pub fn with_mirror(mut self, mirror: Arc<Mirror>) -> Self {
+        self.mirror = Some(mirror);
         self
     }
 }

@@ -141,28 +141,70 @@ mirror exactly as it was and keeps serving with the age header climbing. It neve
 exits, never counts strikes, and its errors are logged distinguishably so a
 refresh failure is not read as a credential failure.
 
-## D7 — Timezone conversion needs no extension, and the port must not ask for one
+## D7 — Timezone bucketing is done in Rust, because `AT TIME ZONE` is not in DuckDB core
 
-Measured in task 1.1 against `duckdb-rs` 1.10505.0 (DuckDB 1.5.5) with
-`bundled`, in-memory, offline:
+**This decision replaces an earlier one that was wrong, and the way it was wrong
+is worth keeping.** Task 1.1 concluded that `LOAD icu` fails but that IANA
+timezone support is in DuckDB core, so the port could use `AT TIME ZONE`
+directly. Re-probed on 2026-07-25 against a **clean extension directory** with
+`autoinstall_known_extensions=false` and `autoload_known_extensions=false`:
 
-- `LOAD icu` **fails** — the extension is not bundled, and loading it would
-  require a runtime download, which is not acceptable for a service that must
-  start on a machine with no internet path to DuckDB's extension repository.
-- Every conversion the rollups need nevertheless **works**, because IANA
-  timezone support is in DuckDB core in this version: `Europe/Rome` resolves to
-  `+01` in January and `+02` in July (real DST, not a fixed offset),
-  `Asia/Kolkata` resolves to the correct half-hour offset, and `strftime`,
-  `extract(hour|dow)` and `SET TimeZone` all behave.
+```
+AT TIME ZONE 'Europe/Rome'   FAIL  Extension Autoloading Error: ... required extension 'icu'
+AT TIME ZONE 'UTC'           FAIL  Extension Autoloading Error: ... required extension 'icu'
+extract(dow|hour FROM ts)    OK
+date_part('day', interval)   OK
+strftime / casts / epoch     OK
+lag() / bool_or / LATERAL    OK
+```
 
-So the risk this design was carrying — that daily and heatmap would need
-redesigning around Rust-side bucketing — does not exist. The premise (that
-`AT TIME ZONE` is ICU territory) was true of older DuckDB and is not true here.
+`AT TIME ZONE` needs `icu` for **every** zone, UTC included. The original probe
+passed because `~/.duckdb/extensions/v1.5.5/osx_arm64/icu.duckdb_extension` had
+been downloaded onto the probing machine (timestamped 18:59 that evening, after
+the `LOAD icu` check), and DuckDB silently autoloads a locally cached extension.
+The lesson generalizes: **the `duckdb` CLI autoloads extensions the statically
+bundled library does not, so SQL verified interactively can still fail inside
+the hub.** `crates/hub/tests/duckdb_capability_test.rs` now asserts the whole
+function inventory the rollups depend on, so a future DuckDB bump that moves one
+behind an extension fails a test instead of a production endpoint.
 
-**Implementation constraint that follows:** the port MUST NOT emit `LOAD icu`.
-The spike SQL that produced this change's headline numbers did include it, and
-that statement would fail in the bundled crate. Timezone SQL is used directly,
-with no extension preamble.
+Static linking was checked and is not available: the `duckdb` crate's `icu`
+feature pulls in `bundled-cmake`, which requires a duckdb-rs *git checkout with
+DuckDB sources* and fails from the crates.io package.
+
+So the timezone offset is computed **in Rust, with `chrono-tz`** — IANA data
+compiled into the binary, no extension, no runtime download, one deploy
+artifact, and no coupling between the hub's DuckDB version and a separately
+shipped `.duckdb_extension` file.
+
+The mirror stores `ts_utc` as a plain `TIMESTAMP` (UTC wall clock) rather than
+`TIMESTAMPTZ`, because every `TIMESTAMPTZ` conversion path leads back to ICU.
+Per request, the requested zone's UTC-offset spans are generated in Rust and
+materialized into a small temp table, and the scope join adds the offset:
+
+```
+tz_spans(from_utc, to_utc, offset_secs)   -- ~2 rows per year for Europe/Rome
+ts_local = m.ts_utc + to_seconds(z.offset_secs)
+```
+
+Spans are found by walking the data range hourly and coalescing runs of equal
+offset. Hourly is exact for every IANA transition in the modern era (they land
+on whole hours), the walk is bounded by the archive's own date range, and it
+costs microseconds — a transition table would be faster and is not worth the
+dependency on an API `chrono-tz` does not expose.
+
+Downstream, only *bucketing* uses `ts_local`: day and hour-of-day buckets and
+the window predicate. The date-range strings are explicitly UTC, and the
+active-session-time gaps are absolute durations, so both keep using `ts_utc` —
+shifting them would be wrong, not merely redundant.
+
+**Implementation constraint that follows:** the port MUST NOT emit `LOAD icu`
+*or* `AT TIME ZONE`. Both are asserted against in the capability test.
+
+The correctness argument for all of this is the differential gate (D4), which
+compares against Postgres — the engine whose timezone handling is the
+specification — over real data, including windows that straddle a DST
+transition.
 
 ## Error handling
 
@@ -212,7 +254,7 @@ runs Postgres, which is what the mirror reads *from*.
 |---|---|
 | Silent incompleteness (skipped rows) | overlap re-scan + idempotent inserts; watermark lag on `/v1/healthz/stats` |
 | Silent staleness | age headers + `/v1/healthz/stats` + a Gatus check relayed to infra |
-| ~~ICU / timezone support~~ | **RESOLVED, task 1.1** — see D7. Not a risk; the premise was outdated |
+| ICU / timezone support | **REAL, and task 1.1 got it backwards** — `AT TIME ZONE` needs `icu` for every zone and `icu` cannot be statically linked from the published crate. Handled by computing offsets in Rust with `chrono-tz` (D7), guarded by `duckdb_capability_test.rs`, and verified against Postgres across a DST transition by the differential gate |
 | Binary size / CI build time | **MEASURED, task 1.2**: +40 MB (hub 14 MB → ~54 MB), statically linked with no dylib dependency, ~873 s CPU to build. On a 3-core macos-14 runner that is roughly +5 min, taking the release job from ~5 min to ~10 min. Acceptable; the prebuilt-libduckdb fallback is not needed |
 | Sync DuckDB API on an async server | rollups run on `spawn_blocking` with cloned connections; without this every stats request parks a tokio worker for ~0.4 s and nothing in the gates would catch it |
 | Disk on m4m | 119 MB today, grows with the archive — headroom check goes in the deploy relay |

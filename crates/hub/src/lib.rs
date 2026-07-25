@@ -25,6 +25,8 @@ pub mod search;
 pub mod state;
 pub mod stats;
 pub mod stats_api;
+pub mod stats_duck;
+pub mod tz_spans;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
@@ -198,6 +200,34 @@ pub async fn run_backfill(batch: i64) -> anyhow::Result<()> {
         tool_results = stats.tool_results,
         "analytics backfill finished"
     );
+    tracing::warn!(
+        "backfill rewrote `message_id` on existing rows — run `hub mirror rebuild` \
+         or the statistics mirror will keep those rows in their old dedup groups \
+         and over-count tokens"
+    );
+    Ok(())
+}
+
+/// Rebuild the statistics mirror from scratch and swap it in.
+///
+/// Deliberately a separate, watched operation rather than a startup sweep: it
+/// is the counterpart to `backfill-analytics` (design D2), not steady state.
+/// The running hub keeps serving from the old mirror while this builds.
+pub async fn run_mirror_rebuild() -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
+    let report = mirror::rebuild(&config.stats_mirror, &pool).await?;
+    tracing::info!(
+        messages = report.messages_inserted,
+        tool_uses = report.tool_uses_inserted,
+        tool_results = report.tool_results_inserted,
+        elapsed_s = report.elapsed.as_secs(),
+        "mirror rebuild finished"
+    );
     Ok(())
 }
 
@@ -233,6 +263,30 @@ pub async fn run() -> anyhow::Result<()> {
             std::time::Duration::from_secs(300),
         ));
     }
+
+    // Statistics read model. Opening it is not allowed to take the hub down:
+    // ingest, search, browse and the journal are unaffected by a mirror fault,
+    // and `/v1/stats/*` already has a defined answer for "no mirror" (503).
+    match mirror::Mirror::open_or_create(&config.stats_mirror) {
+        Ok(m) => {
+            let m = std::sync::Arc::new(m);
+            if m.is_empty() {
+                tracing::info!(
+                    "stats mirror empty — /v1/stats/* answers 503 until the first build finishes"
+                );
+            }
+            state = state.with_mirror(m.clone());
+            tokio::spawn(mirror::run_refresher(
+                m,
+                state.pool.clone(),
+                std::time::Duration::from_secs(config.stats_mirror.refresh_secs),
+            ));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "stats mirror unavailable; /v1/stats/* will answer 503");
+        }
+    }
+
     if let Some(dir) = &config.static_dir {
         tracing::info!(dir = %dir.display(), "serving static archive webapp at /");
     }

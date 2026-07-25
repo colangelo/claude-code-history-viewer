@@ -33,20 +33,15 @@ pub struct StatsParams {
     pub include_worktrees: Option<bool>,
 }
 
-/// A timezone name is interpolated into SQL as a bind parameter, but an invalid
-/// one still surfaces as a confusing database error at query time. Reject the
-/// obviously-wrong shapes up front so the caller gets a 400 naming the problem.
-fn validate_tz(tz: &str) -> Result<(), HubError> {
-    let ok = !tz.is_empty()
-        && tz.len() <= 64
-        && tz
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'));
-    if ok {
-        Ok(())
-    } else {
-        Err(HubError::BadRequest(format!("invalid timezone: {tz}")))
-    }
+/// Resolve an IANA name against the compiled-in timezone database.
+///
+/// Stricter than the character-class check this replaces: `Not/A_Zone` passed
+/// that and then produced statistics bucketed by whatever the database made of
+/// it. Here an unknown zone is a `400` naming it, and everything downstream
+/// carries a parsed `Tz` that cannot be invalid (see [`Window`]).
+fn parse_tz(tz: &str) -> Result<chrono_tz::Tz, HubError> {
+    crate::tz_spans::parse(tz)
+        .ok_or_else(|| HubError::BadRequest(format!("invalid timezone: {tz}")))
 }
 
 fn parse_date(label: &str, raw: Option<&String>) -> Result<Option<NaiveDate>, HubError> {
@@ -60,8 +55,7 @@ fn parse_date(label: &str, raw: Option<&String>) -> Result<Option<NaiveDate>, Hu
 
 impl StatsParams {
     fn window(&self) -> Result<Window, HubError> {
-        let tz = self.tz.clone().unwrap_or_else(|| "UTC".to_string());
-        validate_tz(&tz)?;
+        let tz = parse_tz(self.tz.as_deref().unwrap_or("UTC"))?;
         let from = parse_date("from", self.from.as_ref())?;
         let to = parse_date("to", self.to.as_ref())?;
         if let (Some(f), Some(t)) = (from, to) {

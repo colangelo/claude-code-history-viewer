@@ -85,6 +85,38 @@ Three things that outlive the ack:
   the FQDN — but a future script that shortens it would break only when run
   unattended.
 
+### `backfill-analytics` and `mirror rebuild` travel together
+
+**Any run of `hub backfill-analytics` must be followed by `hub mirror rebuild`.**
+This is not housekeeping — skipping it makes the statistics endpoints report
+inflated token totals, silently and indefinitely.
+
+Why: the DuckDB statistics mirror (`~/.config/cchv/stats-mirror.duckdb`) marks,
+for each logical message, which stored row carries its usage — so a response
+split across several rows is counted once. Incremental refresh maintains that
+correctly for *inserts*, because row ids only ever grow. `backfill-analytics` is
+an `UPDATE messages SET message_id = …` over **existing** rows, which regroups
+them in Postgres while the mirror still holds them under their old grouping.
+The affected rows then each count their own usage. Design D2 of
+`openspec/changes/hub-stats-duckdb-mirror/` has the full argument.
+
+```bash
+export HUB_CONFIG=~/.config/cchv/hub.runtime.toml
+hub backfill-analytics        # idempotent, resumable
+hub mirror rebuild            # required after the above
+```
+
+`mirror rebuild` builds a complete new mirror at `<path>.rebuild-<stamp>` and
+renames it into place, so **the running hub keeps answering `/v1/stats/*` from
+the old mirror for the whole build** — unlike deleting the file, which would
+cause a multi-minute `503 warming`. The live hub notices the swap on its next
+refresher tick (default 300 s) and reopens; no restart is needed, and none
+should be issued mid-rebuild.
+
+The rebuild is also the recovery path for any other Postgres-side `UPDATE` of a
+mirrored column, and for a mirror suspected of being wrong for any reason: it is
+derived state, so rebuilding it can never lose data.
+
 One lesson from the migration is **deliberately not yet written up as a house
 standard**: `0005` must take its locks *up front, in the ingest writer's order*,
 or migration and live ingest deadlock — and `lock_timeout` does **not** save you,

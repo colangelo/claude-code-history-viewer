@@ -20,14 +20,19 @@ use sqlx::PgPool;
 
 /// Time window and the timezone its day/hour buckets are expressed in.
 ///
-/// Bucketing is done server-side (`AT TIME ZONE`) rather than shipping rows for
-/// the client to re-bucket: "what hours do I work" is meaningless in UTC for a
-/// user in `Europe/Rome`, and the conversion belongs next to the index.
+/// Bucketing is done server-side rather than shipping rows for the client to
+/// re-bucket: "what hours do I work" is meaningless in UTC for a user in
+/// `Europe/Rome`, and hour buckets re-bucket exactly only to whole-hour offsets.
+///
+/// `tz` is a parsed IANA zone rather than a string, so an unknown zone is
+/// unrepresentable past the API boundary and no rollup has to decide what to do
+/// with one. The alternative — carrying the name and validating its *shape* —
+/// let `Not/A_Zone` through to the query layer.
 #[derive(Debug, Clone)]
 pub struct Window {
     pub from: Option<NaiveDate>,
     pub to: Option<NaiveDate>,
-    pub tz: String,
+    pub tz: chrono_tz::Tz,
 }
 
 impl Default for Window {
@@ -35,7 +40,7 @@ impl Default for Window {
         Self {
             from: None,
             to: None,
-            tz: "UTC".to_string(),
+            tz: chrono_tz::UTC,
         }
     }
 }
@@ -54,13 +59,13 @@ pub enum Scope {
 }
 
 impl Scope {
-    fn paths(&self) -> Option<&[String]> {
+    pub(crate) fn paths(&self) -> Option<&[String]> {
         match self {
             Self::Paths(p) => Some(p),
             _ => None,
         }
     }
-    fn session(&self) -> Option<i64> {
+    pub(crate) fn session(&self) -> Option<i64> {
         match self {
             Self::Session(id) => Some(*id),
             _ => None,
@@ -135,7 +140,7 @@ async fn materialize_scope(
     sqlx::query(sql)
         .bind(scope.paths().map(<[String]>::to_vec))
         .bind(scope.session())
-        .bind(&w.tz)
+        .bind(w.tz.name())
         .bind(w.from)
         .bind(w.to)
         .execute(&mut *tx)
@@ -315,7 +320,7 @@ async fn all_tool_usage(
     Vec<ToolUsageStats>,
 )> {
     let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
-        r"
+        r#"
         SELECT k.kind, k.name,
                count(*)::bigint,
                count(*) FILTER (WHERE NOT COALESCE(r.is_error, u.is_error, false))::bigint
@@ -336,8 +341,11 @@ async fn all_tool_usage(
                                      ('subagent', u.subagent_type)) AS k(kind, name)
          WHERE k.name IS NOT NULL
          GROUP BY 1, 2
-         ORDER BY 3 DESC
-        ",
+         -- Tiebreak added with the DuckDB port: without it, which of several
+         -- equally-used tools survives the top-N cut varied between identical
+         -- requests. `COLLATE "C"` is byte order, matching DuckDB.
+         ORDER BY 3 DESC, k.name COLLATE "C"
+        "#,
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -374,7 +382,7 @@ async fn models(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ModelStats>> {
                 coalesce(sum(cache_read_tokens),0)::bigint,
                 sum(cost_usd)
            FROM stats_scope WHERE model IS NOT NULL AND usage_row
-          GROUP BY 1 ORDER BY 3 DESC"
+          GROUP BY 1 ORDER BY 3 DESC, model COLLATE \"C\""
     );
     let rows: Vec<ModelRow> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
@@ -405,7 +413,7 @@ async fn providers(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProviderUsag
                 -- the whole archive total, on the same screen.
                 count(*) FILTER (WHERE conversational)::bigint,
                 {TOKEN_SUM}
-           FROM stats_scope WHERE usage_row GROUP BY 1 ORDER BY 4 DESC"
+           FROM stats_scope WHERE usage_row GROUP BY 1 ORDER BY 4 DESC, provider COLLATE \"C\""
     );
     let rows: Vec<(String, i64, i64, i64, i64)> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
@@ -428,7 +436,7 @@ async fn top_projects(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProjectRa
                 {TOKEN_SUM}
            FROM stats_scope d LEFT JOIN projects p ON p.id = d.project_id
           WHERE d.usage_row
-          GROUP BY 1 ORDER BY 4 DESC LIMIT 10"
+          GROUP BY 1 ORDER BY 4 DESC, coalesce(p.name, p.project_path, '(unknown)') COLLATE \"C\" LIMIT 10"
     );
     let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
@@ -478,8 +486,8 @@ pub async fn global(pool: &PgPool, w: &Window) -> sqlx::Result<GlobalStatsSummar
             days_span: t.11.max(0) as u32,
         },
         token_distribution: dist,
-        daily_stats: daily(&mut tx, &w.tz).await?,
-        activity_heatmap: heatmap(&mut tx, &w.tz).await?,
+        daily_stats: daily(&mut tx, w.tz.name()).await?,
+        activity_heatmap: heatmap(&mut tx, w.tz.name()).await?,
         most_used_tools: tool_usage.0,
         most_used_skills: tool_usage.1,
         most_used_subagents: tool_usage.2,
@@ -511,7 +519,7 @@ pub async fn project(
     let dist = distribution(&t);
     let sessions = t.7.max(0) as usize;
     let duration = t.12.max(0) as u32;
-    let heat = heatmap(&mut tx, &w.tz).await?;
+    let heat = heatmap(&mut tx, w.tz.name()).await?;
     let most_active_hour = heat
         .iter()
         .max_by_key(|h| h.activity_count)
@@ -540,7 +548,7 @@ pub async fn project(
         most_used_tools: tool_usage.0,
         most_used_skills: tool_usage.1,
         most_used_subagents: tool_usage.2,
-        daily_stats: daily(&mut tx, &w.tz).await?,
+        daily_stats: daily(&mut tx, w.tz.name()).await?,
         activity_heatmap: heat,
         token_distribution: dist,
     };

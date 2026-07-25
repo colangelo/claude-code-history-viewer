@@ -479,7 +479,7 @@ async fn daily_and_heatmap_bucket_in_the_requested_timezone() {
         "proj".into(),
         vec![hub.project_path.clone()],
         &Window {
-            tz: "Europe/Rome".into(),
+            tz: chrono_tz::Europe::Rome,
             ..Window::default()
         },
     )
@@ -536,7 +536,7 @@ async fn date_window_narrows_the_aggregate() {
     let w = Window {
         from: Some("2026-07-15".parse().unwrap()),
         to: Some("2026-07-25".parse().unwrap()),
-        tz: "UTC".into(),
+        tz: chrono_tz::UTC,
     };
     let s = stats::project(&hub.pool, "proj".into(), vec![hub.project_path.clone()], &w)
         .await

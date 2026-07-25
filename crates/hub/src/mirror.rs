@@ -31,7 +31,9 @@ use chrono::{DateTime, Utc};
 use duckdb::Connection;
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Whether the mirror can answer questions yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +71,30 @@ pub struct RefreshReport {
     pub tool_uses_inserted: usize,
     pub tool_results_inserted: usize,
     pub max_id: i64,
+    /// This refresh started from an empty mirror — the whole archive was
+    /// pulled, not an increment. Distinguished because it is the only case that
+    /// takes minutes, and the only one during which `/v1/stats/*` answers 503.
+    pub cold_build: bool,
+    /// Wall-clock the refresh took.
+    pub elapsed: std::time::Duration,
+}
+
+/// Whether a refresh ran or yielded to one already in flight.
+#[derive(Debug, Clone, Copy)]
+pub enum RefreshOutcome {
+    Ran(RefreshReport),
+    /// Another refresh held the mirror. Ticks are **skipped, not queued**: a
+    /// refresh that overruns its interval must not build a backlog of them.
+    Skipped,
+}
+
+impl RefreshOutcome {
+    pub fn report(&self) -> Option<&RefreshReport> {
+        match self {
+            Self::Ran(r) => Some(r),
+            Self::Skipped => None,
+        }
+    }
 }
 
 /// How many messages to pull from Postgres per round trip.
@@ -80,6 +106,24 @@ pub struct Mirror {
     conn: Arc<Mutex<Connection>>,
     path: PathBuf,
     cfg: MirrorConfig,
+    /// Single-flight latch. Held for the duration of a refresh so an interval
+    /// tick arriving mid-refresh is dropped rather than stacking behind it.
+    refreshing: Arc<AtomicBool>,
+    /// Identity of the file this connection was opened against, so an
+    /// out-of-process `hub mirror rebuild` swap is noticed rather than served
+    /// past forever. See [`Mirror::adopt_replacement`].
+    opened: Mutex<Option<u64>>,
+}
+
+/// Releases the single-flight latch however the refresh ends — including on an
+/// early `?` return or a panic, which a bare `store(false)` at the end of
+/// `refresh` would leak, wedging every later tick.
+struct InFlight(Arc<AtomicBool>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl Mirror {
@@ -110,8 +154,10 @@ impl Mirror {
 
         let mirror = Self {
             conn: Arc::new(Mutex::new(conn)),
+            opened: Mutex::new(file_identity(&path)),
             path,
             cfg: cfg.clone(),
+            refreshing: Arc::new(AtomicBool::new(false)),
         };
         mirror.create_schema()?;
         Ok(mirror)
@@ -194,15 +240,64 @@ impl Mirror {
     /// Idempotent: safe to run repeatedly, safe to interrupt. Fetching starts
     /// an overlap window *behind* the watermark so rows that committed late are
     /// picked up rather than skipped forever.
-    pub async fn refresh(&self, pg: &PgPool) -> anyhow::Result<RefreshReport> {
+    ///
+    /// Single-flight: a call arriving while another is in progress returns
+    /// [`RefreshOutcome::Skipped`] immediately rather than waiting its turn. A
+    /// queue of refreshes would only ever re-read rows the running one is
+    /// already collecting, and on a cold build (minutes) the interval would
+    /// stack several deep.
+    pub async fn refresh(&self, pg: &PgPool) -> anyhow::Result<RefreshOutcome> {
+        let Some(_in_flight) = self.begin_refresh() else {
+            tracing::debug!("stats mirror: refresh already in flight, skipping tick");
+            return Ok(RefreshOutcome::Skipped);
+        };
+        Ok(RefreshOutcome::Ran(self.refresh_inner(pg).await?))
+    }
+
+    /// Claim the single-flight latch, or `None` if someone else holds it.
+    fn begin_refresh(&self) -> Option<InFlight> {
+        self.refreshing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then(|| InFlight(self.refreshing.clone()))
+    }
+
+    /// True when nothing has been mirrored yet — the next refresh is a cold
+    /// build of the whole archive rather than an increment.
+    pub fn is_empty(&self) -> bool {
+        self.watermark() == 0
+    }
+
+    async fn refresh_inner(&self, pg: &PgPool) -> anyhow::Result<RefreshReport> {
+        let started = Instant::now();
         let watermark = self.watermark();
+        let cold_build = watermark == 0;
         let from_id = (watermark - self.cfg.overlap_rows).max(0);
         let mut report = RefreshReport {
             max_id: watermark,
+            cold_build,
             ..Default::default()
         };
 
+        // On a cold build the operator is watching a 503 and needs to know
+        // whether it is progressing. `max(id)` is a PK lookup, so the
+        // denominator is nearly free; a `count(*)` would not be.
+        let target_id: i64 = if cold_build {
+            let t: i64 = sqlx::query_scalar("SELECT coalesce(max(id), 0) FROM messages")
+                .fetch_one(pg)
+                .await?;
+            tracing::info!(
+                target_max_id = t,
+                path = %self.path.display(),
+                "stats mirror: cold build starting — /v1/stats/* answers 503 until it finishes"
+            );
+            t
+        } else {
+            0
+        };
+
         self.refresh_projects(pg).await?;
+        self.refresh_aliases(pg).await?;
         self.refresh_sessions(pg).await?;
 
         // Messages, chunked so one refresh cannot pin an unbounded result set.
@@ -229,6 +324,17 @@ impl Mirror {
             report.messages_scanned += rows.len();
             report.messages_inserted += self.insert_messages(&rows)?;
             report.max_id = report.max_id.max(cursor);
+
+            if cold_build {
+                tracing::info!(
+                    mirrored = report.messages_inserted,
+                    at_id = cursor,
+                    target_max_id = target_id,
+                    percent = pct(cursor, target_id),
+                    elapsed_s = started.elapsed().as_secs(),
+                    "stats mirror: cold build progress"
+                );
+            }
         }
 
         report.tool_uses_inserted = self.refresh_tool_uses(pg, from_id).await?;
@@ -236,6 +342,30 @@ impl Mirror {
 
         self.compute_derived()?;
         self.stamp_refreshed()?;
+        // Fold the write-ahead log back into the file itself. Cheap when little
+        // changed, and it keeps the mirror self-contained between passes — which
+        // is what makes `hub mirror rebuild`'s rename safe: a WAL left straddling
+        // a swap would belong to the file that just went away.
+        self.checkpoint()?;
+        report.elapsed = started.elapsed();
+
+        if cold_build {
+            tracing::info!(
+                messages = report.messages_inserted,
+                tool_uses = report.tool_uses_inserted,
+                tool_results = report.tool_results_inserted,
+                elapsed_s = report.elapsed.as_secs(),
+                "stats mirror: cold build complete — /v1/stats/* now served from the mirror"
+            );
+        } else {
+            tracing::debug!(
+                scanned = report.messages_scanned,
+                inserted = report.messages_inserted,
+                max_id = report.max_id,
+                elapsed_ms = report.elapsed.as_millis(),
+                "stats mirror: refreshed"
+            );
+        }
         Ok(report)
     }
 
@@ -260,6 +390,43 @@ impl Mirror {
         Ok(())
     }
 
+    fn checkpoint(&self) -> anyhow::Result<()> {
+        let conn = self.conn.lock().expect("mirror connection poisoned");
+        conn.execute_batch("CHECKPOINT")?;
+        Ok(())
+    }
+
+    /// Notice a mirror file swapped in underneath us and adopt it.
+    ///
+    /// `hub mirror rebuild` runs as a separate process and renames a freshly
+    /// built file over ours. Rename leaves our open handle pointing at the old
+    /// inode, so without this the hub would serve the pre-rebuild data until
+    /// someone restarted it — and the whole point of the rebuild is to correct
+    /// data the mirror has wrong (design D2). Called from the refresher, under
+    /// the single-flight latch, so no write can be in progress across the swap.
+    ///
+    /// Returns whether a replacement was adopted.
+    pub fn adopt_replacement(&self) -> anyhow::Result<bool> {
+        let current = file_identity(&self.path);
+        {
+            let opened = self.opened.lock().expect("mirror identity poisoned");
+            if current.is_none() || *opened == current {
+                return Ok(false);
+            }
+        }
+        let fresh = Self::open_at(&self.path, &self.cfg)?;
+        {
+            let mut conn = self.conn.lock().expect("mirror connection poisoned");
+            *conn = fresh;
+        }
+        *self.opened.lock().expect("mirror identity poisoned") = current;
+        tracing::info!(
+            path = %self.path.display(),
+            "stats mirror: adopted a rebuilt file swapped in beneath us"
+        );
+        Ok(true)
+    }
+
     fn stamp_refreshed(&self) -> anyhow::Result<()> {
         let conn = self.conn.lock().expect("mirror connection poisoned");
         conn.execute(
@@ -272,39 +439,46 @@ impl Mirror {
     fn insert_messages(&self, rows: &[MessageRow]) -> anyhow::Result<usize> {
         let conn = self.conn.lock().expect("mirror connection poisoned");
         let before: i64 = conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?;
-        let mut stmt = conn.prepare(
-            r#"INSERT OR IGNORE INTO messages
-               (id, session_id, message_id, uuid, provider, model, role, "timestamp",
-                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                cost_usd, group_key, conversational, usage_row)
-               VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ), ?, ?, ?, ?, ?,
-                       coalesce(?, ?, CAST(? AS VARCHAR)), ? IS NOT NULL, NULL)"#,
-        )?;
-        for r in rows {
-            stmt.execute(duckdb::params![
-                r.id,
-                r.session_id,
-                r.message_id,
-                r.uuid,
-                r.provider,
-                r.model,
-                r.role,
-                // Bound as RFC3339 text and cast: DuckDB has no BIGINT ->
-                // TIMESTAMPTZ conversion, so epoch micros would fail here.
-                r.timestamp.map(|t| t.to_rfc3339()),
-                r.input_tokens,
-                r.output_tokens,
-                r.cache_creation_tokens,
-                r.cache_read_tokens,
-                r.cost_usd,
-                // group_key = coalesce(message_id, uuid, id)
-                r.message_id,
-                r.uuid,
-                r.id,
-                // conversational = role IS NOT NULL
-                r.role,
-            ])?;
-        }
+        in_transaction(&conn, || {
+            let mut stmt = conn.prepare(
+                r"INSERT OR IGNORE INTO messages
+                   (id, session_id, message_id, uuid, provider, model, role, ts_utc,
+                    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                    cost_usd, group_key, conversational, usage_row)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?,
+                           coalesce(?, ?, CAST(? AS VARCHAR)), ? IS NOT NULL, NULL)",
+            )?;
+            for r in rows {
+                stmt.execute(duckdb::params![
+                    r.id,
+                    r.session_id,
+                    r.message_id,
+                    r.uuid,
+                    r.provider,
+                    r.model,
+                    r.role,
+                    // Bound as text and cast: DuckDB has no BIGINT -> TIMESTAMP
+                    // conversion, so epoch micros would fail here. Naive UTC,
+                    // not RFC3339 — the column is a plain TIMESTAMP and a zone
+                    // suffix would have to be interpreted by the ICU code path
+                    // this design avoids.
+                    r.timestamp
+                        .map(|t| t.naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string()),
+                    r.input_tokens,
+                    r.output_tokens,
+                    r.cache_creation_tokens,
+                    r.cache_read_tokens,
+                    r.cost_usd,
+                    // group_key = coalesce(message_id, uuid, id)
+                    r.message_id,
+                    r.uuid,
+                    r.id,
+                    // conversational = role IS NOT NULL
+                    r.role,
+                ])?;
+            }
+            Ok(())
+        })?;
         let after: i64 = conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?;
         Ok((after - before).max(0) as usize)
     }
@@ -312,24 +486,58 @@ impl Mirror {
     async fn refresh_projects(&self, pg: &PgPool) -> anyhow::Result<()> {
         // NB: the column is `name`, not `project_name`.
         let rows = sqlx::query_as::<_, ProjectRow>(
-            "SELECT id, project_path, name AS project_name, identity_key FROM projects",
+            "SELECT id, project_path, name AS project_name, identity_key, git_worktree
+               FROM projects",
         )
         .fetch_all(pg)
         .await?;
         let conn = self.conn.lock().expect("mirror connection poisoned");
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO projects (id, project_path, project_name, identity_key)
-             VALUES (?, ?, ?, ?)",
-        )?;
-        for r in &rows {
-            stmt.execute(duckdb::params![
-                r.id,
-                r.project_path,
-                r.project_name,
-                r.identity_key
-            ])?;
-        }
-        Ok(())
+        in_transaction(&conn, || {
+            let mut stmt = conn.prepare(
+                "INSERT OR REPLACE INTO projects
+                   (id, project_path, project_name, identity_key, git_worktree)
+                 VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for r in &rows {
+                stmt.execute(duckdb::params![
+                    r.id,
+                    r.project_path,
+                    r.project_name,
+                    r.identity_key,
+                    r.git_worktree
+                ])?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Manual identity aliases — the second half of the identity expansion
+    /// `/v1/stats/projects/{key}` performs. Mirrored so that expansion resolves
+    /// without Postgres; without it the "stats survive a Postgres outage"
+    /// property would hold for global and session scope but silently not for
+    /// project scope.
+    async fn refresh_aliases(&self, pg: &PgPool) -> anyhow::Result<()> {
+        let rows = sqlx::query_as::<_, AliasRow>(
+            "SELECT id, identity_key, project_path FROM project_identity_aliases",
+        )
+        .fetch_all(pg)
+        .await?;
+        let conn = self.conn.lock().expect("mirror connection poisoned");
+        // Aliases are deleted as well as created (`DELETE /v1/identities/
+        // aliases/{id}`), and the table is tiny, so it is replaced wholesale
+        // rather than folded in — an incremental merge would keep serving a
+        // path the operator has just detached.
+        in_transaction(&conn, || {
+            conn.execute_batch("DELETE FROM project_identity_aliases")?;
+            let mut stmt = conn.prepare(
+                "INSERT OR REPLACE INTO project_identity_aliases (id, identity_key, project_path)
+                 VALUES (?, ?, ?)",
+            )?;
+            for r in &rows {
+                stmt.execute(duckdb::params![r.id, r.identity_key, r.project_path])?;
+            }
+            Ok(())
+        })
     }
 
     async fn refresh_sessions(&self, pg: &PgPool) -> anyhow::Result<()> {
@@ -339,14 +547,16 @@ impl Mirror {
         .fetch_all(pg)
         .await?;
         let conn = self.conn.lock().expect("mirror connection poisoned");
-        let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO sessions (id, project_id, session_id, summary)
-             VALUES (?, ?, ?, ?)",
-        )?;
-        for r in &rows {
-            stmt.execute(duckdb::params![r.id, r.project_id, r.session_id, r.summary])?;
-        }
-        Ok(())
+        in_transaction(&conn, || {
+            let mut stmt = conn.prepare(
+                "INSERT OR REPLACE INTO sessions (id, project_id, session_id, summary)
+                 VALUES (?, ?, ?, ?)",
+            )?;
+            for r in &rows {
+                stmt.execute(duckdb::params![r.id, r.project_id, r.session_id, r.summary])?;
+            }
+            Ok(())
+        })
     }
 
     async fn refresh_tool_uses(&self, pg: &PgPool, from_id: i64) -> anyhow::Result<usize> {
@@ -361,24 +571,27 @@ impl Mirror {
         let conn = self.conn.lock().expect("mirror connection poisoned");
         let before: i64 =
             conn.query_row("SELECT count(*) FROM message_tool_uses", [], |r| r.get(0))?;
-        let mut stmt = conn.prepare(
-            r"INSERT OR IGNORE INTO message_tool_uses
-               (message_ref, seq, session_id, tool_name, skill_name, subagent_type,
-                tool_use_id, is_error)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )?;
-        for r in &rows {
-            stmt.execute(duckdb::params![
-                r.message_ref,
-                r.seq,
-                r.session_id,
-                r.tool_name,
-                r.skill_name,
-                r.subagent_type,
-                r.tool_use_id,
-                r.is_error
-            ])?;
-        }
+        in_transaction(&conn, || {
+            let mut stmt = conn.prepare(
+                r"INSERT OR IGNORE INTO message_tool_uses
+                   (message_ref, seq, session_id, tool_name, skill_name, subagent_type,
+                    tool_use_id, is_error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )?;
+            for r in &rows {
+                stmt.execute(duckdb::params![
+                    r.message_ref,
+                    r.seq,
+                    r.session_id,
+                    r.tool_name,
+                    r.skill_name,
+                    r.subagent_type,
+                    r.tool_use_id,
+                    r.is_error
+                ])?;
+            }
+            Ok(())
+        })?;
         let after: i64 =
             conn.query_row("SELECT count(*) FROM message_tool_uses", [], |r| r.get(0))?;
         Ok((after - before).max(0) as usize)
@@ -396,25 +609,181 @@ impl Mirror {
         let before: i64 = conn.query_row("SELECT count(*) FROM message_tool_results", [], |r| {
             r.get(0)
         })?;
-        let mut stmt = conn.prepare(
-            r"INSERT OR IGNORE INTO message_tool_results
-               (message_ref, seq, session_id, tool_use_id, is_error)
-               VALUES (?, ?, ?, ?, ?)",
-        )?;
-        for r in &rows {
-            stmt.execute(duckdb::params![
-                r.message_ref,
-                r.seq,
-                r.session_id,
-                r.tool_use_id,
-                r.is_error
-            ])?;
-        }
+        in_transaction(&conn, || {
+            let mut stmt = conn.prepare(
+                r"INSERT OR IGNORE INTO message_tool_results
+                   (message_ref, seq, session_id, tool_use_id, is_error)
+                   VALUES (?, ?, ?, ?, ?)",
+            )?;
+            for r in &rows {
+                stmt.execute(duckdb::params![
+                    r.message_ref,
+                    r.seq,
+                    r.session_id,
+                    r.tool_use_id,
+                    r.is_error
+                ])?;
+            }
+            Ok(())
+        })?;
         let after: i64 = conn.query_row("SELECT count(*) FROM message_tool_results", [], |r| {
             r.get(0)
         })?;
         Ok((after - before).max(0) as usize)
     }
+}
+
+/// Build a complete new mirror beside the live one and swap it in.
+///
+/// Incremental refresh covers inserts, not updates: `usage_row` is stable under
+/// append because ids are monotonic, but a Postgres-side `UPDATE` of a mirrored
+/// column re-groups rows the mirror already decided about. `hub
+/// backfill-analytics` is exactly that (`UPDATE messages SET message_id = …`),
+/// and after one the mirror over-counts tokens. So the two operations travel
+/// together, and this is the second half (design D2).
+///
+/// The long part — pulling the archive — happens against a staging file, so a
+/// running hub keeps answering `/v1/stats/*` from the old mirror throughout,
+/// rather than the four-minute `503` that deleting it would cause. The swap
+/// itself is a single `rename`, and the running hub adopts the new file on its
+/// next refresher tick ([`Mirror::adopt_replacement`]).
+pub async fn rebuild(cfg: &MirrorConfig, pg: &PgPool) -> anyhow::Result<RefreshReport> {
+    let live = cfg.resolved_path();
+    let staging = {
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S");
+        let mut name = live.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".rebuild-{stamp}"));
+        live.with_file_name(name)
+    };
+    // A previous run killed mid-build would otherwise be resumed rather than
+    // rebuilt, which is the one thing a rebuild must not do.
+    for stale in [staging.clone(), wal_path(&staging)] {
+        if stale.exists() {
+            std::fs::remove_file(&stale)?;
+        }
+    }
+
+    tracing::info!(staging = %staging.display(), "stats mirror: rebuilding");
+    let report = {
+        let staged_cfg = MirrorConfig {
+            path: Some(staging.clone()),
+            ..cfg.clone()
+        };
+        let staged = Mirror::open_or_create(&staged_cfg)?;
+        let report = staged.refresh_inner(pg).await?;
+        // Drop before the rename: closing checkpoints and clears the staging
+        // WAL, so the file that lands at `live` is self-contained.
+        drop(staged);
+        report
+    };
+
+    std::fs::rename(&staging, &live)?;
+    tracing::info!(
+        path = %live.display(),
+        messages = report.messages_inserted,
+        elapsed_s = report.elapsed.as_secs(),
+        "stats mirror: rebuild swapped in"
+    );
+    Ok(report)
+}
+
+/// `DuckDB` writes its write-ahead log beside the database, same name + `.wal`.
+fn wal_path(db: &Path) -> PathBuf {
+    let mut name = db.file_name().unwrap_or_default().to_os_string();
+    name.push(".wal");
+    db.with_file_name(name)
+}
+
+/// Identity of the file currently at `path`, for noticing an out-of-process
+/// swap. The inode changes exactly when the file is replaced; off unix it
+/// degrades to size-and-mtime, which is weaker but still moves on a rebuild.
+fn file_identity(path: &Path) -> Option<u64> {
+    let md = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(md.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let mtime = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64);
+        Some(md.len() ^ mtime.rotate_left(17))
+    }
+}
+
+/// Long-running refresher: one pass immediately (the cold build, when no mirror
+/// file exists yet), then one per `interval`.
+///
+/// **It never exits and never propagates an error** (design D6). A failed
+/// refresh leaves the mirror exactly as it was and statistics keep being served
+/// from it with the age header climbing — a stale answer beats no answer, and
+/// the operator sees the staleness on `/v1/healthz/stats`.
+///
+/// It also stays structurally clear of the credential watchdog: that runs its
+/// own probe on its own fresh connections ([`crate::db_watchdog`]) and counts
+/// only `28P01`. Nothing here can add a strike, so a Postgres blip during a
+/// refresh can never restart the process. The log line says so explicitly,
+/// because "hub can't reach Postgres" is the shape operators reflexively read
+/// as a credential problem.
+pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::time::Duration) {
+    loop {
+        // Before anything else: a `hub mirror rebuild` may have swapped the
+        // file since the last tick.
+        if let Err(e) = mirror.adopt_replacement() {
+            tracing::error!(error = %e, "stats mirror: could not adopt the rebuilt file");
+        }
+        match mirror.refresh(&pool).await {
+            Ok(RefreshOutcome::Ran(_) | RefreshOutcome::Skipped) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "stats mirror: refresh failed — keeping the existing mirror and \
+                     continuing to serve from it. This is a refresh fault, NOT a \
+                     credential rejection; it does not count toward the database \
+                     watchdog's exit strikes."
+                );
+            }
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+/// Run `body` inside an explicit `DuckDB` transaction, rolling back if it fails.
+///
+/// Not an optimization detail worth burying: `DuckDB` autocommits every
+/// statement, so a bulk insert without this pays one commit per row and the
+/// 2.8M-row cold build goes from minutes to hours. The rollback arm matters as
+/// much — the connection is long-lived and shared, so an aborted insert that
+/// left a transaction open would poison every later refresh and read.
+fn in_transaction<F>(conn: &Connection, body: F) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<()>,
+{
+    conn.execute_batch("BEGIN TRANSACTION")?;
+    match body() {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(e) => {
+            if let Err(rollback) = conn.execute_batch("ROLLBACK") {
+                tracing::error!(error = %rollback, "stats mirror: rollback failed");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Progress percentage for the cold-build log, guarding the empty-archive case.
+fn pct(at: i64, target: i64) -> u32 {
+    if target <= 0 {
+        return 100;
+    }
+    ((at.max(0) as f64 / target as f64) * 100.0).clamp(0.0, 100.0) as u32
 }
 
 /// `<path>.aside-<utc timestamp>` — corrupt mirrors are preserved, never
@@ -435,7 +804,11 @@ CREATE TABLE IF NOT EXISTS messages (
     provider              VARCHAR,
     model                 VARCHAR,
     role                  VARCHAR,
-    "timestamp"           TIMESTAMPTZ,
+    -- UTC wall clock as a plain TIMESTAMP, deliberately not TIMESTAMPTZ: every
+    -- conversion path off TIMESTAMPTZ in DuckDB routes through the `icu`
+    -- extension, which is not in the bundled build. Local-time bucketing is
+    -- applied at query time from Rust-computed offset spans (design D7).
+    ts_utc                TIMESTAMP,
     input_tokens          BIGINT,
     output_tokens         BIGINT,
     cache_creation_tokens BIGINT,
@@ -449,7 +822,7 @@ CREATE TABLE IF NOT EXISTS messages (
     usage_row             BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS messages_group ON messages (session_id, group_key, id);
-CREATE INDEX IF NOT EXISTS messages_ts ON messages ("timestamp");
+CREATE INDEX IF NOT EXISTS messages_ts ON messages (ts_utc);
 
 CREATE TABLE IF NOT EXISTS sessions (
     id         BIGINT PRIMARY KEY,
@@ -465,9 +838,21 @@ CREATE TABLE IF NOT EXISTS projects (
     project_path VARCHAR,
     project_name VARCHAR,
     -- Mirrored so per-project stats can fold by identity without Postgres.
-    identity_key VARCHAR
+    identity_key VARCHAR,
+    -- Linked `git worktree` member, so ?include_worktrees=false resolves here
+    -- too rather than falling back to Postgres.
+    git_worktree BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS projects_identity ON projects (identity_key);
+
+-- The manual half of identity expansion. Small and fully replaced each
+-- refresh; see refresh_aliases for why it is not merged incrementally.
+CREATE TABLE IF NOT EXISTS project_identity_aliases (
+    id           BIGINT PRIMARY KEY,
+    identity_key VARCHAR,
+    project_path VARCHAR
+);
+CREATE INDEX IF NOT EXISTS aliases_identity ON project_identity_aliases (identity_key);
 
 CREATE TABLE IF NOT EXISTS message_tool_uses (
     message_ref   BIGINT,
@@ -516,6 +901,14 @@ struct ProjectRow {
     project_path: Option<String>,
     project_name: Option<String>,
     identity_key: Option<String>,
+    git_worktree: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct AliasRow {
+    id: i64,
+    identity_key: String,
+    project_path: String,
 }
 
 #[derive(sqlx::FromRow)]

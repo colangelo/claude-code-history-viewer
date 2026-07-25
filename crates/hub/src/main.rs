@@ -9,6 +9,8 @@ USAGE:
     hub                                  serve (default)
     hub migrate                          apply pending migrations, then exit
     hub backfill-analytics [--batch N]   derive analytics fields over stored messages
+    hub mirror rebuild                   rebuild the statistics mirror and swap it in
+                                         (required after backfill-analytics)
 ";
 
 /// `--flag N` / `--flag=N`, when present and parseable.
@@ -43,6 +45,16 @@ async fn main() -> anyhow::Result<()> {
             let batch = flag_i64(&args, "--batch").unwrap_or(hub::backfill::DEFAULT_BATCH);
             hub::run_backfill(batch).await
         }
+        Some("mirror") => match args.get(1).map(String::as_str) {
+            Some("rebuild") => hub::run_mirror_rebuild().await,
+            other => {
+                eprintln!(
+                    "unknown mirror subcommand: {}\n\n{USAGE}",
+                    other.unwrap_or("(none)")
+                );
+                std::process::exit(2);
+            }
+        },
         Some("-h" | "--help") => {
             print!("{USAGE}");
             Ok(())
