@@ -56,7 +56,7 @@ This file is the implementation plan. Measurements referenced below are in
 - [ ] 6.2 Require the same verdict as before: exact agreement on token, cost, message, session and activity fields, with both documented divergences still one-directional — hub success rate ≤ oracle's (D10), hub tool counts ≤ oracle's (D12). **One new allowance:** windowed comparisons may differ for the ≤10 dedup groups that straddle a date boundary (design D3) — that delta is accepted and recorded, not a failure
 - [ ] 6.3 Compare per-project statistics for a multi-machine, multi-path identity and per-session statistics for a tool-heavy session, as the original gate did
 - [ ] 6.4 Record the comparison in this change. **This gate must pass before #23 is started** — Deliverable 2 deletes the oracle, and after that there is nothing independent to diff against
-- [ ] 6.5 Measure the deployed endpoint and record it against the 18.0 s baseline: archive-wide, the webapp's default 30-day window, per-project, and per-session
+- [ ] 6.5 Measure the deployed endpoint and record it against the 18.0 s baseline: archive-wide, the webapp's default 30-day window, per-project, and per-session. **Also measure the cold build itself** — its duration and the mirror's size on disk. Both are quoted in the deploy relay and **both are currently unmeasured for this code path**: the "roughly four minutes" figure came from the 227 s `CREATE TABLE AS` copy used for the SQL comparisons, not from the refresher's chunked-`SELECT` + batched-insert builder, which has been run at 205k rows and never at 2.8M
 
 ## 7. Quality gate and deploy
 

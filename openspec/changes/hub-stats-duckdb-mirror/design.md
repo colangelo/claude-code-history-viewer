@@ -263,8 +263,16 @@ runs Postgres, which is what the mirror reads *from*.
 
 ## Deployment note
 
-After the §2b binary swap, `/v1/stats/*` returns `503 warming` for roughly four
-minutes while the first mirror builds (the initial pull from pg1 measured 227 s,
-network-bound). **This is expected and is not a rollback trigger** — it belongs in
+After the §2b binary swap, `/v1/stats/*` returns `503 warming` while the first
+mirror builds. **This is expected and is not a rollback trigger** — it belongs in
 the relay text, since an unexplained 503 after a swap is exactly the shape that
 has caused false alarms before.
+
+**How long is not yet known.** The "roughly four minutes" this section used to
+state came from the 227 s `CREATE TABLE AS` copy used for the SQL-level
+measurements, which is a different code path from the refresher's chunked
+`SELECT` + batched insert. The real builder has been run at 205k rows (11.5 s in
+a debug build) and never at 2.8M. Task 6.5 measures it; until then the relay must
+give a range and say it is unmeasured rather than promise four minutes — a swap
+that 503s for twenty minutes against a four-minute promise is how a correct
+deploy gets rolled back.
