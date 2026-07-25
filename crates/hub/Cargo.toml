@@ -30,6 +30,14 @@ sqlx = { version = "0.8", default-features = false, features = [
     "macros",
     "migrate",
 ] }
+# Columnar read model for statistics. `bundled` compiles libduckdb from source
+# and links it statically (verified: no libduckdb dylib reference, so the
+# codesign-aware binary swap in docs/archive/deployment.md §2b is unaffected).
+# Costs ~40 MB of binary and ~873s CPU to build — measured in change
+# hub-stats-duckdb-mirror task 1.2. IANA timezone support is in DuckDB core as
+# of 1.5.5; do NOT emit `LOAD icu`, which is absent from the bundled build and
+# would attempt a runtime download (design D7).
+duckdb = { version = "1.10505", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }

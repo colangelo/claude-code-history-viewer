@@ -19,6 +19,7 @@ pub mod identities;
 pub mod identity_filter;
 pub mod ingest;
 pub mod journal;
+pub mod mirror;
 pub mod pagination;
 pub mod search;
 pub mod state;

@@ -30,6 +30,86 @@ pub struct HubConfig {
     /// never a startup failure.
     #[serde(default)]
     pub embed_model_dir: Option<PathBuf>,
+    /// Statistics read model. Every field is optional with a working default,
+    /// so an existing `hub.toml` keeps running untouched.
+    #[serde(default)]
+    pub stats_mirror: MirrorConfig,
+}
+
+/// Settings for the `DuckDB` statistics mirror (change `hub-stats-duckdb-mirror`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct MirrorConfig {
+    /// Where the mirror file lives. Defaults to `stats-mirror.duckdb` beside
+    /// the hub's other state under `~/.config/cchv`.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// How often the background refresher pulls new rows from Postgres.
+    #[serde(default = "default_refresh_secs")]
+    pub refresh_secs: u64,
+    /// How far *behind* the high watermark each refresh re-scans. Rows are
+    /// keyed at insert but commit out of order, so a refresh that trusted the
+    /// watermark alone would skip late-committing rows permanently (design D2).
+    /// Inserts are idempotent, which is what makes the overlap free.
+    #[serde(default = "default_overlap_rows")]
+    pub overlap_rows: i64,
+    /// `DuckDB` `memory_limit`. m4m also runs the daemon and the distiller, so
+    /// statistics must not be able to consume the box.
+    #[serde(default = "default_memory_limit")]
+    pub memory_limit: String,
+    /// `DuckDB` `threads`, capped for the same reason.
+    #[serde(default = "default_threads")]
+    pub threads: u32,
+    /// Age past which `/v1/healthz/stats` reports the mirror stale.
+    #[serde(default = "default_stale_after_secs")]
+    pub stale_after_secs: u64,
+}
+
+impl Default for MirrorConfig {
+    fn default() -> Self {
+        Self {
+            path: None,
+            refresh_secs: default_refresh_secs(),
+            overlap_rows: default_overlap_rows(),
+            memory_limit: default_memory_limit(),
+            threads: default_threads(),
+            stale_after_secs: default_stale_after_secs(),
+        }
+    }
+}
+
+fn default_refresh_secs() -> u64 {
+    300
+}
+
+/// Generous relative to any plausible in-flight transaction, and cheap: the
+/// re-scanned rows are already mirrored, so they are ignored on insert.
+fn default_overlap_rows() -> i64 {
+    50_000
+}
+
+fn default_memory_limit() -> String {
+    "1GB".to_string()
+}
+
+fn default_threads() -> u32 {
+    2
+}
+
+fn default_stale_after_secs() -> u64 {
+    3_600
+}
+
+impl MirrorConfig {
+    /// Resolved mirror path: the configured one, else `~/.config/cchv/`, else
+    /// the current directory if even `HOME` is unset.
+    pub fn resolved_path(&self) -> PathBuf {
+        self.path.clone().unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".config/cchv/stats-mirror.duckdb")
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -90,6 +170,10 @@ impl HubConfig {
             static_dir,
             trust_tailscale_identity,
             embed_model_dir,
+            stats_mirror: MirrorConfig {
+                path: std::env::var("HUB_STATS_MIRROR").ok().map(PathBuf::from),
+                ..MirrorConfig::default()
+            },
         })
     }
 
