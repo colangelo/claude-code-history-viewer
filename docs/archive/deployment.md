@@ -801,6 +801,14 @@ equivalently.
     (see the cutover ordering above); once cchv Gitea #25 lands, a sustained
     `28P01` exits the process and `KeepAlive` does it unattended, so a rotation
     heals itself within `ThrottleInterval`.
+    **The first automatic rotation is a known date: 2026-08-24T13:38:54Z**
+    (`last_vault_rotation` 2026-07-25T13:38:54Z + `rotation_period` 2592000 s,
+    both read live from bao by infra on 2026-07-25; relay thread `40d5df93`).
+    That is therefore the hard deadline for #25 — after it, an un-bounced hub
+    serves 503s until someone notices. It only moves if `cchv-svc` is rotated
+    manually early, which resets the clock; infra owns that case and will bounce
+    `dev.cchv.hub` themselves and tell us. Infra's copy of this fact lives in
+    home-network `hosts/configs/proxmox1/openbao.md`.
 
 ## 3c. Journal-entries distiller (`scripts/cchv-distill.py`)
 
