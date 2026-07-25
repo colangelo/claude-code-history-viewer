@@ -60,10 +60,37 @@ MUST NOT accumulate duplicate invocation rows.
 - **WHEN** an ingested message invokes the `Agent` tool naming a subagent type
 - **THEN** the stored invocation carries that subagent type in addition to the tool name
 
-#### Scenario: Errored invocations are marked
+#### Scenario: Same-record results are flagged on the invocation
 
-- **WHEN** an ingested tool invocation produced an error result
+- **WHEN** an ingested message carries a top-level tool invocation whose result on that same record reports an error
 - **THEN** the stored invocation is flagged as an error
+
+### Requirement: Tool outcome extraction
+
+Ingest SHALL additionally extract each tool *result* from a message and persist
+it as a row carrying the identifier of the invocation it reports on and whether
+that invocation errored. This is required because a tool invocation does not
+carry its own outcome: the outcome arrives in a later message referencing the
+invocation by id, so success cannot be determined from the invocation alone.
+
+Extraction MUST be idempotent with the message upsert, and MUST NOT depend on
+the invocation already being stored — the invocation and its result may be
+ingested in either order, in the same batch or different ones.
+
+#### Scenario: Tool results are extracted and stored
+
+- **WHEN** a message containing tool results is ingested
+- **THEN** one row per result is persisted, each carrying the invocation identifier it references and its error status
+
+#### Scenario: Result ingested before its invocation is retained
+
+- **WHEN** a tool result is ingested in a batch that does not contain the invocation it references
+- **THEN** the result row is stored and later resolves against that invocation once it is ingested
+
+#### Scenario: Re-ingest does not duplicate results
+
+- **WHEN** a message carrying tool results is ingested twice
+- **THEN** the number of result rows for that message is unchanged
 
 #### Scenario: Re-ingest does not duplicate invocations
 

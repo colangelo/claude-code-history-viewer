@@ -98,10 +98,20 @@ invocations MUST additionally be reported keyed by skill name, and Claude
 generic tool that carries it. Both collections are empty for providers that
 expose no such abstraction.
 
+Success rate MUST be derived by resolving each invocation against the outcome
+that reports on it, preferring an outcome carried by a later message over one
+carried on the invocation's own record, and treating an invocation with no
+recorded outcome as successful.
+
 #### Scenario: Tool counts and success rates are reported
 
 - **WHEN** a scope contains tool invocations of which some are errors
 - **THEN** the response lists each tool with its invocation count and a success rate reflecting the non-error proportion
+
+#### Scenario: An errored outcome in a later message lowers the success rate
+
+- **WHEN** an invocation's error outcome is reported by a different, later message
+- **THEN** that invocation counts as a failure in the tool's success rate
 
 #### Scenario: Skills are reported by name
 

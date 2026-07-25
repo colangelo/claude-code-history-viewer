@@ -8,16 +8,18 @@
 ## 2. Ingest extraction
 
 - [ ] 2.1 Add a `message_id` extraction helper in `crates/hub` reading `raw->>'messageId'` (design D1 — NOT `raw->'message'->>'id'`), with a unit test covering: assistant `msg_…` id present, snapshot-only `messageId`, and neither
-- [ ] 2.2 Add a tool-invocation extractor over the normalized `content`, returning `(tool_name, skill_name, is_error)` per invocation; `skill_name` is populated from `input.skill` when `tool_name` is `Skill`
-- [ ] 2.3 Wire both into the ingest path so new rows populate `message_id` and `message_tool_uses` on insert
-- [ ] 2.4 Make tool-row writes idempotent with the message upsert (re-ingesting a message must not accumulate invocation rows) — covers the ingestion spec's re-ingest scenario
-- [ ] 2.5 Unit-test extraction against fixtures for: messages with no tool use, multiple invocations in one message, errored invocations, and `Skill` invocations naming a skill
+- [ ] 2.2 Add a tool-invocation extractor over the normalized `content`, returning `(tool_name, tool_use_id, skill_name, subagent_type, is_error)` per invocation; `skill_name` from `input.skill` when the tool is `Skill`, `subagent_type` from `input.subagent_type` when the tool is `Agent`, and `is_error` only for the top-level `toolUse` shape whose result rides the same record
+- [ ] 2.3 Add a tool-outcome extractor for `tool_result` content items, returning `(tool_use_id, is_error)` per result (design D10 — the invocation does not carry its own outcome)
+- [ ] 2.4 Wire all three into the ingest path so new rows populate `message_id`, `message_tool_uses`, and `message_tool_results` on insert
+- [ ] 2.5 Make tool-row and result-row writes idempotent with the message upsert (re-ingesting a message must not accumulate rows) — covers both re-ingest scenarios in the ingestion spec
+- [ ] 2.6 Unit-test extraction against fixtures for: messages with no tool use, multiple invocations in one message, `Skill` invocations naming a skill, `Agent` invocations naming a subagent type, same-record `toolUseResult` errors, and `tool_result` items referencing an invocation
+- [ ] 2.7 Test that a result ingested in a batch not containing its invocation is stored and resolves once the invocation arrives (order independence)
 
 ## 3. Backfill
 
 - [ ] 3.1 Measure first: `COUNT(*)` over `messages`, count of rows where `raw->>'messageId'` is non-null, and `EXPLAIN` the extraction — record the numbers in the change before sizing the job (design Open Questions)
 - [ ] 3.2 Write a resumable, idempotent batch backfill for `message_id` over existing rows, re-runnable without double work
-- [ ] 3.3 Extend the backfill to populate `message_tool_uses` from stored `content`, sharing the extractor from 2.2 (design D4 — one code path for live and backfill)
+- [ ] 3.3 Extend the backfill to populate `message_tool_uses` and `message_tool_results` from stored `content`, sharing the extractors from 2.2 and 2.3 (design D4 — one code path for live and backfill)
 - [ ] 3.4 Create the `messages (message_id)` index concurrently once the backfill has drained
 - [ ] 3.5 Verify post-backfill: spot-check a session whose assistant messages are known, confirming `message_id` matches the `msg_…` ids in its transcript
 
@@ -26,7 +28,8 @@
 - [ ] 4.1 Implement the dedup CTE as a single reusable query fragment (design D5): `DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text))`, ordered so one row per identifier survives
 - [ ] 4.2 Test the dedup rule directly: repeated `usage` blocks sharing a `message_id` count once; distinct `uuid`s with no `message_id` each count once; rows with neither are never collapsed
 - [ ] 4.3 Implement token/cost rollups (input, output, cache-creation, cache-read, reasoning, total, cost) composed over the dedup CTE, with `cost_usd` reported as "where reported" rather than coalesced to zero (design risk)
-- [ ] 4.4 Implement tool and skill usage rollups over `message_tool_uses`, producing `ToolUsageStats` with success rate from the error flag, and skills keyed by name
+- [ ] 4.4 Implement tool, skill, and subagent usage rollups over `message_tool_uses`, producing `ToolUsageStats` for `most_used_tools`, `most_used_skills` (by `skill_name`) and `most_used_subagents` (by `subagent_type`)
+- [ ] 4.4b Resolve success rate with a LEFT JOIN to `message_tool_results` on `tool_use_id`, as `COALESCE(r.is_error, u.is_error, false)` (design D10); guard the join against fan-out if an invocation id ever has more than one recorded outcome
 - [ ] 4.5 Implement daily buckets (`DailyStats`) and the hour/day heatmap (`ActivityHeatmap`) with server-side `AT TIME ZONE` conversion from a caller-supplied IANA timezone defaulting to UTC (design D7)
 - [ ] 4.6 Implement per-model (`ModelStats`) and per-provider (`ProviderUsageStats`) breakdowns
 
@@ -42,7 +45,7 @@
 ## 6. Verification gate
 
 - [ ] 6.1 Build a comparison harness that runs the desktop analytics and the hub endpoints over the same scope and window and diffs the stat structs field by field
-- [ ] 6.2 Compare global statistics; investigate and resolve every discrepancy — a difference is a bug in the new implementation until proven otherwise
+- [ ] 6.2 Compare global statistics; investigate and resolve every discrepancy — a difference is a bug in the new implementation until proven otherwise. **Carve-out:** `ToolUsageStats.success_rate` is expected to differ, because the oracle scores every content-array invocation as a success (design D10). Assert the divergence is in that direction only — hub success rate ≤ oracle's — and that no other field differs
 - [ ] 6.3 Compare per-project statistics for at least one multi-machine, multi-path identity, and per-session statistics for a tool-heavy session
 - [ ] 6.4 Record the comparison results in the change; **Deliverable 2 is blocked until this passes**
 

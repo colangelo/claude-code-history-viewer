@@ -154,6 +154,8 @@ running both over the same scope and window and diffing the stat structs — the
 same types on both sides make this a structural comparison, not eyeballing
 charts. Disagreement blocks the cut.
 
+One documented exception: tool success rate, per D10. Everything else must match.
+
 ### D9 — The UI migrates with its types, and loses its math
 
 `crates/history-core/src/models/stats.rs` is unchanged, so the TypeScript types
@@ -162,6 +164,34 @@ charts (no chart library in `package.json`) port as-is. What changes:
 `services/analyticsApi.ts` switches from Tauri `invoke` to hub HTTP, and
 `AnalyticsDashboard/utils/*` — client-side aggregation over locally-read
 messages — is deleted as each metric moves to SQL, not ported.
+
+### D10 — Tool success rate is computed correctly, and deliberately diverges from the oracle
+
+The oracle does not actually measure this. `stats.rs:556-566` reads `is_error`
+off the `tool_use` **content item**, where the key never exists — `is_error`
+belongs to the `tool_result` item that arrives in a *later user message*. With
+`unwrap_or(false)`, every content-array invocation scores as a success, so the
+desktop's reported success rate is ~100% by construction. Only the secondary
+path (top-level `toolUse` + `toolUseResult.is_error`, both on the same record,
+stats.rs:576-587) correlates correctly.
+
+Invocations therefore store their `tool_use_id`, outcomes are extracted into
+`message_tool_results (tool_use_id, is_error)`, and the rollup resolves them
+with a LEFT JOIN, preferring the joined outcome and falling back to the
+same-record `is_error`:
+
+```sql
+COALESCE(r.is_error, u.is_error, false)
+```
+
+Both rows always land in the same session, so no cross-batch reconciliation is
+needed — whichever message is ingested second finds the other already stored.
+
+**This makes success rate the one metric expected NOT to match the oracle.** The
+verification gate (D8) carves it out explicitly: every other field must match
+exactly, and a mismatch anywhere else is still a bug. Replicating the oracle
+faithfully was rejected because a metric that reports 100% regardless of what
+happened is not worth migrating.
 
 ## Risks / Trade-offs
 

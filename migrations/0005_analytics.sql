@@ -69,6 +69,10 @@ CREATE TABLE message_tool_uses (
     -- so re-ingesting a message cannot accumulate duplicate invocation rows.
     seq          INTEGER     NOT NULL,
     tool_name    TEXT        NOT NULL,
+    -- The `tool_use` content item's own id, used to join this invocation to its
+    -- result (see message_tool_results). NULL for the top-level `toolUse` shape,
+    -- which carries its result on the SAME record and so needs no join.
+    tool_use_id  TEXT,
     -- Populated only when tool_name is the Claude `Skill` tool, from
     -- `input.skill` — so a skill is reportable by name instead of collapsing
     -- into one aggregated `Skill` entry. (issue #321)
@@ -77,6 +81,10 @@ CREATE TABLE message_tool_uses (
     -- `ProjectStatsSummary.most_used_subagents` reports separately from tools
     -- and skills. Both stay NULL for providers with no such abstraction.
     subagent_type TEXT,
+    -- Only meaningful for the top-level `toolUse` shape, whose result rides the
+    -- same record. For content-array invocations the outcome lives in a LATER
+    -- user message, so it is resolved through message_tool_results instead —
+    -- see that table's note for why this column alone is not enough.
     is_error     BOOLEAN     NOT NULL DEFAULT false,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (message_ref, seq)
@@ -92,3 +100,42 @@ CREATE INDEX message_tool_uses_skill_name_idx
 
 CREATE INDEX message_tool_uses_subagent_type_idx
     ON message_tool_uses (subagent_type) WHERE subagent_type IS NOT NULL;
+
+-- Joining an invocation to its outcome.
+CREATE INDEX message_tool_uses_tool_use_id_idx
+    ON message_tool_uses (tool_use_id) WHERE tool_use_id IS NOT NULL;
+
+
+-- Tool OUTCOMES, extracted from the `tool_result` content items that report
+-- them.
+--
+-- Why this is a separate table rather than a flag on the invocation: a
+-- `tool_use` content item does NOT carry `is_error`. The outcome arrives in a
+-- LATER user message, as a `tool_result` item referencing the invocation by
+-- `tool_use_id`. The retired desktop implementation missed this — it reads
+-- `is_error` straight off the `tool_use` item (stats.rs:560), where the key
+-- never exists, so `unwrap_or(false)` scores every content-array invocation as
+-- a success and its reported success rate is ~100% by construction.
+--
+-- Storing outcomes separately and resolving them with a LEFT JOIN at query time
+-- gives a real success rate. Both rows always live in the same session, so no
+-- cross-batch reconciliation is needed: whichever message arrives second simply
+-- finds the other already stored.
+--
+-- CONSEQUENCE FOR THE VERIFICATION GATE: success rate is the one metric that is
+-- deliberately expected NOT to match the desktop oracle. Every other field must
+-- still match exactly. See the change's design.md.
+CREATE TABLE message_tool_results (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    message_ref  BIGINT      NOT NULL
+        REFERENCES messages (id) ON DELETE CASCADE,
+    seq          INTEGER     NOT NULL,
+    tool_use_id  TEXT        NOT NULL,
+    is_error     BOOLEAN     NOT NULL DEFAULT false,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (message_ref, seq)
+);
+
+-- The join key from message_tool_uses.
+CREATE INDEX message_tool_results_tool_use_id_idx
+    ON message_tool_results (tool_use_id);
