@@ -271,6 +271,28 @@ semantic leg fell back to keyword.
 > added/removed strings per rev in the handoff — the release asset does not
 > make that line redundant.
 >
+> **And never re-hash the *installed* file to verify a swap took.** Step 4's
+> ad-hoc `codesign` guarantees the live binary can never hash to the asset's
+> sha256 — a mismatch there is the expected state, not a failed swap, however
+> much it reads like one. Audited by infra on the v0.15.0 install
+> (2026-07-25, thread `4bd0ad43`): live `80828947…` vs asset `65b0f6b0…`,
+> the live file 71,184 bytes *smaller* — yet stripping both signatures
+> (`codesign --remove-signature` on copies) leaves the same 15,243,616 bytes
+> with a byte-identical payload (everything past the load commands hashes
+> `b8c7c1bd…` on both; the whole stripped files differ in exactly one byte,
+> inside the load-command region). The `codesign -dv` tell: live
+> `Identifier=cchv-hub-<40 hex>` (ad-hoc, derived from the filename at
+> install) vs asset `Identifier=hub-7d6fcdf5865f0c25` (CI). So the sha256
+> agreement above is load-bearing only *before* the copy — relay digest,
+> `.sha256` sidecar, GitHub API digest, which is where this recipe puts it;
+> after the copy, a file hash answers a different question than the one being
+> asked. Verify the installed rev by behaviour instead: a symbol probe, a
+> route flip (v0.14.0's 404→200), or a response header (v0.13.1) — all
+> signature-independent. Third member of the marker-trap family, after the
+> v0.11.1 class fragment and the v0.14.0 CSS chunk: a check that looks
+> stricter than the real one while answering something else. (Recorded
+> infra-side in `hosts/m4m.md` next to the v0.15.0 rev probe.)
+>
 > Either way, **do not `cp` a new binary over the live one in place.** macOS
 > caches the code signature per inode; overwriting in place with a
 > differently-linker-signed binary trips the kernel's signature check and the
@@ -404,8 +426,14 @@ digest, the `.sha256` sidecar, infra's local re-hash, and the GitHub API digest
 count 0 on the live 0.14.0 binary pre-swap, 1 on the staged asset, 1 on the
 live path post-swap. Ceremony was §2b exactly; preswap backup
 `staging/cchv-hub-preswap-20260725-1756` (= the 0.14.0 rollback point).
-`/v1/healthz` `{"db":"up","status":"ok"}` (re-probed independently from our
-side). The relaunch log carried `rendered hub.runtime.toml (bao-first)` and
+`/v1/healthz` `{"db":"up","status":"ok"}` (re-probed from **ac-mbm5** — and
+after the v0.14.0 machine-claim correction put that wording in doubt, the
+provenance was *verified* same day, thread `4bd0ad43`: the archived handler
+session `7f4ae851…` is stamped `machine_hostname: ac-mbm5.local` by the hub,
+its transcript sits on ac-mbm5's own disk, and the probe was a bare `curl` to
+the tailnet HTTPS front, no ssh wrapping — a genuine cross-machine check.
+Precision: the curl ran 18:00:57 local; the "~18:04" in the relay reply was
+when the reply was written). The relaunch log carried `rendered hub.runtime.toml (bao-first)` and
 `db password from bao static-creds/cchv-svc (bao-owned, rotating)` — the
 credential resolved through the rotating static-creds path in prod, not a
 cached render, so the watchdog is guarding the credential it will actually see
