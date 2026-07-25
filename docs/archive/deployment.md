@@ -418,6 +418,22 @@ visible outside the degraded state. **The backlog is exactly that one item.**
 Lesson for the next close: sweep *every* lane's open items (memory included)
 before writing any sentence of the form "the backlog is empty".
 
+Infra acked the 07-25 close the same day (`a57b9ba5`; home-network `4dbdf8c`
+carries it as its own `hosts/m4m.md` entry). Two things from that ack are
+durable, and one is superseded:
+
+- **The `~/.local/share/cchv/eyeball/v0.11.0/` captures on m4m stay put.** They
+  are no longer the reference set for the v0.10.x/v0.11.x items, but they
+  remain the anchor for the pair-equality hashes recorded below, and infra
+  prunes nothing there without our word.
+- **A close is announced, never inferred** — infra reads our silence as
+  still-owed, per sub-item. That is what made the `6629892c` correction cheap:
+  their record moved the moment we said so.
+- **Superseded: infra's "§2c is dormant, not retired" framing.** It was written
+  against the empty-backlog sentence that `6629892c` retracted. §2c is *live* —
+  the `cchv-v0.12.0` degraded-hint item above is open, so deploy reports on
+  this line still carry it rather than reading plain "deployed and verified".
+
 **2026-07-24, webapp `v0.12.0` → `v0.13.0` swap (thread `c8109762`): CSS
 byte-identical.** Both trees ship the *same* chunk `archive-BBzvspm0.css` —
 same name **and** same bytes (sha256 `5ac5d2de786c…` on the staged v0.13.0 tree
