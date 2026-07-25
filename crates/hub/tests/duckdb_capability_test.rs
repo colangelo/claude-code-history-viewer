@@ -195,11 +195,39 @@ fn aggregate_and_window_features_are_available() {
 /// accident on a machine with a warm extension cache. Grepping the source is
 /// crude, but it is the only check that catches a *new* query added later by
 /// someone who tested it in the CLI and found it fine.
+///
+/// **Which files get grepped is decided by content, not by a hardcoded list.**
+/// The list version broke the moment `stats_duck.rs` was renamed to `stats.rs`
+/// (task 4.6) — it failed loudly, which was lucky; the same edit could as easily
+/// have left it grepping a file that no longer held the rollups. So: every source
+/// file that mentions `duckdb` is checked, which picks up a new module for free.
+/// Postgres-only modules are skipped deliberately — `journal.rs` and `health.rs`
+/// use `AT TIME ZONE` legitimately, because in Postgres it needs no extension.
 #[test]
 fn shipped_sql_contains_no_extension_dependent_constructs() {
-    for file in ["src/stats_duck.rs", "src/mirror.rs"] {
-        let src = std::fs::read_to_string(format!("{}/{file}", env!("CARGO_MANIFEST_DIR")))
-            .expect("read source");
+    let src_dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
+    let mut checked: Vec<String> = Vec::new();
+    let mut scanned_the_rollups = false;
+
+    for entry in std::fs::read_dir(&src_dir).expect("read src dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).expect("read source");
+        if !src.contains("duckdb") {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        // The scope materialization is the heart of the rollups; seeing it proves
+        // the grep is looking at real query text and not just at type imports.
+        scanned_the_rollups |= src.contains("stats_scope");
+        checked.push(file.clone());
+
         for (line_no, line) in src.lines().enumerate() {
             // Prose about the constraint is fine; SQL that uses it is not.
             let code = line.trim_start();
@@ -216,4 +244,16 @@ fn shipped_sql_contains_no_extension_dependent_constructs() {
             }
         }
     }
+
+    // A grep that silently matched nothing would pass forever. These two say the
+    // scan actually reached the DuckDB code.
+    assert!(
+        checked.len() >= 2,
+        "expected the mirror and the rollups to be scanned, found {checked:?}"
+    );
+    assert!(
+        scanned_the_rollups,
+        "no scanned file builds `stats_scope` — the rollup SQL was not checked \
+         (moved to a file that does not mention duckdb?). Scanned: {checked:?}"
+    );
 }

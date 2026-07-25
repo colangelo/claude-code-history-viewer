@@ -25,7 +25,6 @@ pub mod search;
 pub mod state;
 pub mod stats;
 pub mod stats_api;
-pub mod stats_duck;
 pub mod tz_spans;
 
 use axum::extract::DefaultBodyLimit;

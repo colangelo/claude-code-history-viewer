@@ -1,7 +1,7 @@
 //! Statistics endpoints: `GET /v1/stats/global`, `/v1/stats/projects/{key}`,
 //! `/v1/stats/sessions/{id}`.
 //!
-//! Thin HTTP layer over [`crate::stats_duck`] — parameter parsing, identity
+//! Thin HTTP layer over [`crate::stats`] — parameter parsing, identity
 //! expansion and not-found handling. All the aggregation (and the dedup rule
 //! that makes it correct) lives in that module.
 //!
@@ -34,8 +34,7 @@ use crate::auth::Authenticated;
 use crate::error::HubError;
 use crate::mirror::MirrorState;
 use crate::state::AppState;
-use crate::stats::Window;
-use crate::stats_duck::{self, SessionRef};
+use crate::stats::{self, SessionRef, Window};
 
 /// How long to tell a caller to wait while the mirror builds.
 ///
@@ -162,7 +161,7 @@ pub async fn global(
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<GlobalStatsSummary>), HubError> {
     let w = params.window()?;
-    let (headers, summary) = with_mirror(&state, move |c| Ok(stats_duck::global(c, &w)?)).await?;
+    let (headers, summary) = with_mirror(&state, move |c| Ok(stats::global(c, &w)?)).await?;
     Ok((headers, Json(summary)))
 }
 
@@ -182,7 +181,7 @@ pub async fn project(
     let w = params.window()?;
     let include_worktrees = params.include_worktrees.unwrap_or(true);
     let (headers, summary) = with_mirror(&state, move |c| {
-        let paths = stats_duck::resolve_identity_paths(c, &identity_key, include_worktrees)?;
+        let paths = stats::resolve_identity_paths(c, &identity_key, include_worktrees)?;
         if paths.is_empty() {
             // An unknown identity expands to nothing. Returning zeroed
             // statistics would be indistinguishable from a real-but-idle
@@ -191,8 +190,8 @@ pub async fn project(
                 "no project identity {identity_key}"
             )));
         }
-        let name = stats_duck::identity_display_name(c, &identity_key, &paths)?;
-        Ok(stats_duck::project(c, name, paths, &w)?)
+        let name = stats::identity_display_name(c, &identity_key, &paths)?;
+        Ok(stats::project(c, name, paths, &w)?)
     })
     .await?;
     Ok((headers, Json(summary)))
@@ -209,7 +208,7 @@ pub async fn session(
     let w = params.window()?;
     let (headers, stats) = with_mirror(&state, move |c| {
         let absent = || HubError::NotFound(format!("no session {session_ref}"));
-        let pk = match stats_duck::resolve_session_ref(c, &session_ref)? {
+        let pk = match stats::resolve_session_ref(c, &session_ref)? {
             SessionRef::Found(pk) => pk,
             SessionRef::Absent => return Err(absent()),
             SessionRef::Ambiguous(ids) => {
@@ -223,7 +222,7 @@ pub async fn session(
                 )))
             }
         };
-        stats_duck::session(c, pk, &w)?.ok_or_else(absent)
+        stats::session(c, pk, &w)?.ok_or_else(absent)
     })
     .await?;
     Ok((headers, Json(stats)))

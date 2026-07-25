@@ -5,9 +5,19 @@
 //! block, so a plain SUM over `messages` over-reports. Everything else in this
 //! module is comparatively mechanical.
 //!
+//! These assertions were written against the Postgres rollups and are unchanged
+//! now that the rollups read the `DuckDB` mirror (change
+//! `hub-stats-duckdb-mirror`, task 4.6): the *only* edit was to fold ingested
+//! rows into the mirror before reading, which the helpers below do so each test
+//! body stays exactly as it was. Every semantic expectation surviving verbatim is
+//! the point of keeping them.
+//!
 //! Requires a reachable Postgres via `TEST_DATABASE_URL` (or `DATABASE_URL`).
 
 use archive_protocol::{IngestBatch, IngestMessage, IngestProject, IngestSession, MachineInfo};
+use history_core::models::{GlobalStatsSummary, ProjectStatsSummary, SessionTokenStats};
+use hub::config::MirrorConfig;
+use hub::mirror::Mirror;
 use hub::stats::{self, Window};
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
@@ -28,6 +38,9 @@ struct TestHub {
     machine_id: Uuid,
     pool: PgPool,
     project_path: String,
+    /// The read model the rollups run against. Its own file per test, so one
+    /// test's refresh cannot decide another's readiness.
+    mirror: Mirror,
 }
 
 async fn spawn() -> TestHub {
@@ -51,6 +64,14 @@ async fn spawn() -> TestHub {
         axum::serve(listener, app).await.unwrap();
     });
 
+    let dir = std::env::temp_dir().join(format!("cchv-stats-{machine_id}"));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let mirror = Mirror::open_or_create(&MirrorConfig {
+        path: Some(dir.join("stats.duckdb")),
+        ..MirrorConfig::default()
+    })
+    .expect("open mirror");
+
     TestHub {
         base: format!("http://{addr}"),
         token,
@@ -58,6 +79,7 @@ async fn spawn() -> TestHub {
         pool,
         // Per-test path so scoped rollups never see another test's rows.
         project_path: format!("/tmp/proj-{machine_id}"),
+        mirror,
     }
 }
 
@@ -153,15 +175,49 @@ fn text() -> Value {
     json!([{ "type": "text", "text": "hi" }])
 }
 
-async fn project_stats(hub: &TestHub) -> history_core::models::ProjectStatsSummary {
-    stats::project(
-        &hub.pool,
-        "proj".into(),
-        vec![hub.project_path.clone()],
-        &Window::default(),
-    )
-    .await
-    .unwrap()
+/// Fold everything ingested so far into the mirror and hand back a connection.
+///
+/// Every rollup below reads through here, so the "ingest then assert" shape of
+/// the original tests survives: the refresh is the one step the mirror adds, and
+/// putting it in the helper keeps it out of thirteen test bodies.
+async fn mirrored(hub: &TestHub) -> duckdb::Connection {
+    hub.mirror
+        .refresh(&hub.pool)
+        .await
+        .expect("refresh stats mirror");
+    hub.mirror.connection().expect("mirror connection")
+}
+
+async fn project_stats(hub: &TestHub) -> ProjectStatsSummary {
+    project_stats_in(hub, &Window::default()).await
+}
+
+async fn project_stats_in(hub: &TestHub, w: &Window) -> ProjectStatsSummary {
+    let conn = mirrored(hub).await;
+    stats::project(&conn, "proj".into(), vec![hub.project_path.clone()], w).unwrap()
+}
+
+async fn session_stats(hub: &TestHub, pk: i64) -> Option<SessionTokenStats> {
+    session_stats_in(hub, pk, &Window::default()).await
+}
+
+async fn session_stats_in(hub: &TestHub, pk: i64, w: &Window) -> Option<SessionTokenStats> {
+    let conn = mirrored(hub).await;
+    stats::session(&conn, pk, w).unwrap()
+}
+
+async fn session_pk(hub: &TestHub, session: &str) -> i64 {
+    sqlx::query_scalar("SELECT id FROM sessions WHERE machine_id = $1 AND session_id = $2")
+        .bind(hub.machine_id)
+        .bind(session)
+        .fetch_one(&hub.pool)
+        .await
+        .expect("session pk")
+}
+
+async fn global_stats(hub: &TestHub) -> GlobalStatsSummary {
+    let conn = mirrored(hub).await;
+    stats::global(&conn, &Window::default()).unwrap()
 }
 
 #[tokio::test]
@@ -463,28 +519,18 @@ async fn daily_and_heatmap_bucket_in_the_requested_timezone() {
     );
     assert_eq!(post_ingest(&hub, &b).await, 200);
 
-    let utc = stats::project(
-        &hub.pool,
-        "proj".into(),
-        vec![hub.project_path.clone()],
-        &Window::default(),
-    )
-    .await
-    .unwrap();
+    let utc = project_stats(&hub).await;
     assert_eq!(utc.daily_stats[0].date, "2026-07-20");
     assert_eq!(utc.activity_heatmap[0].hour, 23);
 
-    let rome = stats::project(
-        &hub.pool,
-        "proj".into(),
-        vec![hub.project_path.clone()],
+    let rome = project_stats_in(
+        &hub,
         &Window {
             tz: chrono_tz::Europe::Rome,
             ..Window::default()
         },
     )
-    .await
-    .unwrap();
+    .await;
     assert_eq!(rome.daily_stats[0].date, "2026-07-21", "day did not shift");
     assert_eq!(rome.activity_heatmap[0].hour, 1, "hour did not shift");
 }
@@ -538,9 +584,7 @@ async fn date_window_narrows_the_aggregate() {
         to: Some("2026-07-25".parse().unwrap()),
         tz: chrono_tz::UTC,
     };
-    let s = stats::project(&hub.pool, "proj".into(), vec![hub.project_path.clone()], &w)
-        .await
-        .unwrap();
+    let s = project_stats_in(&hub, &w).await;
     assert_eq!(s.total_messages, 1);
     assert_eq!(s.token_distribution.input, 20);
 }
@@ -694,19 +738,13 @@ async fn session_scope_returns_that_session_only_and_404s_on_unknown() {
             .await
             .unwrap();
 
-    let s = stats::session(&hub.pool, pk, &Window::default())
-        .await
-        .unwrap()
-        .expect("session stats");
+    let s = session_stats(&hub, pk).await.expect("session stats");
     assert_eq!(s.session_id, "s1");
     assert_eq!(s.total_input_tokens, 11, "leaked another session's tokens");
     assert_eq!(s.message_count, 1);
     assert_eq!(s.summary.as_deref(), Some("a session"));
 
-    assert!(stats::session(&hub.pool, -1, &Window::default())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(session_stats(&hub, -1).await.is_none());
 }
 
 #[tokio::test]
@@ -744,7 +782,7 @@ async fn model_and_provider_breakdowns_are_deduped_too() {
     );
     assert_eq!(post_ingest(&hub, &b).await, 200);
 
-    let g = stats::global(&hub.pool, &Window::default()).await.unwrap();
+    let g = global_stats(&hub).await;
     let model = g
         .model_distribution
         .iter()
@@ -759,4 +797,79 @@ async fn model_and_provider_breakdowns_are_deduped_too() {
         .iter()
         .any(|p| p.provider_id == "claude"));
     assert!(g.total_messages >= 1);
+}
+
+/// Design D3, kept from the differential gate that has now been retired with the
+/// implementation it compared against.
+///
+/// `usage_row` is decided once over the whole archive rather than per window, so
+/// a logical message whose rows straddle a window edge attributes its usage to
+/// the **global** group minimum — which can sit outside the window. Postgres,
+/// which deduplicated *after* windowing, attributed it to the earliest row
+/// inside. Measured on the live archive: 10 of 2,648,869 dedup groups straddle a
+/// date boundary, and it only matters when a window edge falls exactly there.
+///
+/// Asserted rather than left to be rediscovered as a bug, and asserted in both
+/// directions: the mirror can *under*-attribute a straddling group, never double
+/// count it.
+#[tokio::test]
+async fn a_group_straddling_the_window_edge_attributes_usage_outside_it() {
+    let hub = spawn().await;
+    // One logical message (one `messageId`, one usage block) stored either side
+    // of midnight UTC.
+    let b = batch(
+        &hub,
+        "s1",
+        vec![
+            tok_msg(
+                "s1",
+                "k1",
+                "2026-07-23T23:59:30Z",
+                Some("msg_straddle"),
+                None,
+                1000,
+                0,
+                None,
+                text(),
+            ),
+            tok_msg(
+                "s1",
+                "k2",
+                "2026-07-24T00:00:30Z",
+                Some("msg_straddle"),
+                None,
+                1000,
+                0,
+                None,
+                text(),
+            ),
+        ],
+    );
+    assert_eq!(post_ingest(&hub, &b).await, 200);
+    let pk = session_pk(&hub, "s1").await;
+
+    let all = session_stats_in(&hub, pk, &Window::default())
+        .await
+        .expect("session stats");
+    assert_eq!(
+        all.total_input_tokens, 1000,
+        "unbounded, the group is still counted exactly once — never doubled"
+    );
+
+    let later = session_stats_in(
+        &hub,
+        pk,
+        &Window {
+            from: Some("2026-07-24".parse().unwrap()),
+            to: Some("2026-07-24".parse().unwrap()),
+            tz: chrono_tz::UTC,
+        },
+    )
+    .await
+    .expect("session stats");
+    assert_eq!(
+        later.total_input_tokens, 0,
+        "the group's usage row is the 23:59:30 one, outside this window — the \
+         documented D3 divergence from the Postgres original, which reported 1000"
+    );
 }
