@@ -125,24 +125,37 @@ pub fn tool_uses(
         }
     }
 
-    // Top-level shape: result is on the same record, so resolve it here.
-    if let Some(name) = raw
-        .get("toolUse")
-        .and_then(|tu| tu.get("name"))
-        .and_then(Value::as_str)
-    {
-        rows.push(ToolUseRow {
-            seq,
-            tool_name: name.to_owned(),
-            tool_use_id: None,
-            skill_name: None,
-            subagent_type: None,
-            is_error: raw
-                .get("toolUseResult")
-                .and_then(|r| r.get("is_error"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        });
+    // Top-level shape — a FALLBACK, not an addition.
+    //
+    // On Claude records it is a redundant restatement of the content-array
+    // invocation on the SAME record, so emitting both would double every tool
+    // count. Measured on pg1 (2% sample of 2.64M messages, 2026-07-25): of the
+    // 2,551 assistant rows carrying both shapes, the top-level name matched an
+    // array `tool_use` name in 2,551 — 100%, zero divergences — and every one of
+    // those rows held exactly one array item. The desktop oracle runs both paths
+    // unconditionally and therefore double-counts; that is not worth
+    // reproducing (same reasoning as D10).
+    //
+    // Kept as a fallback so records that carry ONLY this shape still count.
+    if rows.is_empty() {
+        if let Some(name) = raw
+            .get("toolUse")
+            .and_then(|tu| tu.get("name"))
+            .and_then(Value::as_str)
+        {
+            rows.push(ToolUseRow {
+                seq,
+                tool_name: name.to_owned(),
+                tool_use_id: None,
+                skill_name: None,
+                subagent_type: None,
+                is_error: raw
+                    .get("toolUseResult")
+                    .and_then(|r| r.get("is_error"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            });
+        }
     }
 
     rows
@@ -296,13 +309,25 @@ mod tests {
     }
 
     #[test]
-    fn both_shapes_in_one_message_get_distinct_ordinals() {
+    fn top_level_shape_is_suppressed_when_the_content_array_already_counted_it() {
+        // Measured on pg1: when both shapes are present the top-level name
+        // always restates the single array invocation. Counting both doubles
+        // every Claude tool count — the oracle's behavior, not reproduced here.
         let content = json!([{ "type": "tool_use", "id": "toolu_1", "name": "Read", "input": {} }]);
+        let raw = json!({ "toolUse": { "name": "Read" } });
+        let rows = tool_uses(Some("assistant"), Some(&content), &raw);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tool_name, "Read");
+        assert_eq!(rows[0].tool_use_id, Some("toolu_1".to_owned()));
+    }
+
+    #[test]
+    fn top_level_shape_still_counts_when_there_is_no_content_array_invocation() {
+        let content = json!([{ "type": "text", "text": "x" }]);
         let raw = json!({ "toolUse": { "name": "Bash" } });
         let rows = tool_uses(Some("assistant"), Some(&content), &raw);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].seq, 0);
-        assert_eq!(rows[1].seq, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tool_name, "Bash");
     }
 
     #[test]

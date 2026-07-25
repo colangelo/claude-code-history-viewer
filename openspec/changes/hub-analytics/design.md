@@ -213,6 +213,33 @@ exactly as precise as the pairing itself. Joining through `messages` twice would
 have avoided the denormalization, but the join is on the whole-archive hot path
 and the composite index is what keeps it selective.
 
+### D12 — The top-level `toolUse` shape is a fallback, not an addition
+
+On Claude records the top-level `toolUse` is a **redundant restatement** of the
+content-array `tool_use` on the same record. Counting both doubles every tool
+count.
+
+Measured on pg1 (2% sample of 2.64M messages, 2026-07-25): of 2,551 assistant
+rows carrying both shapes, the top-level name matched an array `tool_use` name
+in **2,551 — 100%, zero divergences**, and every one held exactly one array item.
+Top-level `toolUse` appears on assistant rows only; `tool_result` items appear on
+user rows.
+
+The extractor therefore emits the top-level row only when the record produced no
+content-array invocation, preserving coverage for records that carry only that
+shape. The oracle runs both paths unconditionally and double-counts; per D10's
+reasoning that is not worth reproducing.
+
+**Gate consequence:** tool/skill/subagent *counts* join success rate as
+deliberately divergent — hub counts will be roughly half the oracle's wherever
+Claude records carry both shapes. Token, cost, message, session and activity
+figures must still match exactly.
+
+> Probe note for whoever re-measures: `raw ? 'toolUse'` is **useless as a
+> filter** — it is true for every row, because `ClaudeMessage::tool_use` has no
+> `skip_serializing_if`, so `raw` always carries `"toolUse": null`. Filter on
+> `raw->'toolUse'->>'name' IS NOT NULL` instead.
+
 ## Risks / Trade-offs
 
 - **`uuid` fallback is not stable across re-parses** → `history-core` fills a
@@ -279,11 +306,32 @@ silently dropped; worth its own issue, and out of scope for this change.
 so reverting the hub binary is sufficient; the migration can stay in place
 harmlessly since nothing else reads the new column or table.
 
+## Measured corpus (pg1, read-only, 2026-07-25)
+
+Task 3.1. Extrapolations are from a 2% `TABLESAMPLE SYSTEM`.
+
+| Measure | Value |
+|---|---|
+| `messages` rows | **2,643,609** (6.4 GB total relation size) |
+| `sessions` / `projects` | 4,012 / 193 |
+| Rows carrying `messageId` | **10.6%** → ~280,000 to backfill |
+| Rows where `raw->'message'->>'id'` hits | **0** — confirms D1 against production |
+| Content-array `tool_use` items | ~4.8% of rows → ~128,000 invocations |
+| `tool_result` items | ~4.8% of rows → ~127,000 outcomes |
+| Provider mix | claude 2,632,835 · codex 9,122 · pi 1,506 · zed 124 · cursor 116 · gemini 7 |
+
+`messageId` presence (10.6%) tracks the assistant-row share (10.9%) closely,
+which is the expected shape: assistant responses carry the id, other record types
+do not.
+
+Backfill is therefore ~280k targeted UPDATEs plus ~255k derived-row inserts over
+a 6.4 GB table — batched and resumable, not a single statement. Sizing the
+batches and the index build is task 3.2/3.4.
+
 ## Open Questions
 
-- Backfill magnitude for `message_id` and tool rows is unmeasured. Step 3 must
-  begin with a `COUNT` and an `EXPLAIN` before the batch job is sized. This is a
-  measurement, not a design decision, so it does not block implementation.
+- None blocking. Batch size and the `messages (message_id)` index shape are to be
+  chosen against `EXPLAIN` on the real table during tasks 3.2 and 3.4.
 - Whether per-session statistics need pagination. The desktop had
   `PaginatedTokenStats` for listing many sessions' stats; the hub endpoints here
   are single-session and single-project, so pagination is deferred until the UI

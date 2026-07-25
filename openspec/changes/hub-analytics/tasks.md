@@ -17,7 +17,7 @@
 
 ## 3. Backfill
 
-- [ ] 3.1 Measure first: `COUNT(*)` over `messages`, count of rows where `raw->>'messageId'` is non-null, and `EXPLAIN` the extraction — record the numbers in the change before sizing the job (design Open Questions)
+- [x] 3.1 Measure first: `COUNT(*)` over `messages`, count of rows where `raw->>'messageId'` is non-null, and `EXPLAIN` the extraction — record the numbers in the change before sizing the job (design Open Questions)
 - [ ] 3.2 Write a resumable, idempotent batch backfill for `message_id` over existing rows, re-runnable without double work
 - [ ] 3.3 Extend the backfill to populate `message_tool_uses` and `message_tool_results` from stored `content`, sharing the extractors from 2.2 and 2.3 (design D4 — one code path for live and backfill)
 - [ ] 3.4 Create the `messages (message_id)` index concurrently once the backfill has drained
@@ -45,7 +45,7 @@
 ## 6. Verification gate
 
 - [ ] 6.1 Build a comparison harness that runs the desktop analytics and the hub endpoints over the same scope and window and diffs the stat structs field by field
-- [ ] 6.2 Compare global statistics; investigate and resolve every discrepancy — a difference is a bug in the new implementation until proven otherwise. **Carve-out:** `ToolUsageStats.success_rate` is expected to differ, because the oracle scores every content-array invocation as a success (design D10). Assert the divergence is in that direction only — hub success rate ≤ oracle's — and that no other field differs
+- [ ] 6.2 Compare global statistics; investigate and resolve every discrepancy — a difference is a bug in the new implementation until proven otherwise. **Carve-outs (two, both deliberate):** `ToolUsageStats.success_rate` differs because the oracle scores every content-array invocation as a success (D10); tool/skill/subagent *counts* differ because the oracle counts the top-level `toolUse` and the content-array `tool_use` as two invocations when they are one (D12). Assert both divergences are one-directional — hub success rate ≤ oracle's, hub tool counts ≤ oracle's — and that token, cost, message, session and activity fields all match exactly
 - [ ] 6.3 Compare per-project statistics for at least one multi-machine, multi-path identity, and per-session statistics for a tool-heavy session
 - [ ] 6.4 Record the comparison results in the change; **Deliverable 2 is blocked until this passes**
 
