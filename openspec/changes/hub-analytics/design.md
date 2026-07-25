@@ -436,6 +436,30 @@ temp table and aggregating over that halved it, with byte-identical output.
 the archive's mass is recent: 2.25M of 2.53M messages fall in the last month, so
 "last 30 days" is most of the corpus. Cost is ~linear at ~8 µs/message.
 
+**Per-statement breakdown (pg1, global scope, 2.54M messages):**
+
+| Statement | Time |
+|---|---|
+| Materialization (dedup + sort) | 3.56 s |
+| daily | 2.20 s |
+| totals (+ range + duration folded) | 1.30 s |
+| providers | 1.27 s |
+| top projects | 1.24 s |
+| heatmap | 0.97 s |
+| tools/skills/subagents (one pass) | 0.70 s |
+| models | 0.26 s |
+
+Two guesses were measured and refuted before this table existed, which is why it
+is here: the three tool queries were folded into one `VALUES`-lateral pass on
+the assumption that the repeated join dominated (it is 0.70 s — it never did),
+and that change moved the endpoint 13.9 s → 13.7 s. **The real pattern is
+`count(DISTINCT …)`**, which dominates `daily`, `providers` and `top_projects`.
+
+Consequently the expression index is worth ~15%, not the fix: it targets only
+the 3.56 s materialization and would not eliminate it. The folding is kept
+anyway — one query for three collections is simpler than three near-identical
+ones — but it is honestly recorded as a performance no-op.
+
 Remaining options, in increasing order of commitment:
 
 1. **Expression index** `(session_id, COALESCE(message_id, uuid, id::text), id)`

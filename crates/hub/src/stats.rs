@@ -129,6 +129,7 @@ async fn materialize_scope(
 
 type DailyRow = (String, i64, i64, i64, i64, i64, i64, Option<f64>);
 type ModelRow = (String, i64, i64, i64, i64, i64, i64, Option<f64>);
+/// Totals plus the date range and summed session duration, from one scan.
 type TotalsRow = (
     Option<i64>,
     Option<i64>,
@@ -139,6 +140,10 @@ type TotalsRow = (
     i64,
     i64,
     Option<i64>,
+    Option<String>,
+    Option<String>,
+    i32,
+    i64,
 );
 
 /// Sum of the four token columns, as SQL. Repeated in several rollups, so it
@@ -150,7 +155,7 @@ const TOKEN_SUM: &str = "coalesce(sum(coalesce(input_tokens,0) + coalesce(output
 /// Token/cost totals, message and session counts, and cost coverage.
 async fn totals(tx: &mut sqlx::PgConnection) -> sqlx::Result<TotalsRow> {
     sqlx::query_as::<_, TotalsRow>(
-        r"
+        r#"
         SELECT sum(input_tokens)::bigint,
                sum(output_tokens)::bigint,
                sum(cache_creation_tokens)::bigint,
@@ -161,8 +166,16 @@ async fn totals(tx: &mut sqlx::PgConnection) -> sqlx::Result<TotalsRow> {
                count(*) FILTER (WHERE cost_usd IS NOT NULL),
                count(*),
                count(DISTINCT session_id),
-               count(DISTINCT project_id)
-          FROM stats_scope",
+               count(DISTINCT project_id),
+               -- Folded in rather than separate statements: each one would be
+               -- another full scan of a 2.5M-row temp table.
+               to_char(min("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
+               to_char(max("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
+               coalesce(date_part('day', max("timestamp") - min("timestamp")), 0)::int,
+               (SELECT coalesce(sum(EXTRACT(EPOCH FROM (last - first)) / 60), 0)::bigint
+                  FROM (SELECT session_id, min("timestamp") AS first, max("timestamp") AS last
+                          FROM stats_scope GROUP BY session_id) s)
+          FROM stats_scope"#,
     )
     .fetch_one(&mut *tx)
     .await
@@ -222,8 +235,8 @@ async fn heatmap(tx: &mut sqlx::PgConnection, tz: &str) -> sqlx::Result<Vec<Acti
         .collect())
 }
 
-/// Which tool-name column a usage rollup groups by.
-#[derive(Clone, Copy)]
+/// Which usage collection a row belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ToolKind {
     Tool,
     Skill,
@@ -231,16 +244,22 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    fn column(self) -> &'static str {
+    fn tag(self) -> &'static str {
         match self {
-            Self::Tool => "u.tool_name",
-            Self::Skill => "u.skill_name",
-            Self::Subagent => "u.subagent_type",
+            Self::Tool => "tool",
+            Self::Skill => "skill",
+            Self::Subagent => "subagent",
         }
     }
 }
 
-/// Tool / skill / subagent usage with a *resolved* success rate.
+/// All three usage collections — tools, skills, subagents — in ONE pass.
+///
+/// Previously three near-identical queries, each re-joining
+/// `message_tool_uses` to the scope and to the outcomes. That join is the most
+/// expensive part of a summary, so the `VALUES` lateral fans each invocation
+/// out into whichever collections it belongs to and groups them together,
+/// paying for the join once instead of three times.
 ///
 /// Success is resolved by `LEFT JOIN`ing the outcome that reports on the
 /// invocation, preferring it over the invocation's own flag (design D10):
@@ -254,38 +273,55 @@ impl ToolKind {
 ///
 /// `avg_execution_time` is `None`: `duration_ms` is a per-message figure and
 /// cannot be attributed to one invocation of several in that message.
-async fn tools(
+async fn all_tool_usage(
     tx: &mut sqlx::PgConnection,
-    kind: ToolKind,
-    limit: i64,
-) -> sqlx::Result<Vec<ToolUsageStats>> {
-    let col = kind.column();
-    let sql = format!(
-        "SELECT {col},
-                count(*)::bigint,
-                count(*) FILTER (WHERE NOT COALESCE(r.is_error, u.is_error, false))::bigint
-           FROM message_tool_uses u
-           JOIN stats_scope d ON d.id = u.message_ref
-           LEFT JOIN message_tool_results r
-                  ON r.session_id = u.session_id AND r.tool_use_id = u.tool_use_id
-          WHERE {col} IS NOT NULL
-          GROUP BY 1 ORDER BY 2 DESC LIMIT $1"
-    );
-    let rows: Vec<(String, i64, i64)> =
-        sqlx::query_as(&sql).bind(limit).fetch_all(&mut *tx).await?;
-    Ok(rows
-        .into_iter()
-        .map(|(name, uses, ok)| ToolUsageStats {
-            tool_name: name,
-            usage_count: uses.max(0) as u32,
-            success_rate: if uses > 0 {
-                ok as f32 / uses as f32
-            } else {
-                0.0
-            },
-            avg_execution_time: None,
-        })
-        .collect())
+    limit: usize,
+) -> sqlx::Result<(
+    Vec<ToolUsageStats>,
+    Vec<ToolUsageStats>,
+    Vec<ToolUsageStats>,
+)> {
+    let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+        r"
+        SELECT k.kind, k.name,
+               count(*)::bigint,
+               count(*) FILTER (WHERE NOT COALESCE(r.is_error, u.is_error, false))::bigint
+          FROM message_tool_uses u
+          JOIN stats_scope d ON d.id = u.message_ref
+          LEFT JOIN message_tool_results r
+                 ON r.session_id = u.session_id AND r.tool_use_id = u.tool_use_id
+          CROSS JOIN LATERAL (VALUES ('tool', u.tool_name),
+                                     ('skill', u.skill_name),
+                                     ('subagent', u.subagent_type)) AS k(kind, name)
+         WHERE k.name IS NOT NULL
+         GROUP BY 1, 2
+         ORDER BY 3 DESC
+        ",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let take = |kind: ToolKind| -> Vec<ToolUsageStats> {
+        rows.iter()
+            .filter(|r| r.0 == kind.tag())
+            .take(limit)
+            .map(|r| ToolUsageStats {
+                tool_name: r.1.clone(),
+                usage_count: r.2.max(0) as u32,
+                success_rate: if r.2 > 0 {
+                    r.3 as f32 / r.2 as f32
+                } else {
+                    0.0
+                },
+                avg_execution_time: None,
+            })
+            .collect()
+    };
+    Ok((
+        take(ToolKind::Tool),
+        take(ToolKind::Skill),
+        take(ToolKind::Subagent),
+    ))
 }
 
 async fn models(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ModelStats>> {
@@ -340,34 +376,6 @@ async fn providers(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProviderUsag
         .collect())
 }
 
-/// First/last message and the span between them.
-async fn date_range(tx: &mut sqlx::PgConnection) -> sqlx::Result<DateRange> {
-    let r: (Option<String>, Option<String>, i32) = sqlx::query_as(
-        r#"SELECT to_char(min("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
-                  to_char(max("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
-                  coalesce(date_part('day', max("timestamp") - min("timestamp")), 0)::int
-             FROM stats_scope"#,
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    Ok(DateRange {
-        first_message: r.0,
-        last_message: r.1,
-        days_span: r.2.max(0) as u32,
-    })
-}
-
-/// Summed session wall-clock, in minutes.
-async fn session_duration_minutes(tx: &mut sqlx::PgConnection) -> sqlx::Result<i64> {
-    sqlx::query_scalar(
-        r#"SELECT coalesce(sum(EXTRACT(EPOCH FROM (last - first)) / 60), 0)::bigint
-             FROM (SELECT session_id, min("timestamp") AS first, max("timestamp") AS last
-                     FROM stats_scope GROUP BY session_id) s"#,
-    )
-    .fetch_one(&mut *tx)
-    .await
-}
-
 async fn top_projects(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProjectRanking>> {
     let sql = format!(
         "SELECT coalesce(p.name, p.project_path, '(unknown)'),
@@ -410,6 +418,7 @@ pub async fn global(pool: &PgPool, w: &Window) -> sqlx::Result<GlobalStatsSummar
 
     let t = totals(&mut tx).await?;
     let dist = distribution(&t);
+    let tool_usage = all_tool_usage(&mut tx, 20).await?;
     let out = GlobalStatsSummary {
         total_projects: t.8.unwrap_or(0).max(0) as u32,
         total_sessions: t.7.max(0) as u32,
@@ -417,14 +426,18 @@ pub async fn global(pool: &PgPool, w: &Window) -> sqlx::Result<GlobalStatsSummar
         total_tokens: total_tokens(&dist),
         total_cost_usd: t.4,
         cost_reported_messages: t.5.max(0) as u32,
-        total_session_duration_minutes: session_duration_minutes(&mut tx).await?.max(0) as u64,
-        date_range: date_range(&mut tx).await?,
+        total_session_duration_minutes: t.12.max(0) as u64,
+        date_range: DateRange {
+            first_message: t.9.clone(),
+            last_message: t.10.clone(),
+            days_span: t.11.max(0) as u32,
+        },
         token_distribution: dist,
         daily_stats: daily(&mut tx, &w.tz).await?,
         activity_heatmap: heatmap(&mut tx, &w.tz).await?,
-        most_used_tools: tools(&mut tx, ToolKind::Tool, 20).await?,
-        most_used_skills: tools(&mut tx, ToolKind::Skill, 20).await?,
-        most_used_subagents: tools(&mut tx, ToolKind::Subagent, 20).await?,
+        most_used_tools: tool_usage.0,
+        most_used_skills: tool_usage.1,
+        most_used_subagents: tool_usage.2,
         provider_distribution: providers(&mut tx).await?,
         model_distribution: models(&mut tx).await?,
         top_projects: top_projects(&mut tx).await?,
@@ -452,13 +465,14 @@ pub async fn project(
     let t = totals(&mut tx).await?;
     let dist = distribution(&t);
     let sessions = t.7.max(0) as usize;
-    let duration = session_duration_minutes(&mut tx).await?.max(0) as u32;
+    let duration = t.12.max(0) as u32;
     let heat = heatmap(&mut tx, &w.tz).await?;
     let most_active_hour = heat
         .iter()
         .max_by_key(|h| h.activity_count)
         .map_or(0, |h| h.hour);
     let tokens = total_tokens(&dist);
+    let tool_usage = all_tool_usage(&mut tx, 20).await?;
     let out = ProjectStatsSummary {
         project_name: name,
         total_sessions: sessions,
@@ -478,9 +492,9 @@ pub async fn project(
         },
         total_session_duration: duration,
         most_active_hour,
-        most_used_tools: tools(&mut tx, ToolKind::Tool, 20).await?,
-        most_used_skills: tools(&mut tx, ToolKind::Skill, 20).await?,
-        most_used_subagents: tools(&mut tx, ToolKind::Subagent, 20).await?,
+        most_used_tools: tool_usage.0,
+        most_used_skills: tool_usage.1,
+        most_used_subagents: tool_usage.2,
         daily_stats: daily(&mut tx, &w.tz).await?,
         activity_heatmap: heat,
         token_distribution: dist,
@@ -514,7 +528,7 @@ pub async fn session(
 
     let t = totals(&mut tx).await?;
     let dist = distribution(&t);
-    let range = date_range(&mut tx).await?;
+
     let out = SessionTokenStats {
         session_id: provider_session_id,
         project_name: project_name.unwrap_or_else(|| "(unknown)".to_string()),
@@ -526,10 +540,10 @@ pub async fn session(
         total_tokens: total_tokens(&dist),
         total_cost_usd: t.4,
         message_count: t.6.max(0) as usize,
-        first_message_time: range.first_message.unwrap_or_default(),
-        last_message_time: range.last_message.unwrap_or_default(),
+        first_message_time: t.9.clone().unwrap_or_default(),
+        last_message_time: t.10.clone().unwrap_or_default(),
         summary,
-        most_used_tools: tools(&mut tx, ToolKind::Tool, 20).await?,
+        most_used_tools: all_tool_usage(&mut tx, 20).await?.0,
     };
     tx.commit().await?;
     Ok(Some(out))
