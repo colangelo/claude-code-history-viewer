@@ -25,13 +25,13 @@
 
 ## 4. Dedup and rollups
 
-- [ ] 4.1 Implement the dedup CTE as a single reusable query fragment (design D5): `DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text))`, ordered so one row per identifier survives
-- [ ] 4.2 Test the dedup rule directly: repeated `usage` blocks sharing a `message_id` count once; distinct `uuid`s with no `message_id` each count once; rows with neither are never collapsed
-- [ ] 4.3 Implement token/cost rollups (input, output, cache-creation, cache-read, reasoning, total, cost) composed over the dedup CTE, with `cost_usd` reported as "where reported" rather than coalesced to zero (design risk)
-- [ ] 4.4 Implement tool, skill, and subagent usage rollups over `message_tool_uses`, producing `ToolUsageStats` for `most_used_tools`, `most_used_skills` (by `skill_name`) and `most_used_subagents` (by `subagent_type`)
-- [ ] 4.4b Resolve success rate with a LEFT JOIN to `message_tool_results` on `tool_use_id`, as `COALESCE(r.is_error, u.is_error, false)` (design D10); guard the join against fan-out if an invocation id ever has more than one recorded outcome
-- [ ] 4.5 Implement daily buckets (`DailyStats`) and the hour/day heatmap (`ActivityHeatmap`) with server-side `AT TIME ZONE` conversion from a caller-supplied IANA timezone defaulting to UTC (design D7)
-- [ ] 4.6 Implement per-model (`ModelStats`) and per-provider (`ProviderUsageStats`) breakdowns
+- [x] 4.1 Implement the dedup CTE as a single reusable query fragment (design D5): `DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text))`, ordered so one row per identifier survives
+- [x] 4.2 Test the dedup rule directly: repeated `usage` blocks sharing a `message_id` count once; distinct `uuid`s with no `message_id` each count once; rows with neither are never collapsed
+- [x] 4.3 Implement token/cost rollups (input, output, cache-creation, cache-read, reasoning, total, cost) composed over the dedup CTE, with `cost_usd` reported as "where reported" rather than coalesced to zero (design risk)
+- [x] 4.4 Implement tool, skill, and subagent usage rollups over `message_tool_uses`, producing `ToolUsageStats` for `most_used_tools`, `most_used_skills` (by `skill_name`) and `most_used_subagents` (by `subagent_type`)
+- [x] 4.4b Resolve success rate with a LEFT JOIN to `message_tool_results` on `tool_use_id`, as `COALESCE(r.is_error, u.is_error, false)` (design D10); guard the join against fan-out if an invocation id ever has more than one recorded outcome
+- [x] 4.5 Implement daily buckets (`DailyStats`) and the hour/day heatmap (`ActivityHeatmap`) with server-side `AT TIME ZONE` conversion from a caller-supplied IANA timezone defaulting to UTC (design D7)
+- [x] 4.6 Implement per-model (`ModelStats`) and per-provider (`ProviderUsageStats`) breakdowns
 
 ## 5. Endpoints
 

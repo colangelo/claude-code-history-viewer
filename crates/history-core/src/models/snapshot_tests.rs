@@ -364,6 +364,7 @@ mod stats_snapshots {
             total_cache_read_tokens: 500,
             total_reasoning_tokens: 0,
             total_tokens: 9000,
+            total_cost_usd: None,
             message_count: 50,
             first_message_time: "2025-01-01T08:00:00Z".to_string(),
             last_message_time: "2025-01-01T17:00:00Z".to_string(),
@@ -384,6 +385,7 @@ mod stats_snapshots {
             message_count: 100,
             session_count: 5,
             active_hours: 8,
+            cost_usd: None,
         };
 
         assert_json_snapshot!("daily_stats", stats);

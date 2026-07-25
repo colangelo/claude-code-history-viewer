@@ -379,6 +379,41 @@ UPDATE messages SET message_id = NULL;   -- or ALTER TABLE ... DROP COLUMN
 TRUNCATE message_tool_uses, message_tool_results;
 ```
 
+## The dedup rule, measured on the live archive (2026-07-25)
+
+Read-only on pg1, the whole archive:
+
+| | Naive `SUM` | Deduplicated |
+|---|---|---|
+| Tokens | 40,962,494,393 | **19,864,402,131** |
+| Rows | 2,670,049 | 2,526,385 |
+
+**A naive rollup over-reports tokens by 51.5%.** Only 5.4% of rows collapse, but
+they are the assistant responses carrying repeated `usage` blocks, so they
+dominate the totals. This is the number that justifies migration `0005` and the
+`message_id` column: without them the dedup key cannot be expressed, and every
+token and cost figure the archive reports is roughly double the truth.
+
+## A Non-Goal amended: cost fields added to the stat types
+
+The design listed "changing `crates/history-core/src/models/stats.rs`" as a
+Non-Goal, because reusing the types verbatim is what keeps the UI port
+mechanical. But **none of them carried cost**, and cost-over-time is one of the
+four requested metrics, so there was no home for it.
+
+Resolved by *additive* fields only — `total_cost_usd` / `cost_usd` (both
+`Option<f64>` with `skip_serializing_if`, so absent rather than null) plus
+`cost_reported_messages` on the two summaries. Existing JSON snapshots are
+byte-identical and the migrated frontend types still compile unchanged; only
+consumers that want cost need to know about them.
+
+`Option`, never `0.0`: most providers report no cost, and a zero would read as
+"free" rather than "unknown". `cost_reported_messages` exists so a consumer can
+say "cost across N of M messages" instead of implying full coverage.
+
+`total_reasoning_tokens` stays 0 — `TokenUsage` in history-core has no reasoning
+field at all, so the oracle's value is 0 too. Parity, not a gap.
+
 ## Open Questions
 
 - None blocking. Batch size and the `messages (message_id)` index shape are to be

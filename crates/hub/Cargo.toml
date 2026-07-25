@@ -13,6 +13,9 @@ workspace = true
 
 [dependencies]
 archive-protocol = { path = "../protocol" }
+# Stat response types are reused verbatim from the parser library, so the
+# migrated frontend keeps its types and only swaps data source (design D9).
+history-core = { path = "../history-core" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
 tower = "0.5"

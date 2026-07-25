@@ -21,6 +21,7 @@ pub mod journal;
 pub mod pagination;
 pub mod search;
 pub mod state;
+pub mod stats;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
