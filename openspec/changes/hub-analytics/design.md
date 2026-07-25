@@ -474,7 +474,16 @@ Remaining options, in increasing order of commitment:
    is a genuine design change rather than a tuning pass.
 
 Not decided here — it is a product judgement about whether an analytics page may
-take several seconds on first load.
+take several seconds on first load. **Tracked with full research and sizing in
+cchv Gitea #24**, including two further measurements taken while writing it up:
+
+- `work_mem` on pg1 is **4 MB**, so the dedup sort spilling ~60 MB per worker is
+  unavoidable at that setting. `SET LOCAL work_mem` inside the stats transaction
+  is the cheapest experiment — no schema change, no production write — and it
+  likely makes the expression index redundant.
+- A precomputed hourly rollup would be **10,559 rows** and a tool-daily rollup
+  **4,488** — ~15k rows versus 2.54M messages, a ~240× reduction, which is what
+  makes option 3 the only path to sub-second.
 
 ## An honest gap: no cost data exists
 
