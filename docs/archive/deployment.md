@@ -504,15 +504,19 @@ against:
   three rows as unfiltered `limit=3` (ids 272 / 590461 / 590033 at baseline);
   **must become an empty list**.
 - `GET /v1/sessions?limit=1` and `GET /v1/projects?limit=1` → today carry no
-  `X-Total-Count` response header; **must carry one**. ⚠ **Do not assert this
-  with an unanchored grep.** Every response from the current `v0.15.0` hub
-  already contains `access-control-expose-headers: x-total-count` as CORS
-  config — present even where the header itself is absent — so
-  `curl -D - … | grep -i x-total-count` passes on the OLD binary and would
-  report a swap that never happened. Fourth member of the marker-trap family
-  (v0.11.1 class fragment, v0.14.0 CSS chunk, v0.15.0 installed-file re-hash).
-  Anchor on the header line itself: `grep -iE '^x-total-count:'`, or read
-  `curl -sw '%{header_json}'` and check the key.
+  `X-Total-Count` response header; **must carry one**. ⚠ **Always anchor this
+  grep — the decoy is permanent, not a pre-swap hazard.** The hub's CorsLayer
+  (`crates/hub/src/lib.rs` `expose_headers`, router-wide since `3e718bd6`)
+  puts `access-control-expose-headers: x-total-count` on **every** response —
+  healthz included — and `345f3459` does not touch `lib.rs`, so the NEW
+  binary emits it too. An unanchored `curl -D - … | grep -i x-total-count`
+  therefore passes on the old binary (reporting a swap that never happened)
+  **and** passes post-swap for the wrong reason — as would every future
+  header probe against this hub. Fourth member of the marker-trap family
+  (v0.11.1 class fragment, v0.14.0 CSS chunk, v0.15.0 installed-file
+  re-hash), and the first that never retires. Anchor on the header line
+  itself: `grep -iE '^x-total-count:'`, or read `curl -sw '%{header_json}'`
+  and check the key.
 - `GET /v1/sessions/<uuid>/messages?limitt=1` → 200 today, **must become
   400**. (The messages endpoint already sent `X-Total-Count` pre-fix, so the
   header is not a probe there.)
