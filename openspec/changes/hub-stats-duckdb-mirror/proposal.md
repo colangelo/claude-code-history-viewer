@@ -55,7 +55,9 @@ existed only to hide an 18 s computation. At 0.4 s you simply run the query.
 
 - The hub gains a **derived read model**: a DuckDB file holding a narrow
   projection of `messages`, `sessions`, `projects` and both tool tables
-  (119 MB for 2.8M messages), refreshed incrementally from Postgres.
+  (size unverified: the 119 MB originally recorded here is probably an order of
+  magnitude low — measured for real in task 6.5), refreshed incrementally from
+  Postgres.
 - `/v1/stats/*` reads only from the mirror. The Postgres rollups are **replaced,
   not kept as a fallback** — two ports of eight rollups would drift.
 - A background refresher appends new rows on an interval — idempotently, over an

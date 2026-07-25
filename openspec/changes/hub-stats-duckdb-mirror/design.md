@@ -18,7 +18,7 @@ ingest ──▶ Postgres (system of record; unchanged)
                 │  refresher, every N minutes:
                 │  SELECT … WHERE id > watermark − overlap   ← incremental, idempotent
                 ▼
-          DuckDB mirror  (~/.config/cchv/stats-mirror.duckdb, 119 MB)
+          DuckDB mirror  (~/.config/cchv/stats-mirror.duckdb)
           • narrow projection + usage_row / conversational, computed at refresh
                 │
                 ▼  ~0.4 s
@@ -257,7 +257,7 @@ runs Postgres, which is what the mirror reads *from*.
 | ICU / timezone support | **REAL, and task 1.1 got it backwards** — `AT TIME ZONE` needs `icu` for every zone and `icu` cannot be statically linked from the published crate. Handled by computing offsets in Rust with `chrono-tz` (D7), guarded by `duckdb_capability_test.rs`, and verified against Postgres across a DST transition by the differential gate |
 | Binary size / CI build time | **MEASURED, task 1.2**: +40 MB (hub 14 MB → ~54 MB), statically linked with no dylib dependency, ~873 s CPU to build. On a 3-core macos-14 runner that is roughly +5 min, taking the release job from ~5 min to ~10 min. Acceptable; the prebuilt-libduckdb fallback is not needed |
 | Sync DuckDB API on an async server | rollups run on `spawn_blocking` with cloned connections; without this every stats request parks a tokio worker for ~0.4 s and nothing in the gates would catch it |
-| Disk on m4m | 119 MB today, grows with the archive — headroom check goes in the deploy relay |
+| Disk on m4m | **Size unverified, and the recorded 119 MB is probably wrong by an order of magnitude.** Three non-comparable figures exist: 119 MB (original estimate), 579 MB (a `CREATE TABLE AS` copy of 2.82M messages, no PK, extra materialized column), and 355 B/row measured on the real builder over 205k synthetic rows — which extrapolates to ~1 GB at 2.8M, and is a floor since synthetic rows carry no `message_id`. 121 GiB is free, so headroom is not the question; **the relay must quote the number measured in task 6.5, not any of these** |
 | DuckDB resources on a shared box | set explicit `memory_limit` **and** `threads`; m4m also runs the distiller and daemon |
 | Port fidelity | differential gate against the outgoing implementation, then the oracle gate |
 
