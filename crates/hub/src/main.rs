@@ -7,6 +7,7 @@ cchv-hub — archive hub
 
 USAGE:
     hub                                  serve (default)
+    hub migrate                          apply pending migrations, then exit
     hub backfill-analytics [--batch N]   derive analytics fields over stored messages
 ";
 
@@ -37,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None => hub::run().await,
+        Some("migrate") => hub::run_migrate().await,
         Some("backfill-analytics") => {
             let batch = flag_i64(&args, "--batch").unwrap_or(hub::backfill::DEFAULT_BATCH);
             hub::run_backfill(batch).await

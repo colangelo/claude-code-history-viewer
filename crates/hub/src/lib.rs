@@ -149,6 +149,24 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .with_state(state)
 }
 
+/// Apply pending migrations and exit.
+///
+/// Serving and the backfill both apply migrations on startup, so this exists
+/// purely to make the DDL a *separate, observable step* during a deploy —
+/// schema first, verify, then touch data. Rolling one into the other is how you
+/// end up unable to say which half of an operation failed.
+pub async fn run_migrate() -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+    tracing::info!("migrations applied");
+    Ok(())
+}
+
 /// Load config, connect, and run the analytics backfill to completion.
 ///
 /// A separate entry point rather than a startup sweep: this is a one-time

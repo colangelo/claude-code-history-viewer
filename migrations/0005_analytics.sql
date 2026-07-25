@@ -52,6 +52,32 @@
 -- NULLs archive-wide with no migration step to notice. Keeping the extraction
 -- rule in Rust means the `raw`-format change has to confront it.
 
+-- LOCK ORDERING — this migration deadlocked against live ingest on the first
+-- attempt (pg1, 2026-07-25); the transaction rolled back cleanly and nothing
+-- was left half-applied, but the cause is worth pinning down here so it is not
+-- reintroduced.
+--
+-- The natural statement order takes locks in the OPPOSITE order to ingest:
+--   this migration : ALTER messages (ACCESS EXCLUSIVE on `messages`)
+--                    → CREATE TABLE ... REFERENCES sessions (lock on `sessions`)
+--   ingest         : INSERT sessions → INSERT messages → UPDATE sessions
+--                    (aggregates)
+-- so the migration held `messages` and wanted `sessions` while ingest held
+-- `sessions` and wanted `messages`. A textbook cycle, and `lock_timeout` does
+-- NOT save you: the deadlock detector fires first, and the migration aborts.
+--
+-- Fix: take the locks UP FRONT, in ingest's order. Ingest can never hold
+-- `messages` without already holding `sessions`, so acquiring `sessions` first
+-- makes a cycle impossible — the migration either proceeds, or waits out
+-- `lock_timeout` and aborts cleanly for a later retry. That makes this safe to
+-- run against live traffic rather than needing a maintenance window.
+SET lock_timeout = '5s';
+
+LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE messages IN ACCESS EXCLUSIVE MODE;
+
+-- Metadata-only in PG 11+ (no default), so the lock is held for microseconds
+-- once acquired.
 ALTER TABLE messages ADD COLUMN message_id TEXT;
 
 -- Partial: ~89% of rows have no provider message id (only assistant responses
