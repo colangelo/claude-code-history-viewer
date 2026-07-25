@@ -353,7 +353,7 @@ async fn all_tool_usage(
 
 async fn models(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ModelStats>> {
     let sql = format!(
-        "SELECT model, count(*)::bigint, {TOKEN_SUM},
+        "SELECT model, count(*) FILTER (WHERE conversational)::bigint, {TOKEN_SUM},
                 coalesce(sum(input_tokens),0)::bigint,
                 coalesce(sum(output_tokens),0)::bigint,
                 coalesce(sum(cache_creation_tokens),0)::bigint,
@@ -386,7 +386,10 @@ async fn providers(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProviderUsag
         "SELECT provider,
                 count(DISTINCT project_id)::bigint,
                 count(DISTINCT session_id)::bigint,
-                count(*)::bigint,
+                -- Conversational, matching `total_messages`. Counting every
+                -- stored row here made one project report more messages than
+                -- the whole archive total, on the same screen.
+                count(*) FILTER (WHERE conversational)::bigint,
                 {TOKEN_SUM}
            FROM stats_scope WHERE usage_row GROUP BY 1 ORDER BY 4 DESC"
     );
@@ -407,7 +410,7 @@ async fn top_projects(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProjectRa
     let sql = format!(
         "SELECT coalesce(p.name, p.project_path, '(unknown)'),
                 count(DISTINCT d.session_id)::bigint,
-                count(*)::bigint,
+                count(*) FILTER (WHERE d.conversational)::bigint,
                 {TOKEN_SUM}
            FROM stats_scope d LEFT JOIN projects p ON p.id = d.project_id
           WHERE d.usage_row

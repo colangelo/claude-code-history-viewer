@@ -97,7 +97,7 @@
   "analytics.projectTokens": "專案權杖：{{count}}個",
   "analytics.providerDistribution": "供應商分佈",
   "analytics.providerDistributionMeta": "{{sessions}} 個會話 • {{projects}} 個專案",
-  "analytics.providerScopeProjectTree": "供應商範圍遵循專案樹中的供應商分頁。",
+  "analytics.providerScopeProjectTree": "提供方範圍涵蓋整個封存。",
   "analytics.rank": "第{{rank}}名",
   "analytics.recentActivity": "最近7天活動趨勢",
   "analytics.recentActivityTrend": "最近7天活動趨勢",

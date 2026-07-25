@@ -97,7 +97,7 @@
   "analytics.projectTokens": "プロジェクトトークン：{{count}}個",
   "analytics.providerDistribution": "プロバイダ分布",
   "analytics.providerDistributionMeta": "{{sessions}}セッション · {{projects}}プロジェクト",
-  "analytics.providerScopeProjectTree": "プロバイダの範囲はプロジェクトツリーのプロバイダタブに従います。",
+  "analytics.providerScopeProjectTree": "プロバイダー範囲はアーカイブ全体です。",
   "analytics.rank": "{{rank}} ランク",
   "analytics.recentActivity": "直近7日間のアクティビティ",
   "analytics.recentActivityTrend": "最近7日間のアクティビティ推移",

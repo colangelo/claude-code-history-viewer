@@ -97,7 +97,7 @@
   "analytics.projectTokens": "Project tokens: {{count}}",
   "analytics.providerDistribution": "Provider Distribution",
   "analytics.providerDistributionMeta": "{{sessions}} sessions · {{projects}} projects",
-  "analytics.providerScopeProjectTree": "Provider scope follows Project Tree provider tabs.",
+  "analytics.providerScopeProjectTree": "Provider scope covers the whole archive.",
   "analytics.rank": "{{rank}} rank",
   "analytics.recentActivity": "Recent 7 Days Activity",
   "analytics.recentActivityTrend": "Recent 7 Days Activity Trend",

@@ -179,10 +179,14 @@ export function AnalyticsView({ config, identities }: AnalyticsViewProps) {
       )}
 
       {global && (
-        <GlobalStatsView globalSummary={global} globalConversationSummary={null} />
+        // `globalConversationSummary` is the desktop's second pass over local
+        // files; the hub models no such split, so it is passed as the same
+        // summary rather than null — null leaves the billing card showing
+        // "Calculating" forever, which reads as a hung request.
+        <GlobalStatsView globalSummary={global} globalConversationSummary={global} />
       )}
       {project && (
-        <ProjectStatsView projectSummary={project} conversationSummary={null} />
+        <ProjectStatsView projectSummary={project} conversationSummary={project} />
       )}
 
       {!isLoading && !global && !project && !error && !unsupported && (

@@ -97,7 +97,7 @@
   "analytics.projectTokens": "项目令牌：{{count}}个",
   "analytics.providerDistribution": "提供商分布",
   "analytics.providerDistributionMeta": "{{sessions}} 个会话 • {{projects}} 个项目",
-  "analytics.providerScopeProjectTree": "提供商范围遵循项目树中的提供商标签页。",
+  "analytics.providerScopeProjectTree": "提供方范围涵盖整个归档。",
   "analytics.rank": "第{{rank}}名",
   "analytics.recentActivity": "最近7天活动趋势",
   "analytics.recentActivityTrend": "最近7天活动趋势",
