@@ -51,13 +51,13 @@
 
 ## 7. Webapp Analytics tab
 
-- [ ] 7.1 Move `src/types/analytics.ts`, `src/components/AnalyticsDashboard/`, `src/hooks/analytics/`, `src/store/slices/analyticsSlice.ts`, `src/services/analyticsApi.ts`, `src/utils/sessionAnalytics.ts` into the graph reachable from `archive-main.tsx`
-- [ ] 7.2 Rewrite `analyticsApi.ts` to call the hub over HTTP with the stored hub config and read token, replacing Tauri `invoke`
-- [ ] 7.3 Delete `AnalyticsDashboard/utils/*` client-side aggregation as each metric is served by SQL — do not port it (design D9)
-- [ ] 7.4 Add the Analytics view to the webapp navigation alongside Journal and Browse, with scope (whole archive / single identity) and date-window controls
-- [ ] 7.5 Handle a `404` from the statistics endpoints with an explanatory "hub needs upgrading" message that leaves Journal and Browse fully usable
-- [ ] 7.6 Confirm the `analytics` i18n namespace resolves in all five locales for the migrated view; add any new keys across `en`, `ko`, `ja`, `zh-CN`, `zh-TW` and run `pnpm run i18n:validate`
-- [ ] 7.7 Verify the archive webapp still builds standalone (`just archive-web-build`) with no Tauri imports pulled into the bundle
+- [x] 7.1 ~~Move the analytics files into the archive graph~~ — **no move needed**: importing `AnalyticsDashboard/views` from the new `ArchiveBrowser/AnalyticsView` makes them reachable from `archive-main.tsx` (graph grew 289 → 312 files). The desktop-only store slice and hooks were NOT pulled in; they are desktop wiring, not presentation
+- [x] 7.2 ~~Rewrite `analyticsApi.ts`~~ — **superseded**: the webapp already has a hub client (`services/hubApi.ts`), so the stats calls belong there, not in the Tauri-path `analyticsApi.ts` (which dies with Deliverable 2). Added `statsGlobal`/`statsProject` plus a typed `HubHttpError` carrying the status, which 7.5 needs
+- [x] 7.3 ~~Delete `AnalyticsDashboard/utils/*`~~ — **premise was wrong, kept deliberately**: those helpers do not aggregate raw messages. They format numbers, estimate model *pricing* from token counts, and derive growth/trend/medals — all pure functions over the stat types the hub now returns. They are the presentation layer, not superseded aggregation
+- [x] 7.4 Add the Analytics view to the webapp navigation alongside Journal and Browse, with scope (whole archive / single identity) and date-window controls
+- [x] 7.5 Handle a `404` from the statistics endpoints with an explanatory "hub needs upgrading" message that leaves Journal and Browse fully usable
+- [x] 7.6 Confirm the `analytics` i18n namespace resolves in all five locales for the migrated view; add any new keys across `en`, `ko`, `ja`, `zh-CN`, `zh-TW` and run `pnpm run i18n:validate`
+- [x] 7.7 Verify the archive webapp still builds standalone (`just archive-web-build`) — builds clean, `/v1/stats` present in the bundle. **Correction to the premise:** a 3.3 kB `tauri-*.js` chunk IS present, but it predates this change and comes from `contexts/platform` → `utils/platform.ts` runtime host detection, already imported by `archive-main.tsx`. The added views reach none of the Tauri files (verified by import-graph trace). It disappears with Deliverable 2
 
 ## 8. Quality gate and deploy
 

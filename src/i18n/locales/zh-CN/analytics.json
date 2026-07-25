@@ -196,5 +196,14 @@
   ],
   "analytics.weekend": "周末",
   "analytics.weeklyActiveDays": "每周活跃天数",
-  "analytics.weeklyActivity": "每周活动"
+  "analytics.weeklyActivity": "每周活动",
+  "analytics.scope": "范围",
+  "analytics.allProjects": "所有项目",
+  "analytics.range.30d": "30 天",
+  "analytics.range.90d": "90 天",
+  "analytics.range.all": "全部时间",
+  "analytics.hubTooOld": "此 hub 不支持分析",
+  "analytics.hubTooOldHint": "请将 hub 升级到提供 /v1/stats 的版本。日志与浏览不受影响。",
+  "analytics.scopeNotFound": "此项目标识没有统计数据",
+  "analytics.empty": "此范围内没有活动。"
 }

@@ -196,5 +196,14 @@
   ],
   "analytics.weekend": "週末",
   "analytics.weeklyActiveDays": "每週活躍天數",
-  "analytics.weeklyActivity": "每週活動"
+  "analytics.weeklyActivity": "每週活動",
+  "analytics.scope": "範圍",
+  "analytics.allProjects": "所有專案",
+  "analytics.range.30d": "30 天",
+  "analytics.range.90d": "90 天",
+  "analytics.range.all": "全部時間",
+  "analytics.hubTooOld": "此 hub 不支援分析",
+  "analytics.hubTooOldHint": "請將 hub 升級到提供 /v1/stats 的版本。日誌與瀏覽不受影響。",
+  "analytics.scopeNotFound": "此專案識別沒有統計資料",
+  "analytics.empty": "此範圍內沒有活動。"
 }

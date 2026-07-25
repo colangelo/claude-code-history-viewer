@@ -28,6 +28,7 @@ import { renderSnippet } from "@/utils/searchSnippet";
 import { getProviderLabel } from "@/utils/providers";
 import { ArchiveRenderContext } from "@/contexts/ArchiveRenderContext";
 import { JournalView } from "./JournalView";
+import { AnalyticsView } from "./AnalyticsView";
 import {
   aliasKeyByPath,
   groupProjects,
@@ -67,7 +68,7 @@ export interface ArchiveBrowserProps {
 /** Hub's max page size (`crates/hub/src/pagination.rs::MAX_LIMIT`). */
 const PAGE_SIZE = 200;
 
-type ArchiveView = "journal" | "browse";
+type ArchiveView = "journal" | "browse" | "analytics";
 
 interface OpenSession {
   ref: number | string;
@@ -631,7 +632,14 @@ export function ArchiveBrowser({
       );
       if (tabs.length === 0) return;
       const current = tabs.findIndex((tab) => tab === document.activeElement);
-      const base = current >= 0 ? current : view === "journal" ? 0 : 1;
+      const base =
+        current >= 0
+          ? current
+          : view === "journal"
+            ? 0
+            : view === "browse"
+              ? 1
+              : 2;
       const delta = e.key === "ArrowRight" ? 1 : -1;
       const next = tabs[(base + delta + tabs.length) % tabs.length]!;
       next.focus();
@@ -911,6 +919,21 @@ export function ArchiveBrowser({
           >
             {t("settings.archiveHub.journal.tab.browse")}
           </button>
+          <button
+            type="button"
+            role="tab"
+            data-testid="archive-tab-analytics"
+            aria-selected={view === "analytics"}
+            onClick={() => setView("analytics")}
+            className={cn(
+              "px-3 py-2 text-px14 border-b-2 -mb-px",
+              view === "analytics"
+                ? "border-accent text-foreground font-medium"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {t("settings.archiveHub.journal.tab.analytics")}
+          </button>
         </div>
         <button
           type="button"
@@ -945,6 +968,10 @@ export function ArchiveBrowser({
           onOpenSession={handleOpenSessionFromJournal}
           onDateChange={setJournalDate}
         />
+      ) : view === "analytics" ? (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <AnalyticsView config={config} identities={identities} />
+        </div>
       ) : (
         <div className="flex flex-1 min-h-0 gap-3">
           {/* Projects pane: identity-grouped (one entry per repo identity,

@@ -196,5 +196,14 @@
   ],
   "analytics.weekend": "Weekend",
   "analytics.weeklyActiveDays": "Weekly Active Days",
-  "analytics.weeklyActivity": "Weekly Activity"
+  "analytics.weeklyActivity": "Weekly Activity",
+  "analytics.scope": "Scope",
+  "analytics.allProjects": "All projects",
+  "analytics.range.30d": "30 days",
+  "analytics.range.90d": "90 days",
+  "analytics.range.all": "All time",
+  "analytics.hubTooOld": "This hub does not support analytics",
+  "analytics.hubTooOldHint": "Upgrade the hub to a version that provides /v1/stats. Journal and Browse are unaffected.",
+  "analytics.scopeNotFound": "No statistics for this project identity",
+  "analytics.empty": "No activity in this range."
 }
