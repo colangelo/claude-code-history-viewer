@@ -85,8 +85,15 @@ fn input_str(item: &Value, tool_name: &str, key: &str) -> Option<String> {
 ///   arrives later, via [`tool_results`].
 /// - **Top-level `toolUse`**: a `{name}` object on the record itself, whose
 ///   outcome (`toolUseResult.is_error`) rides the same record.
-pub fn tool_uses(message_type: Option<&str>, content: Option<&Value>, raw: &Value) -> Vec<ToolUseRow> {
+pub fn tool_uses(
+    message_type: Option<&str>,
+    content: Option<&Value>,
+    raw: &Value,
+) -> Vec<ToolUseRow> {
     let mut rows = Vec::new();
+    // Explicit ordinal rather than `rows.len() as i32`: the column is int4, and
+    // a silent wrap is not a failure mode worth inheriting from a cast.
+    let mut seq: i32 = 0;
 
     // Content-array path. Gated on assistant messages exactly as the oracle
     // gates it, so counts line up.
@@ -100,7 +107,7 @@ pub fn tool_uses(message_type: Option<&str>, content: Option<&Value>, raw: &Valu
                     continue;
                 };
                 rows.push(ToolUseRow {
-                    seq: rows.len() as i32,
+                    seq,
                     tool_name: name.to_owned(),
                     tool_use_id: item
                         .get("id")
@@ -113,6 +120,7 @@ pub fn tool_uses(message_type: Option<&str>, content: Option<&Value>, raw: &Valu
                     // separate, later tool_result.
                     is_error: false,
                 });
+                seq += 1;
             }
         }
     }
@@ -124,7 +132,7 @@ pub fn tool_uses(message_type: Option<&str>, content: Option<&Value>, raw: &Valu
         .and_then(Value::as_str)
     {
         rows.push(ToolUseRow {
-            seq: rows.len() as i32,
+            seq,
             tool_name: name.to_owned(),
             tool_use_id: None,
             skill_name: None,
@@ -151,6 +159,7 @@ pub fn tool_uses(message_type: Option<&str>, content: Option<&Value>, raw: &Valu
 /// providers differ on which role carries it.
 pub fn tool_results(content: Option<&Value>) -> Vec<ToolResultRow> {
     let mut rows = Vec::new();
+    let mut seq: i32 = 0;
     let Some(items) = content.and_then(Value::as_array) else {
         return rows;
     };
@@ -166,13 +175,14 @@ pub fn tool_results(content: Option<&Value>) -> Vec<ToolResultRow> {
             continue;
         };
         rows.push(ToolResultRow {
-            seq: rows.len() as i32,
+            seq,
             tool_use_id: id.to_owned(),
             is_error: item
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         });
+        seq += 1;
     }
     rows
 }

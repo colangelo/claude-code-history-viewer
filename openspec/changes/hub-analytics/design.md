@@ -193,6 +193,26 @@ exactly, and a mismatch anywhere else is still a bug. Replicating the oracle
 faithfully was rejected because a metric that reports 100% regardless of what
 happened is not worth migrating.
 
+### D11 — The invocation↔outcome join MUST be scoped by session
+
+`tool_use_id` is **not unique across the archive**. Joining
+`message_tool_results` to `message_tool_uses` on `tool_use_id` alone fans out
+across every session and machine that ever reused the same id string, silently
+multiplying invocations and corrupting success rate.
+
+Found by `analytics_extract_test`, which produced three rows where one was
+expected because sibling tests in the shared database had written results under
+the same `toolu_1` id. That is a test-database artifact in miniature, but the
+same collision is inevitable in a real archive spanning many machines and
+providers.
+
+Both tables therefore denormalize `session_id` from their owning message, and
+the join key is `(session_id, tool_use_id)` with a matching index on each side.
+An invocation and the result reporting on it always share a session, so this is
+exactly as precise as the pairing itself. Joining through `messages` twice would
+have avoided the denormalization, but the join is on the whole-archive hot path
+and the composite index is what keeps it selective.
+
 ## Risks / Trade-offs
 
 - **`uuid` fallback is not stable across re-parses** → `history-core` fills a
@@ -220,6 +240,27 @@ happened is not worth migrating.
 - **Two agents on this repo** → this change is developed in the
   `feature/hub-analytics` worktree to avoid the shared-tree contention that
   already dropped a commit once.
+- **Amending migration `0005` invalidates existing test databases** → sqlx
+  rejects a changed migration with `VersionMismatch(5)`. That is correct
+  behavior and the remedy is to recreate the scratch/test database. It is only
+  available because `0005` is unreleased and applied nowhere else; **once it
+  ships to pg1, any change must be a new migration.**
+
+### Unrelated pre-existing issue, found while running the suite
+
+`crates/hub/tests/embed_sweep_test.rs` is not isolated against itself:
+`deleting_embedding_rows_self_heals` and
+`regenerated_entry_re_embeds_on_hash_change` assert global `SweepStats.embedded`
+counts, but `journal_entries` keys on `(entry_date, project_path)` with no
+machine scoping, so the file's five tests contaminate each other when run
+concurrently. They fail under a bare `cargo test -p hub` and pass under
+`--test-threads=1`.
+
+This is masked — not fixed — by CI and the release gate both mandating
+`--test-threads=1`. Nothing in this change touches journal entries or
+embeddings, and the contamination is within that one binary rather than across
+binaries, so it is neither caused nor newly exposed here. Recorded rather than
+silently dropped; worth its own issue, and out of scope for this change.
 
 ## Migration Plan
 

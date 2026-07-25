@@ -7,13 +7,13 @@
 
 ## 2. Ingest extraction
 
-- [ ] 2.1 Add a `message_id` extraction helper in `crates/hub` reading `raw->>'messageId'` (design D1 — NOT `raw->'message'->>'id'`), with a unit test covering: assistant `msg_…` id present, snapshot-only `messageId`, and neither
-- [ ] 2.2 Add a tool-invocation extractor over the normalized `content`, returning `(tool_name, tool_use_id, skill_name, subagent_type, is_error)` per invocation; `skill_name` from `input.skill` when the tool is `Skill`, `subagent_type` from `input.subagent_type` when the tool is `Agent`, and `is_error` only for the top-level `toolUse` shape whose result rides the same record
-- [ ] 2.3 Add a tool-outcome extractor for `tool_result` content items, returning `(tool_use_id, is_error)` per result (design D10 — the invocation does not carry its own outcome)
-- [ ] 2.4 Wire all three into the ingest path so new rows populate `message_id`, `message_tool_uses`, and `message_tool_results` on insert
-- [ ] 2.5 Make tool-row and result-row writes idempotent with the message upsert (re-ingesting a message must not accumulate rows) — covers both re-ingest scenarios in the ingestion spec
-- [ ] 2.6 Unit-test extraction against fixtures for: messages with no tool use, multiple invocations in one message, `Skill` invocations naming a skill, `Agent` invocations naming a subagent type, same-record `toolUseResult` errors, and `tool_result` items referencing an invocation
-- [ ] 2.7 Test that a result ingested in a batch not containing its invocation is stored and resolves once the invocation arrives (order independence)
+- [x] 2.1 Add a `message_id` extraction helper in `crates/hub` reading `raw->>'messageId'` (design D1 — NOT `raw->'message'->>'id'`), with a unit test covering: assistant `msg_…` id present, snapshot-only `messageId`, and neither
+- [x] 2.2 Add a tool-invocation extractor over the normalized `content`, returning `(tool_name, tool_use_id, skill_name, subagent_type, is_error)` per invocation; `skill_name` from `input.skill` when the tool is `Skill`, `subagent_type` from `input.subagent_type` when the tool is `Agent`, and `is_error` only for the top-level `toolUse` shape whose result rides the same record
+- [x] 2.3 Add a tool-outcome extractor for `tool_result` content items, returning `(tool_use_id, is_error)` per result (design D10 — the invocation does not carry its own outcome)
+- [x] 2.4 Wire all three into the ingest path so new rows populate `message_id`, `message_tool_uses`, and `message_tool_results` on insert
+- [x] 2.5 Make tool-row and result-row writes idempotent with the message upsert (re-ingesting a message must not accumulate rows) — covers both re-ingest scenarios in the ingestion spec
+- [x] 2.6 Unit-test extraction against fixtures for: messages with no tool use, multiple invocations in one message, `Skill` invocations naming a skill, `Agent` invocations naming a subagent type, same-record `toolUseResult` errors, and `tool_result` items referencing an invocation
+- [x] 2.7 Test that a result ingested in a batch not containing its invocation is stored and resolves once the invocation arrives (order independence)
 
 ## 3. Backfill
 

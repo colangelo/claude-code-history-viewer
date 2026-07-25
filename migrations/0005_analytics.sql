@@ -64,6 +64,13 @@ CREATE TABLE message_tool_uses (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     message_ref  BIGINT      NOT NULL
         REFERENCES messages (id) ON DELETE CASCADE,
+    -- Denormalized from the owning message so an invocation can be joined to
+    -- its outcome by (session_id, tool_use_id). `tool_use_id` alone is NOT
+    -- unique archive-wide — providers reuse the id space across sessions and
+    -- machines — so joining on it alone FANS OUT and corrupts success rate.
+    -- Caught by analytics_extract_test.
+    session_id   BIGINT      NOT NULL
+        REFERENCES sessions (id) ON DELETE CASCADE,
     -- Ordinal of the invocation within its message. Together with message_ref
     -- this makes re-extraction idempotent: the extractor upserts on this key,
     -- so re-ingesting a message cannot accumulate duplicate invocation rows.
@@ -101,9 +108,10 @@ CREATE INDEX message_tool_uses_skill_name_idx
 CREATE INDEX message_tool_uses_subagent_type_idx
     ON message_tool_uses (subagent_type) WHERE subagent_type IS NOT NULL;
 
--- Joining an invocation to its outcome.
-CREATE INDEX message_tool_uses_tool_use_id_idx
-    ON message_tool_uses (tool_use_id) WHERE tool_use_id IS NOT NULL;
+-- Joining an invocation to its outcome. Scoped by session on purpose — see
+-- the session_id column note.
+CREATE INDEX message_tool_uses_session_tool_use_idx
+    ON message_tool_uses (session_id, tool_use_id) WHERE tool_use_id IS NOT NULL;
 
 
 -- Tool OUTCOMES, extracted from the `tool_result` content items that report
@@ -129,6 +137,11 @@ CREATE TABLE message_tool_results (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     message_ref  BIGINT      NOT NULL
         REFERENCES messages (id) ON DELETE CASCADE,
+    -- See message_tool_uses.session_id: this is the other half of the scoped
+    -- join key. An invocation and the result reporting on it ALWAYS share a
+    -- session, which is what makes the pairing well-defined.
+    session_id   BIGINT      NOT NULL
+        REFERENCES sessions (id) ON DELETE CASCADE,
     seq          INTEGER     NOT NULL,
     tool_use_id  TEXT        NOT NULL,
     is_error     BOOLEAN     NOT NULL DEFAULT false,
@@ -137,5 +150,5 @@ CREATE TABLE message_tool_results (
 );
 
 -- The join key from message_tool_uses.
-CREATE INDEX message_tool_results_tool_use_id_idx
-    ON message_tool_results (tool_use_id);
+CREATE INDEX message_tool_results_session_tool_use_idx
+    ON message_tool_results (session_id, tool_use_id);
