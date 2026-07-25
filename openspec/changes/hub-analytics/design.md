@@ -579,3 +579,69 @@ correct); the crate builds again.
   `PaginatedTokenStats` for listing many sessions' stats; the hub endpoints here
   are single-session and single-project, so pagination is deferred until the UI
   shows it is needed.
+
+
+## Handoff — resuming at group 8
+
+State as of 2026-07-25, written for a fresh context.
+
+**Where the work is.** Worktree `~/_sync/dev/claude-code-history-viewer.feature-hub-analytics`,
+branch `feature/hub-analytics`, pushed to `internal` (17 commits ahead of `main`,
+NOT on `origin`). The shared tree at `~/_sync/dev/claude-code-history-viewer` is
+another agent's and is often write-locked — work in the worktree.
+
+**Progress: 40/45 tasks.** Groups 1–7 done and verified. Remaining is group 8:
+8.1 frontend gate, 8.2 Rust gate, 8.3 merge + release, 8.4 deploy relay, 8.5 live
+verify.
+
+### Production is ALREADY changed — this is the thing to know
+
+Migration `0005` is **applied to pg1** and the backfill has **run to completion**
+(2026-07-25, 09:51Z and 10:04Z). `messages.message_id` is populated (271,752
+rows), and `message_tool_uses` / `message_tool_results` hold 132,342 / 132,168
+rows. The live m4m hub binary is **unchanged** and was never restarted; the new
+column is nullable and the old binary never touches the new tables. Infra was
+notified by relay (home-network `f1a6aa3`), no action requested.
+
+Consequence for 8.4: the deploy is a hub **binary swap** (infra's, per
+`docs/archive/deployment.md` §2b) plus a webapp `static_dir` swap — the schema
+work is already done. **Re-run `hub backfill-analytics` after the swap** to catch
+messages the old binary ingested in the meantime; it is idempotent and resumable.
+
+Rollback, if ever needed — everything written is new, so it is not a restore:
+
+```sql
+UPDATE messages SET message_id = NULL;
+TRUNCATE message_tool_uses, message_tool_results;
+```
+
+### Gotchas that cost real time here
+
+- **`raw` is the flat normalized `ClaudeMessage`**, not the original JSONL line.
+  The provider id is at `raw->>'messageId'`; `raw->'message'->>'id'` matches
+  **zero** rows archive-wide (verified). Same trap: `raw ? 'toolUse'` is true for
+  every row because the field serializes as `null` — filter on
+  `raw->'toolUse'->>'name' IS NOT NULL`.
+- **Dedup applies to usage, never to tool invocations.** One response is streamed
+  across several records sharing a `message.id` and `usage` block, but each
+  record carries different content blocks.
+- **`tool_use_id` is not unique archive-wide** — join outcomes on
+  `(session_id, tool_use_id)`, and collapse them with `bool_or` first or the
+  LEFT JOIN fans out.
+- **Migrations must take locks in ingest's order** (`sessions`, then `messages`)
+  or they deadlock against live ingest. `lock_timeout` does not help.
+- **`cargo test` needs `--test-threads=1`** (CI does this); `embed_sweep_test` is
+  not self-isolating and fails without it. Unrelated pre-existing issue.
+- **Local verification of migrations needs `psql -1`** — `LOCK TABLE` requires a
+  transaction block, which sqlx provides and psql autocommit does not.
+- Changing `history-core` stat types breaks **struct literals** in `src-tauri`
+  even when serde-compatible, and `rust-tests.yml` builds that crate.
+
+### Known-open, deliberately not fixed
+
+- **Performance**: `/v1/stats/global` ~13.7 s over 2.5M messages. Fully
+  researched in **cchv Gitea #24** with measurements and three costed options;
+  the cheapest untried lever is `SET LOCAL work_mem` (pg1 is at 4 MB, so the
+  dedup sort must spill).
+- **No cost data exists**: `cost_reported_messages` is 0 archive-wide. The
+  displayed "Estimated Cost" comes from client-side model pricing, not `costUSD`.
