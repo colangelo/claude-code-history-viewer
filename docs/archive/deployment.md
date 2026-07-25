@@ -321,8 +321,9 @@ block untouched — `no-store` is scoped to `/v1/*`). Recorded infra-side in
 `hosts/m4m.md`, home-network `bd04e4e`.
 
 **2026-07-25, hub `v0.13.1` → `v0.14.0` (thread `7bf6a920`) — ALL THREE STEPS
-LANDED and verified from both sides (infra confirm `bf77f768`; our independent
-re-probe from ac-mbm5 ~16:10).** Binary live (preswap backup
+LANDED and verified from both sides (infra confirm `bf77f768`; our re-probe
+~16:10 — see the machine correction below before citing it as independent).**
+Binary live (preswap backup
 `staging/cchv-hub-preswap-20260725-1454` = the 0.13.1 rollback point); catch-up
 `backfill-analytics` ran — the five old-binary-gap sessions
 (`587988`/`588038`/`588039`/`588076`/`588159`) report their tool rows both in
@@ -330,8 +331,15 @@ the db (infra) and through the live `/v1/stats/sessions/{id}` API (us), same
 numbers; webapp swapped — served entry chunk `archive-CEkkOQjO.js`, old
 `archive-0BmPzvZw.js` 404s, Analytics tab renders. Hub analytics: the
 swap-proof probe is a **new route**, which is stronger than a new header —
-`GET /v1/stats/global` 404s on `v0.13.1` (verified from ac-mbm5 pre-swap,
-13 ms) and answers 200 on `v0.14.0`. Asset
+`GET /v1/stats/global` 404s on `v0.13.1` (verified pre-swap, 13 ms) and answers
+200 on `v0.14.0`. **Correction, same day:** the pre- and post-swap probes in this
+entry were originally recorded as run "from ac-mbm5". They were not — they ran
+**on m4m itself**, the hub's own host. The timings and status codes stand (if
+anything they understate what a remote client sees, since they skip the tailnet
+hop), but they were never the independent cross-machine check the wording
+claimed. The lesson is cheap and general: **an agent should not assert which
+machine it is on without checking** — `scutil --get ComputerName` costs nothing,
+and on m4m `hostname` can report the stale Bonjour suffix `m4m-2`. Asset
 `cchv-hub-0.14.0-aarch64-apple-darwin`, sha256 `accf9daa…07b06b6`. Two things
 that made this deploy unlike the others:
 

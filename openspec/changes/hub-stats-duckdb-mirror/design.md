@@ -141,6 +141,29 @@ mirror exactly as it was and keeps serving with the age header climbing. It neve
 exits, never counts strikes, and its errors are logged distinguishably so a
 refresh failure is not read as a credential failure.
 
+## D7 — Timezone conversion needs no extension, and the port must not ask for one
+
+Measured in task 1.1 against `duckdb-rs` 1.10505.0 (DuckDB 1.5.5) with
+`bundled`, in-memory, offline:
+
+- `LOAD icu` **fails** — the extension is not bundled, and loading it would
+  require a runtime download, which is not acceptable for a service that must
+  start on a machine with no internet path to DuckDB's extension repository.
+- Every conversion the rollups need nevertheless **works**, because IANA
+  timezone support is in DuckDB core in this version: `Europe/Rome` resolves to
+  `+01` in January and `+02` in July (real DST, not a fixed offset),
+  `Asia/Kolkata` resolves to the correct half-hour offset, and `strftime`,
+  `extract(hour|dow)` and `SET TimeZone` all behave.
+
+So the risk this design was carrying — that daily and heatmap would need
+redesigning around Rust-side bucketing — does not exist. The premise (that
+`AT TIME ZONE` is ICU territory) was true of older DuckDB and is not true here.
+
+**Implementation constraint that follows:** the port MUST NOT emit `LOAD icu`.
+The spike SQL that produced this change's headline numbers did include it, and
+that statement would fail in the bundled crate. Timezone SQL is used directly,
+with no extension preamble.
+
 ## Error handling
 
 | Condition | Behaviour |
@@ -189,8 +212,8 @@ runs Postgres, which is what the mirror reads *from*.
 |---|---|
 | Silent incompleteness (skipped rows) | overlap re-scan + idempotent inserts; watermark lag on `/v1/healthz/stats` |
 | Silent staleness | age headers + `/v1/healthz/stats` + a Gatus check relayed to infra |
-| ICU / timezone support | `AT TIME ZONE` with IANA zones is an extension concern in DuckDB; verify the bundled crate links ICU statically and works **offline**, as the very first task — the one finding that could force a redesign of daily/heatmap rather than a fix |
-| Binary size / CI build time | bundled DuckDB compiles libduckdb from source: expect **tens of MB** on the binary and the macos-14 release job growing from ~4 min toward ~20 min, not a rounding error. Measured up front in task 1.2; if unacceptable, the prebuilt-libduckdb route is the fallback |
+| ~~ICU / timezone support~~ | **RESOLVED, task 1.1** — see D7. Not a risk; the premise was outdated |
+| Binary size / CI build time | **MEASURED, task 1.2**: +40 MB (hub 14 MB → ~54 MB), statically linked with no dylib dependency, ~873 s CPU to build. On a 3-core macos-14 runner that is roughly +5 min, taking the release job from ~5 min to ~10 min. Acceptable; the prebuilt-libduckdb fallback is not needed |
 | Sync DuckDB API on an async server | rollups run on `spawn_blocking` with cloned connections; without this every stats request parks a tokio worker for ~0.4 s and nothing in the gates would catch it |
 | Disk on m4m | 119 MB today, grows with the archive — headroom check goes in the deploy relay |
 | DuckDB resources on a shared box | set explicit `memory_limit` **and** `threads`; m4m also runs the distiller and daemon |
