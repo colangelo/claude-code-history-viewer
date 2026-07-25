@@ -320,13 +320,20 @@ sidecar and the GitHub API digest; pid 10517; preswap backup
 block untouched — `no-store` is scoped to `/v1/*`). Recorded infra-side in
 `hosts/m4m.md`, home-network `bd04e4e`.
 
-**2026-07-25, hub `v0.13.1` → `v0.14.0` (thread `7bf6a920`) — binary swap
-LANDED 14:55, verified green; catch-up backfill + webapp swap still pending
-(follow-up thread `615a4b5a`).** Hub analytics: the swap-proof probe is a **new route**, which is
-stronger than a new header — `GET /v1/stats/global` 404s on `v0.13.1` (verified
-from ac-mbm5 pre-swap, 13 ms) and answers 200 on `v0.14.0`. Asset
+**2026-07-25, hub `v0.13.1` → `v0.14.0` (thread `7bf6a920`) — ALL THREE STEPS
+LANDED and verified from both sides (infra confirm `bf77f768`; our independent
+re-probe from ac-mbm5 ~16:10).** Binary live (preswap backup
+`staging/cchv-hub-preswap-20260725-1454` = the 0.13.1 rollback point); catch-up
+`backfill-analytics` ran — the five old-binary-gap sessions
+(`587988`/`588038`/`588039`/`588076`/`588159`) report their tool rows both in
+the db (infra) and through the live `/v1/stats/sessions/{id}` API (us), same
+numbers; webapp swapped — served entry chunk `archive-CEkkOQjO.js`, old
+`archive-0BmPzvZw.js` 404s, Analytics tab renders. Hub analytics: the
+swap-proof probe is a **new route**, which is stronger than a new header —
+`GET /v1/stats/global` 404s on `v0.13.1` (verified from ac-mbm5 pre-swap,
+13 ms) and answers 200 on `v0.14.0`. Asset
 `cchv-hub-0.14.0-aarch64-apple-darwin`, sha256 `accf9daa…07b06b6`. Two things
-that make this deploy unlike the others:
+that made this deploy unlike the others:
 
 - **The schema landed a deploy early.** Migration `0005` and its backfill were
   applied to pg1 on 2026-07-25 (09:51Z / 10:04Z) while `v0.13.1` was still
@@ -345,7 +352,33 @@ that make this deploy unlike the others:
   marker trap again, in a new costume. Before quoting entry-chunk hashes in a
   relay, diff them against what is **live** and quote only the ones that
   actually changed (here: `assets/archive-CEkkOQjO.js`, or the string
-  `stats/global`, which exists only in the new bundle).
+  `stats/global`, which exists only in the new bundle). Infra has recorded the
+  standing rule on their side (`hosts/m4m.md`): **send one discriminating
+  marker, not two convenient ones** — a second marker that also passes on the
+  old bundle subtracts confidence rather than adding it.
+
+Two lessons from how the deploy *ran*, for the next multi-step handoff:
+
+- **A multi-step deploy does not fit in the relay handler's 900 s ceiling.**
+  This ask was delivered three times: deliveries 1 and 2 were killed at the
+  relay-supervisor timeout (`rc=124`) *after* landing side effects, so
+  delivery 3 found the binary and webapp already swapped and the backfill
+  running orphaned at `PPID 1`. Nothing was lost — only because infra's
+  2026-07-19 rule (probe live state before re-running a mutating ask) stopped
+  a blind re-swap, which would have captured the *already-swapped* binary as
+  the "pre-swap" backup and destroyed the rollback point. Until the
+  supervisor-side fix lands (tracked in home-network), **split a multi-step
+  deploy into separately-completable relays** — e.g. binary swap + rev probe
+  in one message, catch-up backfill + webapp swap in a second — so each
+  handler run finishes inside the ceiling.
+- **`/v1/stats/sessions/{id}` takes the numeric `sessions.id` row id**
+  (`Path<i64>`), so db-side row ids quoted in a relay are directly probeable
+  through the live API — that is how the backfill was cross-verified here
+  without db access. A nil UUID → 400 is the path-parse rejection, not a
+  not-found regression; unknown *numeric* id → 404 as specced. And on this
+  house deployment an unauthenticated in-tailnet request reads 200 via the
+  cchv-v0.5.0 Tailscale-identity read-auth — do not read that as an auth
+  regression when probing.
 
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
