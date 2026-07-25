@@ -58,7 +58,7 @@ property, so they get tests before implementation. Run Rust tests with
 ## 8. Land and ship
 
 - [x] 8.1 Update `docs/archive/deployment.md` §3b: rotation pickup is now automatic, and note the ~90 s detection window
-- [ ] 8.2 Merge `feature/hub-db-auth-failfast` to `main` (rebase first — `main` sees concurrent pushes) and push to `internal` + `origin`
+- [x] 8.2 Merge `feature/hub-db-auth-failfast` to `main` (rebase first — `main` sees concurrent pushes) and push to `internal` + `origin`
 - [ ] 8.3 Bump the version, `just sync-version`, commit, tag `cchv-vX.Y.Z`, push tag to both remotes
 - [ ] 8.4 Confirm CI published the release with the hub binary asset + `.sha256`
 - [ ] 8.5 Relay the §2b hub binary swap to infra as **two messages** (home-network #34): swap instructions first, then the verification ask
