@@ -31,7 +31,10 @@ file never deletes anything from the hub.
 > Postgres.** Follow `~/_sync/dev/CONTEXT/PATTERNS/shared-backends.md`: ask infra
 > (home-network agent, via the relay) to provision role `cchv` + db `cchv_archive`
 > on pg1; the credential lands in 1Password as `cchv - app role @ pg1` (vault
-> `AC-DevOps`); connect via `db.internal:5432`. You inherit pg1's
+> `AC-DevOps`) — **being superseded** by the bao-owned, self-rotating
+> `database/static-creds/cchv-svc` (home-network #31; read path and cutover in
+> §3b), after which that 1P item is historical and must not be read; connect via
+> `db.internal:5432`. You inherit pg1's
 > nightly logical backups + PVE backups for free. Never put literal passwords or
 > tokens in `hub.toml` committed anywhere — they are resolved **at launch, bao-first**
 > by `scripts/cchv-launch.sh` (see "House deployment: bao-first secrets" below).
@@ -677,6 +680,39 @@ equivalently.
   `kv/infra/cchv/hub-tokens` (`<host>_token`, `<host>_machine_id`). Read via
   AppRole `cchv-daemon` (policy `cchv-read`, token TTL 15m — fine, the token is
   only used for the reads at launch).
+- **Two kinds of secret, two read paths** (home-network #31). The hub tokens are
+  *static* values that a human minted, mirrored into `kv/`, and read with
+  `bao_kv` → `.data.data[<field>]`. The **DB password is different**: it is
+  becoming a credential bao itself owns and rotates
+  (`database/static-creds/cchv-svc`, `rotation_period=30d`), read with
+  `bao_static` → `.data.password`. Both the path and the response shape differ,
+  which is why the launcher has two functions rather than one parameterized one.
+  Resolution order for the DB password is **`bao_static cchv-svc` → the legacy
+  `kv/infra/cchv/pg1` mirror → `op` → last-known-good**; the launcher therefore
+  behaves identically before and after the static role exists, so the cutover
+  needs no synchronized deploy. Drop the mirror fallback once the 1P item
+  `cchv - app role @ pg1` is retired.
+- **The last-known-good floor is not equally valid for both.** For the static
+  tokens it is always correct. For a *rotating* DB password it expires: a restart
+  while bao is unreachable renders the previous password, which pg1 may no longer
+  accept. The launcher logs an explicit WARN naming that case, so a hub that then
+  fails to authenticate is diagnosable from the launch log instead of looking
+  like a pg1 outage. The fix in that state is to restore bao reachability — not
+  to touch pg1, and *not* to write a rotated value back into `kv/`, which would
+  re-create the hand-synced mirror #31 exists to eliminate.
+- **Cutover ordering when the static role is created** — creating it rotates the
+  pg password **immediately**, so:
+  1. install the static-creds-capable `cchv-launch` first (safe any time — it is
+     a no-op until the role exists; verify with
+     `cchv-launch hub --render-only` against a scratch `CFG_DIR` and `cmp` the
+     result with the live runtime file);
+  2. infra creates `database/static-roles/cchv-svc`;
+  3. **bounce `dev.cchv.hub` promptly** (§2b ceremony, or just
+     `launchctl bootout`/`bootstrap` — no binary change) so the launcher
+     re-renders from the rotating credential. The *running* hub keeps its open
+     pool and then fails as connections recycle; until **cchv Gitea #25**
+     (fail-fast on SQLSTATE `28P01`) ships it will not self-heal, so this bounce
+     is a required step rather than a nicety.
 - **Per-machine setup (once)**: materialize the AppRole creds file
   `~/.config/cchv/bao-approle` (`role_id=…` / `secret_id=…`, chmod 0600) from
   1P item `openbao - cchv-daemon approle` (vault `AC-DevOps`), install the
@@ -693,9 +729,16 @@ equivalently.
   previous runtime render (last-known-good) and logs a warning — a clean idle,
   not a crash-loop. `ThrottleInterval` caps `KeepAlive` respawn churn to 5 min.
   (Regression origin: 2026-07-08 m4m tailnet-down prompt storm — see CHANGELOG.)
-- **Rotation**: rotate in 1P, re-copy to bao per home-network
-  `docs/secrets-standard.md`, then `launchctl unload/load` the job — the next
-  launch re-renders.
+- **Rotation** — different per secret now:
+  - *Hub tokens (static)*: rotate in 1P, re-copy to bao per home-network
+    `docs/secrets-standard.md`, then `launchctl unload/load` the job — the next
+    launch re-renders.
+  - *DB password (bao-owned)*: **nobody rotates it by hand** — bao does, on its
+    own period. Pickup is a hub relaunch, which re-reads
+    `database/static-creds/cchv-svc`. Today that relaunch has to be triggered
+    (see the cutover ordering above); once cchv Gitea #25 lands, a sustained
+    `28P01` exits the process and `KeepAlive` does it unattended, so a rotation
+    heals itself within `ThrottleInterval`.
 
 ## 3c. Journal-entries distiller (`scripts/cchv-distill.py`)
 

@@ -25,7 +25,11 @@ copy: CONTEXT `PATTERNS/secrets.md`.
 
 Repo-specific: the cchv secrets ARE seeded in OpenBao (home-network#17, done
 2026-07-05) — `kv/infra/cchv/pg1` (hub DB creds) and `kv/infra/cchv/hub-tokens`
-(per-machine hub tokens). The always-on archive jobs (daemon + hub) are
+(per-machine hub tokens). The **hub DB password is moving out of `kv/`** to a
+credential bao owns and rotates (`database/static-creds/cchv-svc`, 30d —
+home-network #31): the launcher reads it with `bao_static` and keeps the `kv/`
+mirror only as a cutover fallback, so a rotation is picked up by relaunching the
+hub. The tokens stay in `kv/`. The always-on archive jobs (daemon + hub) are
 **bao-first** via `scripts/cchv-launch.sh` and the AppRole `cchv-daemon`
 (creds file `~/.config/cchv/bao-approle`, from 1P item
 `openbao - cchv-daemon approle`); `op read` is the fallback, a last-known-good

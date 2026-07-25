@@ -82,6 +82,21 @@ bao_kv() {
   [ -n "$val" ] && echo "$val"
 }
 
+# bao_static <role>  → password on stdout, or fail.
+# Reads a credential bao OWNS and rotates (`database/static-creds/<role>`), as
+# opposed to bao_kv's `kv/` values, which are static mirrors of human-known
+# secrets. A sibling rather than a flag on bao_kv because BOTH halves differ:
+# the path is not under `kv/data/`, and the value arrives at `.data.password`
+# rather than `.data.data[<field>]`.
+# Added for home-network #31, which retires the last human-readable DB password.
+bao_static() {
+  [ -n "$BAO_TOKEN" ] || return 1
+  local val
+  val="$(curl -sf --max-time 10 -H "X-Vault-Token: $BAO_TOKEN" \
+    "$BAO_ADDR/v1/database/static-creds/$1" | jq -r '.data.password // empty')"
+  [ -n "$val" ] && echo "$val"
+}
+
 # op_read <op://ref>  → value on stdout, or fail.
 # Contract point 3 (launchd-resilience): NEVER prompt from a headless context.
 # `op read` with desktop/Touch-ID integration pops a TCC dialog per call — under
@@ -124,8 +139,19 @@ render() {
       ;;
     hub)
       local db_pass m4m_token mbm5_token mbp_token
-      db_pass="$(resolve pg1 password \
-        "op://AC-DevOps/cchv - app role @ pg1/password")" || return 1
+      # DB password: prefer the bao-OWNED rotating credential, fall back to the
+      # legacy kv mirror (and `op`/last-known-good behind that). Trying both in
+      # this order is what makes the cutover orderable: this launcher behaves
+      # identically before the static role exists and picks the rotating
+      # credential up the moment it does, so infra can create it without a
+      # synchronized deploy. Drop the fallback once the mirror is retired.
+      if db_pass="$(bao_static cchv-svc)"; then
+        log "db password from bao static-creds/cchv-svc (bao-owned, rotating)"
+      else
+        log "static-creds/cchv-svc unavailable — falling back to the kv/infra/cchv/pg1 mirror"
+        db_pass="$(resolve pg1 password \
+          "op://AC-DevOps/cchv - app role @ pg1/password")" || return 1
+      fi
       m4m_token="$(resolve hub-tokens m4m_token \
         "op://AC-DevOps/cchv - archive hub tokens/m4m token")" || return 1
       mbm5_token="$(resolve hub-tokens ac-mbm5_token \
@@ -158,6 +184,13 @@ $content"
 if ! render; then
   if [ -s "$RUNTIME" ]; then
     log "WARN: secret resolution failed — reusing last-known-good $RUNTIME"
+    # The floor stays valid for the hub TOKENS (static values), but a cached DB
+    # password dies the moment bao rotates static-creds/cchv-svc. Name that here
+    # so a hub that then can't authenticate is diagnosable from this log alone
+    # instead of looking like a pg1 outage (home-network #31).
+    if [ "$MODE" = hub ]; then
+      log "WARN: a cached DB password is only valid until bao next rotates static-creds/cchv-svc — if this hub now fails to authenticate, this reuse is why, and the fix is to restore bao reachability, not to touch pg1"
+    fi
   else
     log "FATAL: secret resolution failed and no cached $RUNTIME exists"
     exit 1
