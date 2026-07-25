@@ -328,6 +328,57 @@ Backfill is therefore ~280k targeted UPDATEs plus ~255k derived-row inserts over
 a 6.4 GB table — batched and resumable, not a single statement. Sizing the
 batches and the index build is task 3.2/3.4.
 
+## Backfill executed and verified on pg1 (2026-07-25)
+
+Task 3.5. Migration `0005` applied 09:51:22Z, backfill completed 10:04:24Z, with
+live ingest running throughout and the hub reporting `db: up` the whole time.
+
+```
+scanned 2,655,854 · message_ids 271,752 · tool_uses 132,342 · tool_results 132,168
+```
+
+| Check | Predicted | Actual |
+|---|---|---|
+| `message_id` fill rate | 10.6% (2% sample) | **10.22%** (271,752 / 2,659,881) |
+| Invocations | ~128k | **132,342** |
+| Outcomes | ~127k | **132,168** |
+| D1 dual-purpose split | assistant ids dominate | 268,380 `msg_…` + 3,372 snapshot ids |
+
+**Transcript diff (the actual 3.5 check).** Sessions were diffed against their
+`~/.claude/projects/**.jsonl` on m4m. In every settled session **`only_disk` = 0**
+— every provider message id present on disk is in the archive with the right
+value. That is the only direction that can indict extraction, and it is clean.
+
+The reverse direction is non-zero and is *correct*: the archive holds ids the
+current file no longer does. Two causes, both confirmed:
+
+- a **live** session showed a clean prefix boundary — DB held assistant messages
+  at file positions 1–143, disk had 1–202, the remainder simply pending the next
+  ingest cycle;
+- a **settled** session held 142 extra ids whose timestamps fall *inside* the
+  file's own window, i.e. the on-disk transcript has been thinned by context
+  compaction while the archive retained the originals.
+
+An archive that is a strict superset of the live file is the entire point of the
+project, so this asymmetry is a feature under test, not a defect.
+
+**D10 payoff — success rate is now informative** rather than the oracle's flat
+~100%: Bash 94.2% over 68,865 uses (4,008 real errors), Glob 91.7%, Read 97.9%,
+TaskUpdate 99.9%.
+
+**D12 holds on real data:** zero rows where a top-level restatement
+(`tool_use_id IS NULL`) coexists with a content-array invocation on the same
+message. The 116 messages carrying repeated tool names are genuine multi-call
+messages — predominantly lowercase `read`/`bash` from Codex/Pi records, all with
+non-NULL `tool_use_id`.
+
+**Rollback, if ever needed** (nothing pre-existing was modified):
+
+```sql
+UPDATE messages SET message_id = NULL;   -- or ALTER TABLE ... DROP COLUMN
+TRUNCATE message_tool_uses, message_tool_results;
+```
+
 ## Open Questions
 
 - None blocking. Batch size and the `messages (message_id)` index shape are to be
