@@ -402,8 +402,21 @@ carried a *condition* that pass gave no evidence of meeting (an ultrawide
 viewport; a light/dark toggle), and a global sentence that closes an unnamed
 item is exactly the inference the close-in-pieces rule forbids. An attended
 look on 2026-07-25 met both conditions and the close relay named both items.
-**The backlog is now empty with nothing unnamed behind it**; it reopens on the
-next CSS-changing deploy.
+
+**…and then `74263172` itself overreached the same way** ("backlog empty,
+nothing implied"), corrected minutes later by relay `6629892c`: **still open,
+by name, is the `cchv-v0.12.0` degraded-hint CSS** (thread `3dc909f8`,
+2026-07-21 — that release's CSS was *not* byte-identical; it added utilities
+for the semantic-search "degraded" hint in the Browse search section, tracked
+in the semantic-journal-search lane's memory, not in this section — which is
+how two closes in a row missed it). The 07-25 look covered layout and
+contrast and says nothing about a conditional hint that only renders when the
+hub reports `journal_degraded: true`. To retire it: a real-window look at
+Browse search with the hint actually rendered (hub degraded or hint forced),
+relayed by name — or a code-level retire if the hint markup adds nothing
+visible outside the degraded state. **The backlog is exactly that one item.**
+Lesson for the next close: sweep *every* lane's open items (memory included)
+before writing any sentence of the form "the backlog is empty".
 
 **2026-07-24, webapp `v0.12.0` → `v0.13.0` swap (thread `c8109762`): CSS
 byte-identical.** Both trees ship the *same* chunk `archive-BBzvspm0.css` —
