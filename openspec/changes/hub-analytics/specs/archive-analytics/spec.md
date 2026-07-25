@@ -93,8 +93,10 @@ summary when present, and its most used tools.
 Statistics responses SHALL report tool usage as `ToolUsageStats` — tool name,
 invocation count, and success rate — computed from the stored tool-invocation
 records rather than by scanning message JSONB at query time. Claude `Skill`
-invocations MUST additionally be reported keyed by skill name, so a skill is
-distinguishable from the generic `Skill` tool that carries it.
+invocations MUST additionally be reported keyed by skill name, and Claude
+`Agent` invocations keyed by subagent type, so each is distinguishable from the
+generic tool that carries it. Both collections are empty for providers that
+expose no such abstraction.
 
 #### Scenario: Tool counts and success rates are reported
 
@@ -105,6 +107,11 @@ distinguishable from the generic `Skill` tool that carries it.
 
 - **WHEN** a scope contains `Skill` tool invocations naming different skills
 - **THEN** the response reports usage per skill name, not a single aggregated `Skill` entry
+
+#### Scenario: Subagents are reported by type
+
+- **WHEN** a scope contains `Agent` tool invocations naming different subagent types
+- **THEN** the response reports usage per subagent type, separately from tools and skills
 
 ### Requirement: Activity rhythm statistics
 

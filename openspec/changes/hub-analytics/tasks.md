@@ -1,9 +1,9 @@
 ## 1. Schema
 
-- [ ] 1.1 Write `migrations/0005_analytics.sql`: add nullable `messages.message_id TEXT`, and create `message_tool_uses` (surrogate id, `message_ref BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE`, `tool_name TEXT NOT NULL`, `skill_name TEXT`, `is_error BOOLEAN NOT NULL DEFAULT false`, ordering column, `created_at`)
-- [ ] 1.2 Add a `UNIQUE (message_ref, seq)` constraint on `message_tool_uses` so re-extraction is idempotent rather than accumulating rows
-- [ ] 1.3 Add the `message_tool_uses (tool_name)` and `(skill_name)` indexes needed for the usage rollups; leave the `messages (message_id)` index to task 3.4 (created concurrently after backfill)
-- [ ] 1.4 Verify the migration applies cleanly on a scratch database and is additive only (no rewrite of existing `messages` columns)
+- [x] 1.1 Write `migrations/0005_analytics.sql`: add nullable `messages.message_id TEXT`, and create `message_tool_uses` (surrogate id, `message_ref BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE`, `tool_name TEXT NOT NULL`, `skill_name TEXT`, `is_error BOOLEAN NOT NULL DEFAULT false`, ordering column, `created_at`)
+- [x] 1.2 Add a `UNIQUE (message_ref, seq)` constraint on `message_tool_uses` so re-extraction is idempotent rather than accumulating rows
+- [x] 1.3 Add the `message_tool_uses (tool_name)` and `(skill_name)` indexes needed for the usage rollups; leave the `messages (message_id)` index to task 3.4 (created concurrently after backfill)
+- [x] 1.4 Verify the migration applies cleanly on a scratch database and is additive only (no rewrite of existing `messages` columns)
 
 ## 2. Ingest extraction
 

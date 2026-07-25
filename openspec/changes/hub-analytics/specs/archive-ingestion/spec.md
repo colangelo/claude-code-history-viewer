@@ -37,9 +37,10 @@ the surrogate row `id`.
 
 Ingest SHALL extract each tool invocation from a message and persist it as a row
 associating the invocation with its message, carrying the tool name, the skill
-name when the invocation is a Claude `Skill` call, and whether the invocation
-resulted in an error. Extraction MUST happen at ingest so that tool statistics
-never require scanning message JSONB at query time.
+name when the invocation is a Claude `Skill` call, the subagent type when the
+invocation is a Claude `Agent` call, and whether the invocation resulted in an
+error. Extraction MUST happen at ingest so that tool statistics never require
+scanning message JSONB at query time.
 
 Extraction MUST be idempotent with the message upsert: re-ingesting a message
 MUST NOT accumulate duplicate invocation rows.
@@ -53,6 +54,11 @@ MUST NOT accumulate duplicate invocation rows.
 
 - **WHEN** an ingested message invokes the `Skill` tool naming a specific skill
 - **THEN** the stored invocation carries that skill name in addition to the tool name
+
+#### Scenario: Agent invocations record the subagent type
+
+- **WHEN** an ingested message invokes the `Agent` tool naming a subagent type
+- **THEN** the stored invocation carries that subagent type in addition to the tool name
 
 #### Scenario: Errored invocations are marked
 
