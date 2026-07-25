@@ -10,6 +10,7 @@ pub mod config;
 pub mod embed;
 pub mod embed_sweep;
 pub mod error;
+pub mod extract;
 pub mod fts;
 pub mod health;
 pub mod identities;
