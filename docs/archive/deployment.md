@@ -797,10 +797,23 @@ equivalently.
     launch re-renders.
   - *DB password (bao-owned)*: **nobody rotates it by hand** — bao does, on its
     own period. Pickup is a hub relaunch, which re-reads
-    `database/static-creds/cchv-svc`. Today that relaunch has to be triggered
-    (see the cutover ordering above); once cchv Gitea #25 lands, a sustained
-    `28P01` exits the process and `KeepAlive` does it unattended, so a rotation
-    heals itself within `ThrottleInterval`.
+    `database/static-creds/cchv-svc`, and since cchv Gitea #25 the hub triggers
+    that relaunch **itself**: a credential watchdog probes with a fresh
+    connection every 30 s and, after 3 consecutive `28P01` rejections (~75-90 s),
+    exits non-zero so `KeepAlive` restarts it. A rotation therefore heals
+    unattended in under two minutes with no manual bounce.
+    - Only `28P01` counts. A pg1 outage, a `MagicDNS` flake, a pool timeout or
+      any other SQLSTATE **resets** the strike run, so the hub rides out a
+      database outage exactly as before (verified end-to-end: 130 s of total DB
+      unavailability, zero strikes, process stayed up serving a `503`
+      `{"db":"down"}` health check).
+    - Reading the log after the fact: three
+      `WARN … rejected the hub's credential strikes=N limit=3` lines followed by
+      an `ERROR … appears to have been rotated` is a *successful* rotation
+      pickup, not an incident. The same pattern repeating every 5 minutes
+      (`ThrottleInterval`) is an incident — it means the relaunch is not getting
+      a valid credential, so check bao reachability per the stale-floor note
+      above.
     **The first automatic rotation is a known date: 2026-08-24T13:38:54Z**
     (`last_vault_rotation` 2026-07-25T13:38:54Z + `rotation_period` 2592000 s,
     both read live from bao by infra on 2026-07-25; relay thread `40d5df93`).

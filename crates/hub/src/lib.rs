@@ -8,6 +8,7 @@ pub mod auth;
 pub mod backfill;
 pub mod browse;
 pub mod config;
+pub mod db_watchdog;
 pub mod embed;
 pub mod embed_sweep;
 pub mod error;
@@ -236,8 +237,33 @@ pub async fn run() -> anyhow::Result<()> {
     }
     let app = router(state, config.static_dir.as_deref());
 
+    // Credential watchdog: our Postgres password is bao-owned and rotates on a
+    // 30-day period, but it is resolved once, here, at startup. Exiting on a
+    // sustained rejection is the whole recovery mechanism — launchd `KeepAlive`
+    // relaunches us through `cchv-launch`, which re-reads the rotated credential.
+    // Only SQLSTATE 28P01 counts, so a pg1 outage or DNS flake can never trip it.
+    let db_fatal = std::sync::Arc::new(tokio::sync::Notify::new());
+    tokio::spawn(db_watchdog::run_watchdog(
+        config.database_url.clone(),
+        db_fatal.clone(),
+        db_watchdog::DEFAULT_INTERVAL,
+        db_watchdog::DEFAULT_STRIKE_LIMIT,
+    ));
+
     let listener = TcpListener::bind(&config.bind_addr).await?;
     tracing::info!(addr = %config.bind_addr, "hub listening");
-    axum::serve(listener, app).await?;
+
+    // The exit decision belongs to whoever owns the server's lifetime, so the
+    // watchdog only signals and we translate that into a non-zero exit here.
+    tokio::select! {
+        served = axum::serve(listener, app) => served?,
+        () = db_fatal.notified() => {
+            anyhow::bail!(
+                "postgres rejected the hub's credential on {} consecutive probes — \
+                 exiting so the supervisor re-resolves it",
+                db_watchdog::DEFAULT_STRIKE_LIMIT
+            );
+        }
+    }
     Ok(())
 }
