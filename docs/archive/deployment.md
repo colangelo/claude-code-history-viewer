@@ -51,6 +51,44 @@ psql -d cchv_archive -c "GRANT ALL ON DATABASE cchv_archive TO cchv;"
 The hub applies the migrations in `migrations/` automatically on startup, so no
 manual migration step is required.
 
+### pg1 analytics schema (`0005`) — applied 2026-07-25, infra-verified
+
+The analytics migration (`message_id` column on `messages`, plus
+`message_tool_uses` / `message_tool_results`) and its backfill were executed
+against the live pg1 `cchv_archive` under running ingest, from the
+`feature/hub-analytics` lane (task 3.5; results in
+`openspec/changes/hub-analytics/design.md`). **Infra re-ran the counts directly
+against the live db rather than taking our report on trust** (relay `3c57d8ee`,
+home-network `073abc3`) and every figure matched: `message_tool_uses` 132,342 ·
+`message_tool_results` 132,168 · `messages.message_id NOT NULL` 271,752 · both
+new tables present · `/var/lib/postgresql` at 14G/47G (30%).
+
+Three things that outlive the ack:
+
+- **No monitoring or backup change is warranted for an additive schema.** The
+  `cchv-*` Gatus checks and pg1's nightly logical dump operate at a level new
+  columns and tables don't touch, so a migration like this needs no infra
+  follow-up. The rollback one-liner stays valid:
+  `UPDATE messages SET message_id=NULL; TRUNCATE message_tool_uses, message_tool_results;`
+- **The hub binary swap is still owed as a normal deploy relay** (§2b) when
+  Deliverable 1 lands, together with the second backfill sweep that catches rows
+  the *old* binary ingested in the meantime (task 8.4). Infra has this queued as
+  expected and has nothing pending on their side — so the swap arrives through
+  the usual §2b path, not as a surprise.
+- **Headless access to pg1 must use the FQDN** `db.internal`: bare
+  `ssh pg1` fails host-key verification on m4m (no `Host pg1` alias, and
+  `known_hosts` holds the key under the FQDN). Infra owns that alias; nothing to
+  change here, since `scripts/cchv-launch.sh` and the §1 note above already use
+  the FQDN — but a future script that shortens it would break only when run
+  unattended.
+
+One lesson from the migration is **deliberately not yet written up as a house
+standard**: `0005` must take its locks *up front, in the ingest writer's order*,
+or migration and live ingest deadlock — and `lock_timeout` does **not** save you,
+because Postgres' deadlock detector fires first. Infra flagged it as a
+`CONTEXT/PATTERNS` candidate but declined to author it from a headless poller;
+it needs an attended session (see `81683f7b` on the lane for the fix itself).
+
 ## 2. Hub (on the always-on tailnet node)
 
 Build it:
