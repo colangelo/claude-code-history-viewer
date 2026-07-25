@@ -632,6 +632,15 @@ TRUNCATE message_tool_uses, message_tool_results;
   or they deadlock against live ingest. `lock_timeout` does not help.
 - **`cargo test` needs `--test-threads=1`** (CI does this); `embed_sweep_test` is
   not self-isolating and fails without it. Unrelated pre-existing issue.
+- **The archive crates need `TEST_DATABASE_URL`, or every hub test panics** with
+  `NotPresent` — which reads like a code failure and is not. CI provides a
+  `postgres:16` service (`archive-tests.yml`); locally, the brew
+  `postgresql@18` service already has a `cchv_archive_test` database, so
+  `TEST_DATABASE_URL=postgres://ac@localhost:5432/cchv_archive_test` runs the
+  suite. Never point it at pg1: the tests run `hub::MIGRATOR` on connect.
+  Bare `cargo test` at the workspace root is also the wrong command — mirror CI:
+  `cargo test -p history-core -p archive-protocol -p hub -p sync-daemon`, and
+  the desktop crate separately from `src-tauri/`.
 - **Local verification of migrations needs `psql -1`** — `LOCK TABLE` requires a
   transaction block, which sqlx provides and psql autocommit does not.
 - Changing `history-core` stat types breaks **struct literals** in `src-tauri`
