@@ -43,11 +43,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 interface GlobalStatsViewProps {
   globalSummary: GlobalStatsSummary;
   globalConversationSummary: GlobalStatsSummary | null;
+  /** Hide the conversation/non-conversation billing split. The hub does not
+   * model that distinction, so rendering it there would show an invented
+   * 100%/0% breakdown. Defaults to shown, leaving the desktop untouched. */
+  showBillingBreakdown?: boolean;
 }
 
 export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
   globalSummary,
   globalConversationSummary,
+  showBillingBreakdown = true,
 }) => {
   const { t } = useTranslation();
   const totalSessionTime = globalSummary.total_session_duration_minutes;
@@ -139,6 +144,7 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
         />
       </div>
 
+      {showBillingBreakdown && (
       <BillingBreakdownCard
         billingTokens={billingTokens}
         conversationTokens={globalConversationSummary?.total_tokens ?? null}
@@ -146,6 +152,7 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
         conversationCost={conversationCostSummary?.totalEstimatedCost ?? null}
         showProviderLimitHelp={conversationBreakdownCoverage.hasLimitedProviders}
       />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-2 py-1 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 text-px11">

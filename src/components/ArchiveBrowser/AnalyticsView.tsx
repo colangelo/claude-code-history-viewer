@@ -179,14 +179,20 @@ export function AnalyticsView({ config, identities }: AnalyticsViewProps) {
       )}
 
       {global && (
-        // `globalConversationSummary` is the desktop's second pass over local
-        // files; the hub models no such split, so it is passed as the same
-        // summary rather than null — null leaves the billing card showing
-        // "Calculating" forever, which reads as a hung request.
-        <GlobalStatsView globalSummary={global} globalConversationSummary={global} />
+        // The hub models no conversation/non-conversation split, so that card
+        // is hidden rather than shown with an invented 100%/0% breakdown.
+        <GlobalStatsView
+          globalSummary={global}
+          globalConversationSummary={null}
+          showBillingBreakdown={false}
+        />
       )}
       {project && (
-        <ProjectStatsView projectSummary={project} conversationSummary={project} />
+        <ProjectStatsView
+          projectSummary={project}
+          conversationSummary={null}
+          showBillingBreakdown={false}
+        />
       )}
 
       {!isLoading && !global && !project && !error && !unsupported && (

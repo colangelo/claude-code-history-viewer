@@ -191,9 +191,23 @@ async fn totals(tx: &mut sqlx::PgConnection) -> sqlx::Result<TotalsRow> {
                to_char(min("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
                to_char(max("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
                coalesce(date_part('day', max("timestamp") - min("timestamp")), 0)::int,
-               (SELECT coalesce(sum(EXTRACT(EPOCH FROM (last - first)) / 60), 0)::bigint
-                  FROM (SELECT session_id, min("timestamp") AS first, max("timestamp") AS last
-                          FROM stats_scope GROUP BY session_id) s)
+               -- ACTIVE time, not wall-clock span.
+               --
+               -- Summing (last - first) per session counts every idle hour: a
+               -- session resumed across days contributes those days in full,
+               -- which rendered as "950 days of session time" inside a 30-day
+               -- window — arithmetically defensible and useless. Instead sum
+               -- the gaps between consecutive messages and ignore any gap
+               -- longer than the idle threshold, so a resumed session
+               -- contributes only the stretches actually worked.
+               --
+               -- This DIVERGES from the desktop oracle, which uses the raw
+               -- span. Deliberate, and recorded as divergence #4.
+               (SELECT coalesce(sum(gap) / 60.0, 0)::bigint
+                  FROM (SELECT EXTRACT(EPOCH FROM ("timestamp" - lag("timestamp")
+                                 OVER (PARTITION BY session_id ORDER BY "timestamp"))) AS gap
+                          FROM stats_scope WHERE "timestamp" IS NOT NULL) g
+                 WHERE gap IS NOT NULL AND gap > 0 AND gap <= 1800)
           FROM stats_scope"#,
     )
     .fetch_one(&mut *tx)

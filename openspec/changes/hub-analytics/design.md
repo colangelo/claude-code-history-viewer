@@ -536,13 +536,21 @@ Both would have shipped silently, and neither was visible to the unit tests.
    invocations. Outcomes are now collapsed with `bool_or(is_error)` grouped by
    `(session_id, tool_use_id)` before joining.
 
-### Documented divergences (3)
+### Documented divergences (4)
 
 - **`ToolUsageStats.success_rate`** (D10) — oracle reports a flat 1.0; the hub
   reports real rates (e.g. 0.951, 0.625). One-directional: hub ≤ oracle.
 - **Tool counts vs the oracle's double-count** (D12) — not observed in these two
   sessions, whose records carry the top-level restatement consistently; the
   guard remains.
+- **`total_session_duration_minutes`** — the oracle sums each session's raw
+  `last − first` span, which counts every idle hour: a session resumed across
+  days contributes those days in full, and the UI rendered "950 days of session
+  time" inside a 30-day window. Arithmetically defensible, useless as a number.
+  The hub sums the gaps between consecutive messages and ignores any gap over 30
+  minutes, so a resumed session contributes only the stretches actually worked —
+  the same 30-day window then reads 53 days, which is >30 only because many
+  agent sessions run concurrently. Deliberate divergence.
 - **`message_count`** — oracle 262/94, hub 161/44. Two compounding causes, both
   correct: the archive is cumulative (934 stored rows vs 569 lines currently on
   disk for session 275), and the two count different things. The oracle counts

@@ -26,11 +26,16 @@ interface ProjectStatsViewProps {
   projectSummary: ProjectStatsSummary | null;
   conversationSummary: ProjectStatsSummary | null;
   providerId?: ProviderId;
+  /** Hide the conversation/non-conversation billing split. The hub does not
+   * model that distinction, so rendering it there would show an invented
+   * 100%/0% breakdown. Defaults to shown, leaving the desktop untouched. */
+  showBillingBreakdown?: boolean;
 }
 
 export const ProjectStatsView: React.FC<ProjectStatsViewProps> = ({
   projectSummary,
   conversationSummary,
+  showBillingBreakdown = true,
   providerId = "claude",
 }) => {
   const { t } = useTranslation();
@@ -97,11 +102,13 @@ export const ProjectStatsView: React.FC<ProjectStatsViewProps> = ({
         />
       </div>
 
+      {showBillingBreakdown && (
       <BillingBreakdownCard
         billingTokens={billingTokens}
         conversationTokens={conversationSummary != null ? conversationSummary.total_tokens : null}
         showProviderLimitHelp={!supportsConversationBreakdown(providerId)}
       />
+      )}
 
       {/* Charts Row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
