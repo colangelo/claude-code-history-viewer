@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT COUNT(*) AS \"count!\"\n        FROM sessions s\n        LEFT JOIN projects p ON s.project_id = p.id\n        JOIN machines mac    ON s.machine_id = mac.machine_id\n        WHERE ($1::text IS NULL OR mac.hostname = $1)\n          AND ($2::text IS NULL OR s.provider = $2)\n          AND ($3::text IS NULL OR p.name = $3 OR p.project_path = $3)\n          AND ($4::text[] IS NULL OR p.project_path = ANY($4))\n          AND ($5::bigint IS NULL OR s.project_id = $5)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bdadb1312d492ee7328136fe4344187a95ded12eddcfa19aac43653a82dbbdcb"
+}

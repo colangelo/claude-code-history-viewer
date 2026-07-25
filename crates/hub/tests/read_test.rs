@@ -580,6 +580,155 @@ async fn paging_is_stable() {
 }
 
 // ---------------------------------------------------------------------------
+// Browse-list DX regressions (found scripting /v1/sessions during the v0.15.0
+// provenance check): an unknown query param silently returned the unfiltered
+// list, and the silent MAX_LIMIT clamp made a capped page indistinguishable
+// from the whole result set.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sessions_project_id_filter_narrows_results() {
+    let hub = spawn().await;
+    let b = batch(
+        &hub,
+        vec![proj("/tmp/a", "alpha"), proj("/tmp/b", "beta")],
+        vec![sess("sa", "/tmp/a"), sess("sb", "/tmp/b")],
+        vec![
+            msg("sa", "ka", 0, "2026-01-01T00:00:00Z", "in alpha"),
+            msg("sb", "kb", 0, "2026-01-01T00:00:00Z", "in beta"),
+        ],
+    );
+    ingest(&hub, &b).await;
+
+    // Resolve alpha's surrogate project id from the projects list.
+    let projects = get(
+        &hub,
+        "/v1/projects",
+        &[("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await;
+    let projects: Value = projects.json().await.unwrap();
+    let alpha_id = projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "alpha")
+        .expect("alpha project listed")["id"]
+        .as_i64()
+        .unwrap();
+
+    let resp = get(
+        &hub,
+        "/v1/sessions",
+        &[
+            ("machine", &hub.hostname),
+            ("project_id", &alpha_id.to_string()),
+        ],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let sessions: Value = resp.json().await.unwrap();
+    let arr = sessions.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "project_id must filter, not be ignored");
+    assert_eq!(arr[0]["session_id"], "sa");
+
+    // A nonexistent project id matches nothing — it must NOT fall back to the
+    // unfiltered list (the shape of the original bug).
+    let resp = get(
+        &hub,
+        "/v1/sessions",
+        &[("machine", &hub.hostname), ("project_id", "999999999")],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let sessions: Value = resp.json().await.unwrap();
+    assert_eq!(sessions.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn browse_unknown_query_params_are_rejected() {
+    let hub = spawn().await;
+    // e.g. the plausible-but-unsupported `projectid` typo: a 200 with the
+    // unfiltered list reads exactly like a real answer.
+    for path in ["/v1/projects", "/v1/sessions"] {
+        let resp = get(&hub, path, &[("projectid", "1")], Some(&hub.token)).await;
+        assert_eq!(resp.status(), 400, "{path} must 400 on unknown params");
+    }
+    let resp = get(
+        &hub,
+        "/v1/sessions/1/messages",
+        &[("bogus", "1")],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn browse_lists_report_total_count_so_truncation_is_detectable() {
+    let hub = spawn().await;
+    let projects = vec![proj("/tmp/a", "alpha")];
+    let sessions: Vec<IngestSession> = (0..3).map(|i| sess(&format!("s{i}"), "/tmp/a")).collect();
+    let messages: Vec<IngestMessage> = (0..3)
+        .map(|i| {
+            msg(
+                &format!("s{i}"),
+                &format!("k{i}"),
+                0,
+                &format!("2026-01-0{}T00:00:00Z", i + 1),
+                "x",
+            )
+        })
+        .collect();
+    ingest(&hub, &batch(&hub, projects, sessions, messages)).await;
+
+    let resp = get(
+        &hub,
+        "/v1/sessions",
+        &[("machine", &hub.hostname), ("limit", "2")],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let total = resp
+        .headers()
+        .get("x-total-count")
+        .expect("X-Total-Count header must be present on the sessions list")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        total, "3",
+        "header carries the filtered total, not page size"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body.as_array().unwrap().len(),
+        2,
+        "body is the limited page"
+    );
+
+    let resp = get(
+        &hub,
+        "/v1/projects",
+        &[("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await;
+    let total = resp
+        .headers()
+        .get("x-total-count")
+        .expect("X-Total-Count header must be present on the projects list")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(total, "1");
+}
+
+// ---------------------------------------------------------------------------
 // issue #19 — FTS prefix matching for plain queries
 // ---------------------------------------------------------------------------
 

@@ -27,7 +27,7 @@ The hub SHALL expose a `GET /v1/search` endpoint that performs Postgres full-tex
 
 ### Requirement: Browse and query endpoints
 
-The hub SHALL expose read endpoints to browse the archive: list projects, list sessions (filterable by project), and retrieve the messages of a session. Response shapes SHOULD mirror the existing webui-server endpoints so a future phase can point the desktop viewer at the hub with minimal change.
+The hub SHALL expose read endpoints to browse the archive: list projects, list sessions (filterable by project, and by hub project row id via `project_id`), and retrieve the messages of a session. Response shapes SHOULD mirror the existing webui-server endpoints so a future phase can point the desktop viewer at the hub with minimal change.
 
 The messages endpoint SHALL accept either the hub's surrogate session id or a provider session id (the `session_id` carried by search hits and session rows). A provider session id that matches sessions on more than one machine MUST be rejected with the candidate surrogate ids; an unknown session reference MUST be a `404`.
 
@@ -58,6 +58,11 @@ Messages SHALL be returned in chronological order (timestamp first, with seq and
 - **WHEN** a session's messages come from several transcript files whose seq numbering overlaps
 - **THEN** the returned order is chronological, not interleaved by per-file seq
 
+#### Scenario: Sessions filter by hub project id
+
+- **WHEN** `/v1/sessions?project_id=<id>` is queried with a project row id from `/v1/projects`
+- **THEN** only sessions of that project row (one machine + path) are returned; an unknown id yields an empty list, never the unfiltered one
+
 ### Requirement: Authentication and pagination
 
 All read endpoints SHALL require authentication — either a valid bearer
@@ -70,9 +75,12 @@ a machine identity. With the allow-list unset or empty, behavior is
 unchanged (bearer only). All read endpoints SHALL support bounded pagination
 via limit and offset, returning a stable order so that paging does not drop
 or duplicate rows. Truncation MUST be detectable: the session messages
-endpoint SHALL report the session's total message count in an
-`X-Total-Count` response header, so a client that receives a default-limit
-page (50; max 200) can tell it is partial.
+endpoint SHALL report the session's total message count, and the projects
+and sessions lists their filtered totals, in an `X-Total-Count` response
+header, so a client that receives a default-limit page (50; max 200) can
+tell it is partial. Browse endpoints SHALL reject unknown query parameters
+with `400` instead of ignoring them: an unsupported filter that silently
+returns unfiltered rows reads exactly like a real answer.
 
 #### Scenario: Unauthenticated read is rejected
 
@@ -98,6 +106,16 @@ page (50; max 200) can tell it is partial.
 
 - **WHEN** a client pages through a large result set using limit and offset
 - **THEN** each row appears in exactly one page and the overall order is consistent across pages
+
+#### Scenario: List truncation is detectable
+
+- **WHEN** a projects or sessions list request matches more rows than the (clamped) limit
+- **THEN** `X-Total-Count` carries the filtered total, so the caller can tell a capped page from the whole result set
+
+#### Scenario: Unknown query params are rejected
+
+- **WHEN** a browse endpoint is queried with a parameter it does not support (e.g. a typo of a real filter)
+- **THEN** the hub responds `400` naming the unknown parameter, instead of returning plausible-looking unfiltered rows
 
 ### Requirement: Health endpoint
 

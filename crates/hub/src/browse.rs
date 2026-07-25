@@ -1,6 +1,11 @@
 //! Browse/query endpoints: `GET /v1/projects`, `GET /v1/sessions`,
 //! `GET /v1/sessions/:id/messages`. All require a valid token and span every
 //! machine in the archive, with bounded, stable (id-tiebroken) pagination.
+//! Every response carries the filtered total in `X-Total-Count` (the limit is
+//! silently clamped to [`crate::pagination::MAX_LIMIT`], so without the total
+//! a capped page is indistinguishable from the whole result set), and unknown
+//! query params are a 400, never ignored — an unsupported filter that returns
+//! the unfiltered list reads exactly like a real answer.
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderName;
@@ -15,13 +20,27 @@ use crate::pagination::Page;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
-pub struct ListParams {
+#[serde(deny_unknown_fields)]
+pub struct ProjectListParams {
     /// Machine hostname filter.
     pub machine: Option<String>,
     pub provider: Option<String>,
-    /// Project name or path filter (sessions only), or `identity:<key>` for
-    /// server-side expansion to the identity's member + aliased paths.
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionListParams {
+    /// Machine hostname filter.
+    pub machine: Option<String>,
+    pub provider: Option<String>,
+    /// Project name or path filter, or `identity:<key>` for server-side
+    /// expansion to the identity's member + aliased paths.
     pub project: Option<String>,
+    /// Hub project surrogate id (a `/v1/projects` row id). Unlike `project`,
+    /// which can span machines, this scopes to that one (machine, path) row.
+    pub project_id: Option<i64>,
     /// In identity scope: `false` excludes worktree-only member paths.
     pub include_worktrees: Option<bool>,
     pub limit: Option<i64>,
@@ -51,9 +70,22 @@ pub struct ProjectRow {
 pub async fn list_projects(
     _auth: Authenticated,
     State(state): State<AppState>,
-    Query(params): Query<ListParams>,
-) -> Result<Json<Vec<ProjectRow>>, HubError> {
+    Query(params): Query<ProjectListParams>,
+) -> Result<([(HeaderName, String); 1], Json<Vec<ProjectRow>>), HubError> {
     let page = Page::from(params.limit, params.offset);
+    let total = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*) AS "count!"
+        FROM projects p
+        JOIN machines mac ON p.machine_id = mac.machine_id
+        WHERE ($1::text IS NULL OR mac.hostname = $1)
+          AND ($2::text IS NULL OR p.provider = $2)
+        "#,
+        params.machine,
+        params.provider,
+    )
+    .fetch_one(&state.pool)
+    .await?;
     let rows = sqlx::query!(
         r#"
         SELECT p.id              AS "id!",
@@ -84,24 +116,27 @@ pub async fn list_projects(
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| ProjectRow {
-                id: r.id,
-                provider: r.provider,
-                project_path: r.project_path,
-                name: r.name,
-                storage_type: r.storage_type,
-                session_count: r.session_count,
-                message_count: r.message_count,
-                last_modified: r.last_modified,
-                machine_id: r.machine_id,
-                machine_hostname: r.machine_hostname,
-                identity_key: r.identity_key,
-                git_worktree: r.git_worktree,
-                git_main_path: r.git_main_path,
-            })
-            .collect(),
+    Ok((
+        [(HeaderName::from_static("x-total-count"), total.to_string())],
+        Json(
+            rows.into_iter()
+                .map(|r| ProjectRow {
+                    id: r.id,
+                    provider: r.provider,
+                    project_path: r.project_path,
+                    name: r.name,
+                    storage_type: r.storage_type,
+                    session_count: r.session_count,
+                    message_count: r.message_count,
+                    last_modified: r.last_modified,
+                    machine_id: r.machine_id,
+                    machine_hostname: r.machine_hostname,
+                    identity_key: r.identity_key,
+                    git_worktree: r.git_worktree,
+                    git_main_path: r.git_main_path,
+                })
+                .collect(),
+        ),
     ))
 }
 
@@ -126,14 +161,34 @@ pub struct SessionRow {
 pub async fn list_sessions(
     _auth: Authenticated,
     State(state): State<AppState>,
-    Query(params): Query<ListParams>,
-) -> Result<Json<Vec<SessionRow>>, HubError> {
+    Query(params): Query<SessionListParams>,
+) -> Result<([(HeaderName, String); 1], Json<Vec<SessionRow>>), HubError> {
     let page = Page::from(params.limit, params.offset);
     let scope = crate::identity_filter::resolve_project_scope(
         &state.pool,
         params.project.as_deref(),
         params.include_worktrees.unwrap_or(true),
     )
+    .await?;
+    let total = sqlx::query_scalar!(
+        r#"
+        SELECT COUNT(*) AS "count!"
+        FROM sessions s
+        LEFT JOIN projects p ON s.project_id = p.id
+        JOIN machines mac    ON s.machine_id = mac.machine_id
+        WHERE ($1::text IS NULL OR mac.hostname = $1)
+          AND ($2::text IS NULL OR s.provider = $2)
+          AND ($3::text IS NULL OR p.name = $3 OR p.project_path = $3)
+          AND ($4::text[] IS NULL OR p.project_path = ANY($4))
+          AND ($5::bigint IS NULL OR s.project_id = $5)
+        "#,
+        params.machine,
+        params.provider,
+        scope.plain,
+        scope.paths.as_deref(),
+        params.project_id,
+    )
+    .fetch_one(&state.pool)
     .await?;
     let rows = sqlx::query!(
         r#"
@@ -158,6 +213,7 @@ pub async fn list_sessions(
           AND ($2::text IS NULL OR s.provider = $2)
           AND ($3::text IS NULL OR p.name = $3 OR p.project_path = $3)
           AND ($6::text[] IS NULL OR p.project_path = ANY($6))
+          AND ($7::bigint IS NULL OR s.project_id = $7)
         ORDER BY s.last_message_time DESC NULLS LAST, s.id DESC
         LIMIT $4 OFFSET $5
         "#,
@@ -167,33 +223,38 @@ pub async fn list_sessions(
         page.limit,
         page.offset,
         scope.paths.as_deref(),
+        params.project_id,
     )
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| SessionRow {
-                id: r.id,
-                provider: r.provider,
-                session_id: r.session_id,
-                summary: r.summary,
-                file_path: r.file_path,
-                entrypoint: r.entrypoint,
-                message_count: r.message_count,
-                first_message_time: r.first_message_time,
-                last_message_time: r.last_message_time,
-                has_tool_use: r.has_tool_use,
-                has_errors: r.has_errors,
-                project_name: r.project_name,
-                project_path: r.project_path,
-                machine_hostname: r.machine_hostname,
-            })
-            .collect(),
+    Ok((
+        [(HeaderName::from_static("x-total-count"), total.to_string())],
+        Json(
+            rows.into_iter()
+                .map(|r| SessionRow {
+                    id: r.id,
+                    provider: r.provider,
+                    session_id: r.session_id,
+                    summary: r.summary,
+                    file_path: r.file_path,
+                    entrypoint: r.entrypoint,
+                    message_count: r.message_count,
+                    first_message_time: r.first_message_time,
+                    last_message_time: r.last_message_time,
+                    has_tool_use: r.has_tool_use,
+                    has_errors: r.has_errors,
+                    project_name: r.project_name,
+                    project_path: r.project_path,
+                    machine_hostname: r.machine_hostname,
+                })
+                .collect(),
+        ),
     ))
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PageParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
