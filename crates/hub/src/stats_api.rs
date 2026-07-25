@@ -38,10 +38,11 @@ use crate::stats::{self, SessionRef, Window};
 
 /// How long to tell a caller to wait while the mirror builds.
 ///
-/// The first cold build takes ~4 minutes (227 s measured against pg1), so this
-/// is not "come back when it's done" but "poll at a sane rate" — short enough
-/// that the webapp's Analytics tab recovers on its own shortly after the mirror
-/// lands, rather than sitting on a stale error until someone reloads.
+/// The first cold build takes **~8 minutes** (497 s measured on m4m against
+/// live pg1: 2,898,915 messages), so this is not "come back when it's done" but
+/// "poll at a sane rate" — short enough that the webapp's Analytics tab recovers
+/// on its own shortly after the mirror lands, rather than sitting on a stale
+/// error until someone reloads.
 const WARMING_RETRY_AFTER_SECS: u64 = 30;
 
 /// When the mirror last completed a refresh, and how long ago that was.

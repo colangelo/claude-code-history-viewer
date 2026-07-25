@@ -268,11 +268,13 @@ mirror builds. **This is expected and is not a rollback trigger** — it belongs
 the relay text, since an unexplained 503 after a swap is exactly the shape that
 has caused false alarms before.
 
-**How long is not yet known.** The "roughly four minutes" this section used to
-state came from the 227 s `CREATE TABLE AS` copy used for the SQL-level
-measurements, which is a different code path from the refresher's chunked
-`SELECT` + batched insert. The real builder has been run at 205k rows (11.5 s in
-a debug build) and never at 2.8M. Task 6.5 measures it; until then the relay must
-give a range and say it is unmeasured rather than promise four minutes — a swap
-that 503s for twenty minutes against a four-minute promise is how a correct
-deploy gets rolled back.
+**How long: ~8 minutes, measured.** 497 s for 2,898,915 messages, on m4m
+against live pg1, release build, production caps (`memory_limit=1GB`,
+`threads=2`), peak hub RSS ~1.2 GB. The mirror lands at **792 MB**.
+
+The "roughly four minutes" this section used to state was wrong twice over: it
+came from the 227 s `CREATE TABLE AS` copy used for the SQL-level measurements,
+which is a different code path from the refresher's chunked `SELECT` + batched
+insert, and that path was itself unrunnable at scale until the insert batching
+landed. The relay must say ~8–10 minutes — a swap that 503s for eight minutes
+against a four-minute promise is how a correct deploy gets rolled back.
