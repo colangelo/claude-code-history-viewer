@@ -97,7 +97,7 @@
   "analytics.projectTokens": "プロジェクトトークン：{{count}}個",
   "analytics.providerDistribution": "プロバイダ分布",
   "analytics.providerDistributionMeta": "{{sessions}}セッション · {{projects}}プロジェクト",
-  "analytics.providerScopeProjectTree": "プロバイダの範囲はプロジェクトツリーのプロバイダタブに従います。",
+  "analytics.providerScopeProjectTree": "プロバイダー範囲はアーカイブ全体です。",
   "analytics.rank": "{{rank}} ランク",
   "analytics.recentActivity": "直近7日間のアクティビティ",
   "analytics.recentActivityTrend": "最近7日間のアクティビティ推移",
@@ -196,5 +196,14 @@
   ],
   "analytics.weekend": "週末",
   "analytics.weeklyActiveDays": "週間アクティブ日数",
-  "analytics.weeklyActivity": "週別アクティビティ"
+  "analytics.weeklyActivity": "週別アクティビティ",
+  "analytics.scope": "範囲",
+  "analytics.allProjects": "すべてのプロジェクト",
+  "analytics.range.30d": "30日",
+  "analytics.range.90d": "90日",
+  "analytics.range.all": "全期間",
+  "analytics.hubTooOld": "このハブは分析に対応していません",
+  "analytics.hubTooOldHint": "/v1/stats を提供するバージョンにハブをアップグレードしてください。ジャーナルとブラウズには影響ありません。",
+  "analytics.scopeNotFound": "このプロジェクト識別子の統計はありません",
+  "analytics.empty": "この期間の活動はありません。"
 }

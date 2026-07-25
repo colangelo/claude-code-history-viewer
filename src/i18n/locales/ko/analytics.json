@@ -97,7 +97,7 @@
   "analytics.projectTokens": "프로젝트 토큰: {{count}}개",
   "analytics.providerDistribution": "프로바이더 분포",
   "analytics.providerDistributionMeta": "{{sessions}}개 세션 • {{projects}}개 프로젝트",
-  "analytics.providerScopeProjectTree": "프로바이더 범위는 프로젝트 트리의 프로바이더 탭을 따릅니다.",
+  "analytics.providerScopeProjectTree": "프로바이더 범위는 아카이브 전체입니다.",
   "analytics.rank": "{{rank}} 순위",
   "analytics.recentActivity": "최근 7일 활동 추이",
   "analytics.recentActivityTrend": "최근 7일 활동 추이",
@@ -196,5 +196,14 @@
   ],
   "analytics.weekend": "주말",
   "analytics.weeklyActiveDays": "주간 활동일",
-  "analytics.weeklyActivity": "주별 활동"
+  "analytics.weeklyActivity": "주별 활동",
+  "analytics.scope": "범위",
+  "analytics.allProjects": "모든 프로젝트",
+  "analytics.range.30d": "30일",
+  "analytics.range.90d": "90일",
+  "analytics.range.all": "전체 기간",
+  "analytics.hubTooOld": "이 허브는 분석을 지원하지 않습니다",
+  "analytics.hubTooOldHint": "/v1/stats를 제공하는 버전으로 허브를 업그레이드하세요. 저널과 탐색은 영향을 받지 않습니다.",
+  "analytics.scopeNotFound": "이 프로젝트 아이덴티티에 대한 통계가 없습니다",
+  "analytics.empty": "이 기간에는 활동이 없습니다."
 }

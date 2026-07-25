@@ -11,6 +11,11 @@ pub struct SessionTokenStats {
     #[serde(default)]
     pub total_reasoning_tokens: u64,
     pub total_tokens: u64,
+    /// Summed `costUSD` where the provider reported it, else `None`. NEVER
+    /// coalesced to zero: most providers report no cost, and a zero would read
+    /// as "free" rather than "unknown".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
     pub message_count: usize,
     pub first_message_time: String,
     pub last_message_time: String,
@@ -28,6 +33,9 @@ pub struct DailyStats {
     pub message_count: usize,
     pub session_count: usize,
     pub active_hours: usize,
+    /// Cost where reported on this day; `None` if no message on it carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +60,13 @@ pub struct ProjectStatsSummary {
     pub total_sessions: usize,
     pub total_messages: usize,
     pub total_tokens: u64,
+    /// Cost where reported (see `SessionTokenStats::total_cost_usd`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    /// How many messages in scope actually carried a cost, so a consumer can
+    /// say "cost over N of M messages" instead of implying full coverage.
+    #[serde(default)]
+    pub cost_reported_messages: u32,
     pub avg_tokens_per_session: u64,
     pub avg_session_duration: u32,
     pub total_session_duration: u32,
@@ -108,6 +123,9 @@ pub struct ModelStats {
     pub cache_read_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    /// Cost where reported, per model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +151,12 @@ pub struct GlobalStatsSummary {
     pub total_sessions: u32,
     pub total_messages: u32,
     pub total_tokens: u64,
+    /// Cost where reported (see `SessionTokenStats::total_cost_usd`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    /// Messages in scope that carried a cost, for honest coverage reporting.
+    #[serde(default)]
+    pub cost_reported_messages: u32,
     pub total_session_duration_minutes: u64,
     pub date_range: DateRange,
     pub token_distribution: TokenDistribution,
@@ -165,6 +189,7 @@ mod tests {
             total_cache_read_tokens: 100,
             total_reasoning_tokens: 0,
             total_tokens: 1800,
+            total_cost_usd: None,
             message_count: 50,
             first_message_time: "2025-06-01T10:00:00Z".to_string(),
             last_message_time: "2025-06-01T12:00:00Z".to_string(),

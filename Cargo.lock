@@ -3014,6 +3014,7 @@ dependencies = [
  "candle-nn",
  "candle-transformers",
  "chrono",
+ "history-core",
  "reqwest 0.12.20",
  "serde",
  "serde_json",

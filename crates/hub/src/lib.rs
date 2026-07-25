@@ -5,11 +5,13 @@
 //! are public so integration tests can drive them against a throwaway database.
 
 pub mod auth;
+pub mod backfill;
 pub mod browse;
 pub mod config;
 pub mod embed;
 pub mod embed_sweep;
 pub mod error;
+pub mod extract;
 pub mod fts;
 pub mod health;
 pub mod identities;
@@ -19,6 +21,8 @@ pub mod journal;
 pub mod pagination;
 pub mod search;
 pub mod state;
+pub mod stats;
+pub mod stats_api;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};
@@ -101,6 +105,9 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/projects", get(browse::list_projects))
         .route("/v1/sessions", get(browse::list_sessions))
         .route("/v1/sessions/{id}/messages", get(browse::session_messages))
+        .route("/v1/stats/global", get(stats_api::global))
+        .route("/v1/stats/projects/{identity_key}", get(stats_api::project))
+        .route("/v1/stats/sessions/{id}", get(stats_api::session))
         .route("/v1/identities", get(identities::list))
         .route("/v1/identities/aliases", post(identities::create_alias))
         .route(
@@ -145,6 +152,51 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
             HeaderValue::from_static("no-store"),
         ))
         .with_state(state)
+}
+
+/// Apply pending migrations and exit.
+///
+/// Serving and the backfill both apply migrations on startup, so this exists
+/// purely to make the DDL a *separate, observable step* during a deploy —
+/// schema first, verify, then touch data. Rolling one into the other is how you
+/// end up unable to say which half of an operation failed.
+pub async fn run_migrate() -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+    tracing::info!("migrations applied");
+    Ok(())
+}
+
+/// Load config, connect, and run the analytics backfill to completion.
+///
+/// A separate entry point rather than a startup sweep: this is a one-time
+/// catch-up over the whole archive, not a steady-state reconciliation, so it
+/// should be run deliberately and watched — not fired on every hub boot where it
+/// would compete with serving traffic. Migrations are applied first so the
+/// target columns are guaranteed to exist.
+pub async fn run_backfill(batch: i64) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+
+    let stats = backfill::run(&pool, batch).await?;
+    tracing::info!(
+        scanned = stats.scanned,
+        message_ids = stats.message_ids,
+        tool_uses = stats.tool_uses,
+        tool_results = stats.tool_results,
+        "analytics backfill finished"
+    );
+    Ok(())
 }
 
 /// Load config, connect to Postgres, apply migrations, and serve until shutdown.

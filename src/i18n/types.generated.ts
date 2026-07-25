@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-20T22:28:36.630Z
- * 총 키 개수: 1886
+ * 생성 시간: 2026-07-25T11:28:37.183Z
+ * 총 키 개수: 1896
  * Namespace 수: 11
  */
 
@@ -224,7 +224,7 @@ export type CommonKeys =
   | 'time.yesterday';
 
 /**
- * analytics namespace의 번역 키 (182개)
+ * analytics namespace의 번역 키 (191개)
  * 파일: locales/{lang}/analytics.json
  */
 export type AnalyticsKeys =
@@ -247,6 +247,7 @@ export type AnalyticsKeys =
   | 'analytics.activityHeatmapTitle'
   | 'analytics.activityPeriod'
   | 'analytics.activityTooltip'
+  | 'analytics.allProjects'
   | 'analytics.andMoreSessions'
   | 'analytics.avgSession'
   | 'analytics.avgSessionTime'
@@ -273,6 +274,7 @@ export type AnalyticsKeys =
   | 'analytics.daysSpan'
   | 'analytics.duration'
   | 'analytics.durationMinutes'
+  | 'analytics.empty'
   | 'analytics.endTime'
   | 'analytics.estimatedCost'
   | 'analytics.estimatedCostValue'
@@ -285,6 +287,8 @@ export type AnalyticsKeys =
   | 'analytics.heatmapTooltip'
   | 'analytics.highActivity'
   | 'analytics.hourSuffix'
+  | 'analytics.hubTooOld'
+  | 'analytics.hubTooOldHint'
   | 'analytics.in'
   | 'analytics.input'
   | 'analytics.inputTokens'
@@ -330,10 +334,15 @@ export type AnalyticsKeys =
   | 'analytics.providerDistribution'
   | 'analytics.providerDistributionMeta'
   | 'analytics.providerScopeProjectTree'
+  | 'analytics.range.30d'
+  | 'analytics.range.90d'
+  | 'analytics.range.all'
   | 'analytics.rank'
   | 'analytics.recentActivity'
   | 'analytics.recentActivityTrend'
   | 'analytics.remaining'
+  | 'analytics.scope'
+  | 'analytics.scopeNotFound'
   | 'analytics.select'
   | 'analytics.selectSessionOrLoad'
   | 'analytics.sessionCount'
@@ -412,7 +421,7 @@ export type AnalyticsKeys =
   | 'analytics.weeklyActivity';
 
 /**
- * session namespace의 번역 키 (217개)
+ * session namespace의 번역 키 (218개)
  * 파일: locales/{lang}/session.json
  */
 export type SessionKeys =
@@ -632,7 +641,8 @@ export type SessionKeys =
   | 'sessionPicker.cancelled'
   | 'sessionPicker.empty'
   | 'sessionPicker.subtitle'
-  | 'sessionPicker.title';
+  | 'sessionPicker.title'
+  | 'settings.archiveHub.journal.tab.analytics';
 
 /**
  * settings namespace의 번역 키 (591개)
@@ -2043,6 +2053,7 @@ export type TranslationKey =
   | 'analytics.activityHeatmapTitle'
   | 'analytics.activityPeriod'
   | 'analytics.activityTooltip'
+  | 'analytics.allProjects'
   | 'analytics.andMoreSessions'
   | 'analytics.avgSession'
   | 'analytics.avgSessionTime'
@@ -2069,6 +2080,7 @@ export type TranslationKey =
   | 'analytics.daysSpan'
   | 'analytics.duration'
   | 'analytics.durationMinutes'
+  | 'analytics.empty'
   | 'analytics.endTime'
   | 'analytics.estimatedCost'
   | 'analytics.estimatedCostValue'
@@ -2081,6 +2093,8 @@ export type TranslationKey =
   | 'analytics.heatmapTooltip'
   | 'analytics.highActivity'
   | 'analytics.hourSuffix'
+  | 'analytics.hubTooOld'
+  | 'analytics.hubTooOldHint'
   | 'analytics.in'
   | 'analytics.input'
   | 'analytics.inputTokens'
@@ -2126,10 +2140,15 @@ export type TranslationKey =
   | 'analytics.providerDistribution'
   | 'analytics.providerDistributionMeta'
   | 'analytics.providerScopeProjectTree'
+  | 'analytics.range.30d'
+  | 'analytics.range.90d'
+  | 'analytics.range.all'
   | 'analytics.rank'
   | 'analytics.recentActivity'
   | 'analytics.recentActivityTrend'
   | 'analytics.remaining'
+  | 'analytics.scope'
+  | 'analytics.scopeNotFound'
   | 'analytics.select'
   | 'analytics.selectSessionOrLoad'
   | 'analytics.sessionCount'
@@ -3112,6 +3131,7 @@ export type TranslationKey =
   | 'settings.archiveHub.journal.sessionMessages'
   | 'settings.archiveHub.journal.sessions'
   | 'settings.archiveHub.journal.showLatest'
+  | 'settings.archiveHub.journal.tab.analytics'
   | 'settings.archiveHub.journal.tab.browse'
   | 'settings.archiveHub.journal.tab.journal'
   | 'settings.archiveHub.journal.tabsLabel'

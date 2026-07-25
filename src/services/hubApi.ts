@@ -13,6 +13,7 @@
  */
 
 import type { ClaudeMessage } from "../types";
+import type { GlobalStatsSummary, ProjectStatsSummary } from "../types";
 
 export interface HubConfig {
   /** Base URL of the hub, e.g. `https://hub.internal:8788` (no trailing slash). */
@@ -239,6 +240,23 @@ function authHeaders(config: HubConfig): HeadersInit {
   return config.token ? { Authorization: `Bearer ${config.token}` } : {};
 }
 
+/**
+ * A failed hub response, carrying the status so callers can react to it.
+ *
+ * `status === 404` on a `/v1/stats/*` read means the connected hub predates the
+ * analytics endpoints — a routine "upgrade the hub" case, not an error to show
+ * as a crash.
+ */
+export class HubHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly path: string
+  ) {
+    super(`hub request to ${path} failed: ${status}`);
+    this.name = "HubHttpError";
+  }
+}
+
 async function hubGet(url: URL, config: HubConfig): Promise<Response> {
   // `cache: "no-store"` bypasses the browser HTTP cache on every read — the
   // client-side pair to the hub's `Cache-Control: no-store` on `/v1/*`. Without
@@ -251,7 +269,7 @@ async function hubGet(url: URL, config: HubConfig): Promise<Response> {
     cache: "no-store",
   });
   if (!res.ok) {
-    throw new Error(`hub request to ${url.pathname} failed: ${res.status}`);
+    throw new HubHttpError(res.status, url.pathname);
   }
   return res;
 }
@@ -275,6 +293,23 @@ async function hubSend(
     throw new Error(`hub ${method} to ${url.pathname} failed: ${res.status}`);
   }
   return res;
+}
+
+/** Window + timezone for a statistics request. */
+export interface HubStatsOptions {
+  /** Inclusive `YYYY-MM-DD` lower bound, interpreted in `tz`. */
+  from?: string;
+  /** Inclusive `YYYY-MM-DD` upper bound, interpreted in `tz`. */
+  to?: string;
+  /** IANA timezone the day/hour buckets are expressed in. */
+  tz?: string;
+}
+
+function statsParams(url: URL, options?: HubStatsOptions): URL {
+  if (options?.from) url.searchParams.set("from", options.from);
+  if (options?.to) url.searchParams.set("to", options.to);
+  if (options?.tz) url.searchParams.set("tz", options.tz);
+  return url;
 }
 
 export const hubApi = {
@@ -375,6 +410,38 @@ export const hubApi = {
    * `GET /v1/journal/entries` — distilled per-day journal entries, newest-first,
    * filterable by project and inclusive `from`/`to` date bounds, paginated.
    */
+  /**
+   * `GET /v1/stats/global` — archive-wide statistics.
+   *
+   * The response is the hub's `GlobalStatsSummary`, which is the same shape the
+   * desktop produced, so the existing chart components consume it unchanged.
+   * Throws {@link HubHttpError} with `status === 404` against a hub that
+   * predates the analytics endpoints.
+   */
+  async statsGlobal(
+    config: HubConfig,
+    options?: HubStatsOptions
+  ): Promise<GlobalStatsSummary> {
+    const url = statsParams(hubUrl(config, "/v1/stats/global"), options);
+    const res = await hubGet(url, config);
+    return (await res.json()) as GlobalStatsSummary;
+  },
+
+  /** `GET /v1/stats/projects/{identityKey}` — one project identity, folded
+   * across every path and machine belonging to it. */
+  async statsProject(
+    config: HubConfig,
+    identityKey: string,
+    options?: HubStatsOptions
+  ): Promise<ProjectStatsSummary> {
+    const url = statsParams(
+      hubUrl(config, `/v1/stats/projects/${encodeURIComponent(identityKey)}`),
+      options
+    );
+    const res = await hubGet(url, config);
+    return (await res.json()) as ProjectStatsSummary;
+  },
+
   async journalEntries(
     config: HubConfig,
     options?: HubJournalOptions

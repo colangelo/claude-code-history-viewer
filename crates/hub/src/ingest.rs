@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 
 use crate::auth::AuthedMachine;
 use crate::error::HubError;
+use crate::extract;
 use crate::state::AppState;
 
 /// Parse an RFC 3339 timestamp leniently; `None`/invalid → `None` (stored NULL).
@@ -352,8 +353,24 @@ pub async fn ingest(
     let mut c_content: Vec<Option<serde_json::Value>> = Vec::with_capacity(message_count);
     let mut c_raw: Vec<serde_json::Value> = Vec::with_capacity(message_count);
     let mut c_search_text: Vec<Option<String>> = Vec::with_capacity(message_count);
+    let mut c_message_id: Vec<Option<String>> = Vec::with_capacity(message_count);
+
+    // Analytics rows derived per message, parallel to the column vectors. Held
+    // aside because only the messages the insert ACTUALLY inserts get their rows
+    // written — a conflicting message already had them extracted on first
+    // ingest, which is what makes re-ingest idempotent.
+    let mut derived: Vec<(Vec<extract::ToolUseRow>, Vec<extract::ToolResultRow>)> =
+        Vec::with_capacity(message_count);
 
     for m in messages {
+        // Derived first: this reads `raw`/`content` before the pushes below move
+        // the payload out of `m`.
+        c_message_id.push(extract::message_id(&m.raw));
+        derived.push((
+            extract::tool_uses(m.message_type.as_deref(), m.content.as_ref(), &m.raw),
+            extract::tool_results(m.content.as_ref()),
+        ));
+
         c_provider.push(m.provider);
         c_message_key.push(m.message_key);
         c_uuid.push(m.uuid);
@@ -390,29 +407,31 @@ pub async fn ingest(
     if message_count > 0 {
         // Runtime query (not `query!`): the offline build has no `.sqlx`
         // metadata for new statements.
-        let inserted: Vec<(i64, Option<DateTime<Utc>>)> = sqlx::query_as(
+        let inserted: Vec<(i64, i64, String, Option<DateTime<Utc>>)> = sqlx::query_as(
             r#"
             INSERT INTO messages
                 (session_id, machine_id, provider, message_key, uuid, parent_uuid, seq,
                  "timestamp", type, role, model, stop_reason,
                  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                 cost_usd, duration_ms, is_sidechain, content, raw, search_text)
+                 cost_usd, duration_ms, is_sidechain, content, raw, search_text, message_id)
             SELECT t.session_id, $1, t.provider, t.message_key, t.uuid, t.parent_uuid, t.seq,
                    t."timestamp", t.type, t.role, t.model, t.stop_reason,
                    t.input_tokens, t.output_tokens, t.cache_creation_tokens, t.cache_read_tokens,
-                   t.cost_usd, t.duration_ms, t.is_sidechain, t.content, t.raw, t.search_text
+                   t.cost_usd, t.duration_ms, t.is_sidechain, t.content, t.raw, t.search_text,
+                   t.message_id
             FROM UNNEST(
                      $2::bigint[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[],
                      $8::timestamptz[], $9::text[], $10::text[], $11::text[], $12::text[],
                      $13::bigint[], $14::bigint[], $15::bigint[], $16::bigint[],
                      $17::double precision[], $18::bigint[], $19::boolean[],
-                     $20::jsonb[], $21::jsonb[], $22::text[]
+                     $20::jsonb[], $21::jsonb[], $22::text[], $23::text[]
                  ) AS t(session_id, provider, message_key, uuid, parent_uuid, seq,
                         "timestamp", type, role, model, stop_reason,
                         input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-                        cost_usd, duration_ms, is_sidechain, content, raw, search_text)
+                        cost_usd, duration_ms, is_sidechain, content, raw, search_text,
+                        message_id)
             ON CONFLICT (session_id, message_key) DO NOTHING
-            RETURNING session_id, "timestamp"
+            RETURNING id, session_id, message_key, "timestamp"
             "#,
         )
         .bind(token_machine)
@@ -437,12 +456,37 @@ pub async fn ingest(
         .bind(&c_content)
         .bind(&c_raw)
         .bind(&c_search_text)
+        .bind(&c_message_id)
         .fetch_all(&mut *tx)
         .await?;
 
         resp.messages_inserted += inserted.len() as u64;
         resp.messages_skipped += (message_count - inserted.len()) as u64;
-        for (session_pk, ts) in inserted {
+
+        // Position lookup for the analytics rows. `RETURNING` yields only the
+        // rows actually inserted, so mapping back through (session, key) is what
+        // keeps re-ingest from re-deriving anything.
+        let mut pos_of: HashMap<(i64, &str), usize> = HashMap::with_capacity(message_count);
+        for (i, key) in c_message_key.iter().enumerate() {
+            pos_of.insert((session_pks[i], key.as_str()), i);
+        }
+
+        let mut tu_ref: Vec<i64> = Vec::new();
+        let mut tu_session: Vec<i64> = Vec::new();
+        let mut tu_seq: Vec<i32> = Vec::new();
+        let mut tu_name: Vec<String> = Vec::new();
+        let mut tu_use_id: Vec<Option<String>> = Vec::new();
+        let mut tu_skill: Vec<Option<String>> = Vec::new();
+        let mut tu_subagent: Vec<Option<String>> = Vec::new();
+        let mut tu_is_error: Vec<bool> = Vec::new();
+
+        let mut tr_ref: Vec<i64> = Vec::new();
+        let mut tr_session: Vec<i64> = Vec::new();
+        let mut tr_seq: Vec<i32> = Vec::new();
+        let mut tr_use_id: Vec<String> = Vec::new();
+        let mut tr_is_error: Vec<bool> = Vec::new();
+
+        for (message_pk, session_pk, message_key, ts) in inserted {
             let d = deltas.entry(session_pk).or_default();
             d.inserted += 1;
             // NULL timestamps are ignored, exactly as `min()`/`max()` ignored
@@ -451,6 +495,76 @@ pub async fn ingest(
                 d.first_ts = Some(d.first_ts.map_or(ts, |cur| cur.min(ts)));
                 d.last_ts = Some(d.last_ts.map_or(ts, |cur| cur.max(ts)));
             }
+
+            let Some(&i) = pos_of.get(&(session_pk, message_key.as_str())) else {
+                continue;
+            };
+            let (uses, results) = &derived[i];
+            for u in uses {
+                tu_ref.push(message_pk);
+                tu_session.push(session_pk);
+                tu_seq.push(u.seq);
+                tu_name.push(u.tool_name.clone());
+                tu_use_id.push(u.tool_use_id.clone());
+                tu_skill.push(u.skill_name.clone());
+                tu_subagent.push(u.subagent_type.clone());
+                tu_is_error.push(u.is_error);
+            }
+            for r in results {
+                tr_ref.push(message_pk);
+                tr_session.push(session_pk);
+                tr_seq.push(r.seq);
+                tr_use_id.push(r.tool_use_id.clone());
+                tr_is_error.push(r.is_error);
+            }
+        }
+
+        // `ON CONFLICT DO NOTHING` on (message_ref, seq) is belt-and-braces: a
+        // re-ingested message never reaches here, so this only fires if the same
+        // batch somehow carries a message twice.
+        if !tu_ref.is_empty() {
+            sqlx::query(
+                r"
+                INSERT INTO message_tool_uses
+                    (message_ref, session_id, seq, tool_name, tool_use_id, skill_name,
+                     subagent_type, is_error)
+                SELECT * FROM UNNEST(
+                    $1::bigint[], $2::bigint[], $3::int[], $4::text[], $5::text[], $6::text[],
+                    $7::text[], $8::boolean[]
+                )
+                ON CONFLICT (message_ref, seq) DO NOTHING
+                ",
+            )
+            .bind(&tu_ref)
+            .bind(&tu_session)
+            .bind(&tu_seq)
+            .bind(&tu_name)
+            .bind(&tu_use_id)
+            .bind(&tu_skill)
+            .bind(&tu_subagent)
+            .bind(&tu_is_error)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        if !tr_ref.is_empty() {
+            sqlx::query(
+                r"
+                INSERT INTO message_tool_results
+                    (message_ref, session_id, seq, tool_use_id, is_error)
+                SELECT * FROM UNNEST(
+                    $1::bigint[], $2::bigint[], $3::int[], $4::text[], $5::boolean[]
+                )
+                ON CONFLICT (message_ref, seq) DO NOTHING
+                ",
+            )
+            .bind(&tr_ref)
+            .bind(&tr_session)
+            .bind(&tr_seq)
+            .bind(&tr_use_id)
+            .bind(&tr_is_error)
+            .execute(&mut *tx)
+            .await?;
         }
     }
 

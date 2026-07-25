@@ -1700,6 +1700,9 @@ fn build_antigravity_session_token_stats(
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
 
     let stats = SessionTokenStats {
+        // The desktop predates cost reporting; the hub sources this
+        // from `messages.cost_usd`. None, never 0.0 — absent != free.
+        total_cost_usd: None,
         session_id: session.actual_session_id.clone(),
         project_name: session.project_name.clone(),
         total_input_tokens: records
@@ -2035,6 +2038,9 @@ fn build_session_token_stats_from_messages(
     }
 
     Some(SessionTokenStats {
+        // The desktop predates cost reporting; the hub sources this
+        // from `messages.cost_usd`. None, never 0.0 — absent != free.
+        total_cost_usd: None,
         session_id,
         project_name,
         total_input_tokens,
@@ -2888,6 +2894,9 @@ fn extract_session_token_stats_sync(
         + total_cache_read_tokens;
 
     Some(SessionTokenStats {
+        // The desktop predates cost reporting; the hub sources this
+        // from `messages.cost_usd`. None, never 0.0 — absent != free.
+        total_cost_usd: None,
         session_id,
         project_name,
         total_input_tokens,
@@ -3747,6 +3756,9 @@ pub async fn get_global_stats_summary(
                     reasoning_tokens,
                 ),
             )| ModelStats {
+                // The desktop predates cost reporting; the hub sources this
+                // from `messages.cost_usd`. None, never 0.0 — absent != free.
+                cost_usd: None,
                 model_name,
                 message_count,
                 token_count,
