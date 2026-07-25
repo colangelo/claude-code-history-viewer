@@ -367,8 +367,10 @@ Two lessons from how the deploy *ran*, for the next multi-step handoff:
   2026-07-19 rule (probe live state before re-running a mutating ask) stopped
   a blind re-swap, which would have captured the *already-swapped* binary as
   the "pre-swap" backup and destroyed the rollback point. Until the
-  supervisor-side fix lands (tracked in home-network), **split a multi-step
-  deploy into separately-completable relays** — e.g. binary swap + rev probe
+  supervisor-side fix lands (home-network Gitea issue #34 — rc=124 timeout
+  NAKs like a transient failure, so redelivery can replay a completed
+  mutation; infra will notify on this relay when it lands), **split a
+  multi-step deploy into separately-completable relays** — e.g. binary swap + rev probe
   in one message, catch-up backfill + webapp swap in a second — so each
   handler run finishes inside the ceiling.
 - **`/v1/stats/sessions/{id}` takes the numeric `sessions.id` row id**
