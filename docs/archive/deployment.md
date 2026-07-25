@@ -614,6 +614,27 @@ in place. The change was JS-only (`hubApi.ts` fetch `cache:'no-store'` +
 `JournalView` refocus refetch, `aa22bda7`), so no new eyeball item; the
 v0.10.4/v0.10.5 backlog above carries forward untouched.
 
+**2026-07-25, webapp `v0.14.0` → `v0.15.0` swap (thread `a43b9428`): 2 of 2 of
+the v0.15.0 deploy (hub binary swap in §2b), landed 18:02 local.**
+`just cchv-webapp-deploy 0.15.0 --expect-entry archive-CU7Vo6RB.js
+--assert-count "2:cchv-v0.15.0"` — entry chunk matched pre-swap, and the
+count-based marker held in both the release bundle and the SERVED chunk
+post-swap. The count `2` was **grounded, not guessed**: infra derived it from
+the live v0.14.0 bundle (2× `cchv-v0.14.0` at the two ConnectGate title
+sites); since `src/` is unchanged between the releases the count must carry
+over — a worthwhile refinement of the v0.11.1 count-marker rule (derive the
+expected count from what is *live*, not from reading the source). CSS is
+byte-identical to v0.14.0 (`archive-BBzvspm0.css`), report-only — since the
+v0.14.0 swap the deploy tool rejects a CSS `--expect-entry` outright — so the
+degraded-hint eyeball item above carries forward unchanged. Health:
+`/v1/healthz`, `/v1/healthz/ingest?exclude=ac-mbp`, and the `:8788` tailnet
+front all 200. The version chip is client-rendered from exactly the literal
+asserted in the served chunk, so it reads v0.15.0 for any browser — *served,
+never seen* (headless run), per the standing rule. Rollback point:
+`staging/webapp-preswap-20260725-180203-cchv-v0.14.0`. No home-network commit
+(routine bundle swap; `RELAY_AUDIT` is the trail per the 2026-07-19 standing
+decision).
+
 Note what did *not* close it: the scripted screenshot set below is what finally
 retired the chips item only in the sense that it stopped being needed — the
 close came from a person's eyes, per the rule in the next paragraph. And
