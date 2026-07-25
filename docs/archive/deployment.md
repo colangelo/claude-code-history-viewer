@@ -385,6 +385,43 @@ Two lessons from how the deploy *ran*, for the next multi-step handoff:
   every read route 401s while `/v1/healthz` still answers 200 — see the probe
   matrix in the "Hub topology on m4m" note (§3).
 
+**2026-07-25, hub `v0.14.0` → `v0.15.0` swap (thread `8edffabd`): the #25
+credential watchdog is live — the 2026-08-24 rotation now heals unattended.**
+Swapped and verified 17:56 local, pid 60157, downtime ~1 min. The single-step
+sizing from the v0.14.0 lesson worked: swap + verify in one message fit well
+inside the 900 s ceiling. Asset `cchv-hub-0.15.0-aarch64-apple-darwin`, sha256
+`65b0f6b0…5438e7f` agreed **four ways** before anything was copied — our relay
+digest, the `.sha256` sidecar, infra's local re-hash, and the GitHub API digest
+(uploader `github-actions[bot]`, CI path). Rev probe: watchdog `strings` marker
+count 0 on the live 0.14.0 binary pre-swap, 1 on the staged asset, 1 on the
+live path post-swap. Ceremony was §2b exactly; preswap backup
+`staging/cchv-hub-preswap-20260725-1756` (= the 0.14.0 rollback point).
+`/v1/healthz` `{"db":"up","status":"ok"}` (re-probed independently from our
+side). The relaunch log carried `rendered hub.runtime.toml (bao-first)` and
+`db password from bao static-creds/cchv-svc (bao-owned, rotating)` — the
+credential resolved through the rotating static-creds path in prod, not a
+cached render, so the watchdog is guarding the credential it will actually see
+rotate. Ingest resumed within seconds. Watchdog log semantics (§3b: 3× WARN
+strikes → ERROR → relaunch = a successful rotation pickup; the same pattern
+every 5 min = incident) are recorded infra-side in `hosts/m4m.md`
+(home-network `15ca43a`) for the next log reader. Two operational notes from
+the run, both worth knowing before the next swap:
+
+- **A held `staging/.swap-lock` is not proof of an in-flight swap — check the
+  stamp.** The lock from the 14:54 v0.14.0 swap was still held: its handler
+  had been killed at the 900 s ceiling *after* completing the swap but
+  *before* releasing the lock (the same rc=124 mechanism as the v0.14.0
+  lessons above, biting a different resource). Infra stamp-checked it stale
+  (`STAMP=20260725-1454` = an already-completed, verified swap), replaced it,
+  and released it after verification. On hitting a held lock, compare its
+  stamp against the last known swap before treating it as a live conflict —
+  and never blind-break a lock whose stamp you can't account for.
+- **The first `launchctl bootstrap` immediately after `bootout` can fail
+  transiently** with `Bootstrap failed: 5: Input/output error` — the bootout
+  is still settling. The identical command succeeded seconds later. Retry
+  after a short pause before escalating; the first I/O error is not a wedged
+  job (that failure mode is the hung `kickstart -k` described above).
+
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
 A webapp-only bump (`dist-archive/` contents, no Rust change) is **much cheaper
