@@ -378,7 +378,10 @@ Two lessons from how the deploy *ran*, for the next multi-step handoff:
   not-found regression; unknown *numeric* id → 404 as specced. And on this
   house deployment an unauthenticated in-tailnet request reads 200 via the
   cchv-v0.5.0 Tailscale-identity read-auth — do not read that as an auth
-  regression when probing.
+  regression when probing. The mirror image of that cost infra time on this
+  same deploy: over the **loopback** bind there is no tailnet identity, so
+  every read route 401s while `/v1/healthz` still answers 200 — see the probe
+  matrix in the "Hub topology on m4m" note (§3).
 
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
@@ -631,8 +634,32 @@ byte-identical CSS run on their side will ever stand in for the line.
 
 > **Hub topology on m4m** (documented on the infra side in `hosts/m4m.md`): the
 > hub binds `127.0.0.1:8790` — **not** 8787, which is taken by workerd — with
-> tailnet ingress via `tailscale serve` on `:8788`. A failing loopback `:8787`
-> probe is therefore *not* an outage.
+> tailnet ingress via `tailscale serve` on `:8788` (https) and `:8787` (http).
+> A failing loopback `:8787` probe is therefore *not* an outage.
+>
+> **Never verify a read route over the loopback bind — probe the tailnet front,
+> even from m4m itself.** Read-auth is `trust_tailscale_identity`, so a request
+> arriving on `127.0.0.1:8790` has no tailnet identity and every read route
+> answers `{"error":"unauthorized"}` (401) — while `/v1/healthz` and the static
+> assets answer 200 unauthenticated. That half-working loopback probe looks
+> exactly like a broken analytics deploy and isn't one (cost infra time on the
+> cchv-v0.14.0 verify, relay `40d5df93`). Measured on m4m 2026-07-25:
+>
+> | probe | `/v1/healthz` | `/v1/projects`, `/v1/stats/*` |
+> |---|---|---|
+> | `http://127.0.0.1:8790` (loopback bind) | 200 | **401 unauthorized** |
+> | `http://hub.internal:8787` (MagicDNS name) | 200 | 200 |
+> | `http://198.51.100.7:8787` (tailnet IP, no `Host:`) | **404** | 404 |
+> | `http://198.51.100.7:8787` + `Host: hub.internal` | 200 | 200 |
+> | `https://198.51.100.7:8788` (tailnet IP) | **empty, exit 000** | — |
+> | `https://hub.internal:8788` (MagicDNS name) | 200 | 200 |
+>
+> So: **address the hub by its MagicDNS name.** `tailscale serve` routes on the
+> Host header, which is why the raw IP 404s (the Gatus fix of 2026-07-13) and
+> why the IP form needs `-H "Host: hub.internal"`. Its `:8788` https
+> leg additionally needs the name for the cert, so **http `:8787` + name is the
+> form to script against**; the https name form works too. Sample of the same
+> run: `GET /v1/stats/global` → 200 in 16.8 s, `total_tokens` 20,213,333,261.
 
 ## 3. Sync daemon (on each machine)
 
@@ -983,6 +1010,13 @@ curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/projects" \
 curl -s -H "Authorization: Bearer $TOKEN" "$HOST/v1/identities" \
   | jq '.[0] | {identity_key, display_name, members: [.members[].project_path]}'
 ```
+
+On **m4m** read-auth is `trust_tailscale_identity`, so the bearer token is not
+what grants access — the tailnet peer identity is, and `$HOST` must be the
+MagicDNS name (`http://hub.internal:8787`), **not** the loopback
+bind or the raw tailnet IP. See the "Hub topology on m4m" note in §3 for the
+probe matrix: on `127.0.0.1:8790` every read route 401s while `/v1/healthz`
+returns 200, which reads like a broken deploy and is not one.
 
 ## Notes & current limitations
 
