@@ -44,10 +44,10 @@
 
 ## 6. Verification gate
 
-- [ ] 6.1 Build a comparison harness that runs the desktop analytics and the hub endpoints over the same scope and window and diffs the stat structs field by field
-- [ ] 6.2 Compare global statistics; investigate and resolve every discrepancy — a difference is a bug in the new implementation until proven otherwise. **Carve-outs (two, both deliberate):** `ToolUsageStats.success_rate` differs because the oracle scores every content-array invocation as a success (D10); tool/skill/subagent *counts* differ because the oracle counts the top-level `toolUse` and the content-array `tool_use` as two invocations when they are one (D12). Assert both divergences are one-directional — hub success rate ≤ oracle's, hub tool counts ≤ oracle's — and that token, cost, message, session and activity fields all match exactly
-- [ ] 6.3 Compare per-project statistics for at least one multi-machine, multi-path identity, and per-session statistics for a tool-heavy session
-- [ ] 6.4 Record the comparison results in the change; **Deliverable 2 is blocked until this passes**
+- [x] 6.1 Build a comparison harness that runs the desktop analytics and the hub endpoints over the same scope and window and diffs the stat structs field by field
+- [x] 6.2 Compare global statistics; investigate and resolve every discrepancy — a difference is a bug in the new implementation until proven otherwise. **Carve-outs (two, both deliberate):** `ToolUsageStats.success_rate` differs because the oracle scores every content-array invocation as a success (D10); tool/skill/subagent *counts* differ because the oracle counts the top-level `toolUse` and the content-array `tool_use` as two invocations when they are one (D12). Assert both divergences are one-directional — hub success rate ≤ oracle's, hub tool counts ≤ oracle's — and that token, cost, message, session and activity fields all match exactly
+- [x] 6.3 Compare per-project statistics for at least one multi-machine, multi-path identity, and per-session statistics for a tool-heavy session
+- [x] 6.4 Record the comparison results in the change; **Deliverable 2 is blocked until this passes**
 
 ## 7. Webapp Analytics tab
 

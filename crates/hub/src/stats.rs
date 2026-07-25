@@ -86,6 +86,14 @@ impl Scope {
 /// pg1). Materializing once and aggregating over the result turns that into one
 /// sort plus cheap scans.
 ///
+/// **Dedup applies to usage, NOT to tool invocations.** A single assistant
+/// response is streamed across several records sharing one `message.id` and one
+/// `usage` block, but each record carries DIFFERENT content blocks — so its tool
+/// calls are distinct events that all really happened. Counting the usage once
+/// while counting every invocation is why the table keeps all scoped rows and
+/// flags them, rather than deleting the duplicates. Caught by the oracle gate:
+/// tool counts were ~4x low before this.
+///
 /// `ON COMMIT DROP` ties the table's lifetime to the surrounding transaction, so
 /// there is nothing to clean up and concurrent requests cannot collide — each
 /// session gets its own.
@@ -97,7 +105,7 @@ async fn materialize_scope(
     let sql = r#"
         CREATE TEMP TABLE stats_scope ON COMMIT DROP AS
         WITH scoped AS (
-            SELECT m.id, m.session_id, m.message_id, m.uuid, m.provider, m.model,
+            SELECT m.id, m.session_id, m.message_id, m.uuid, m.provider, m.model, m.role,
                    m."timestamp", m.input_tokens, m.output_tokens,
                    m.cache_creation_tokens, m.cache_read_tokens, m.cost_usd,
                    s.project_id
@@ -109,9 +117,20 @@ async fn materialize_scope(
                AND ($4::date    IS NULL OR (m."timestamp" AT TIME ZONE $3)::date >= $4)
                AND ($5::date    IS NULL OR (m."timestamp" AT TIME ZONE $3)::date <= $5)
         )
-        SELECT DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text)) *
-          FROM scoped
-         ORDER BY session_id, COALESCE(message_id, uuid, id::text), id
+        SELECT s.*,
+               -- Usage belongs to the FIRST row of each logical message; the
+               -- rest are the same response's other content blocks.
+               (s.id = min(s.id) OVER (
+                    PARTITION BY s.session_id,
+                                 COALESCE(s.message_id, s.uuid, s.id::text))) AS usage_row,
+               -- Conversational turn (has a role) vs bookkeeping record. The
+               -- archive stores mode/permission-mode/attachment/custom-title
+               -- and friends; on one measured session those were 680 of 934
+               -- rows, so counting them as "messages" inflates by ~3.5x.
+               -- `role` is set only for real messages, and is provider-agnostic
+               -- (unlike matching on `type`, whose values differ per provider).
+               (s.role IS NOT NULL) AS conversational
+          FROM scoped s
     "#;
     sqlx::query(sql)
         .bind(scope.paths().map(<[String]>::to_vec))
@@ -156,15 +175,15 @@ const TOKEN_SUM: &str = "coalesce(sum(coalesce(input_tokens,0) + coalesce(output
 async fn totals(tx: &mut sqlx::PgConnection) -> sqlx::Result<TotalsRow> {
     sqlx::query_as::<_, TotalsRow>(
         r#"
-        SELECT sum(input_tokens)::bigint,
-               sum(output_tokens)::bigint,
-               sum(cache_creation_tokens)::bigint,
-               sum(cache_read_tokens)::bigint,
+        SELECT sum(input_tokens) FILTER (WHERE usage_row)::bigint,
+               sum(output_tokens) FILTER (WHERE usage_row)::bigint,
+               sum(cache_creation_tokens) FILTER (WHERE usage_row)::bigint,
+               sum(cache_read_tokens) FILTER (WHERE usage_row)::bigint,
                -- NOT coalesced to 0: NULL means 'nobody reported cost', which
                -- is a different statement from 'it was free'.
-               sum(cost_usd),
-               count(*) FILTER (WHERE cost_usd IS NOT NULL),
-               count(*),
+               sum(cost_usd) FILTER (WHERE usage_row),
+               count(*) FILTER (WHERE cost_usd IS NOT NULL AND usage_row),
+               count(*) FILTER (WHERE usage_row AND conversational),
                count(DISTINCT session_id),
                count(DISTINCT project_id),
                -- Folded in rather than separate statements: each one would be
@@ -188,12 +207,12 @@ async fn daily(tx: &mut sqlx::PgConnection, tz: &str) -> sqlx::Result<Vec<DailyS
                   {TOKEN_SUM},
                   coalesce(sum(input_tokens), 0)::bigint,
                   coalesce(sum(output_tokens), 0)::bigint,
-                  count(*),
+                  count(*) FILTER (WHERE conversational),
                   count(DISTINCT session_id),
                   count(DISTINCT extract(hour FROM "timestamp" AT TIME ZONE $1)),
                   sum(cost_usd)
              FROM stats_scope
-            WHERE "timestamp" IS NOT NULL
+            WHERE "timestamp" IS NOT NULL AND usage_row
             GROUP BY 1 ORDER BY 1"#
     );
     let rows: Vec<DailyRow> = sqlx::query_as(&sql).bind(tz).fetch_all(&mut *tx).await?;
@@ -220,7 +239,7 @@ async fn heatmap(tx: &mut sqlx::PgConnection, tz: &str) -> sqlx::Result<Vec<Acti
                   count(*)::bigint,
                   {TOKEN_SUM}
              FROM stats_scope
-            WHERE "timestamp" IS NOT NULL
+            WHERE "timestamp" IS NOT NULL AND usage_row
             GROUP BY 1, 2 ORDER BY 2, 1"#
     );
     let rows: Vec<(i32, i32, i64, i64)> = sqlx::query_as(&sql).bind(tz).fetch_all(&mut *tx).await?;
@@ -288,7 +307,15 @@ async fn all_tool_usage(
                count(*) FILTER (WHERE NOT COALESCE(r.is_error, u.is_error, false))::bigint
           FROM message_tool_uses u
           JOIN stats_scope d ON d.id = u.message_ref
-          LEFT JOIN message_tool_results r
+          -- Outcomes are collapsed to ONE row per (session, tool_use_id)
+          -- before joining. Without this the LEFT JOIN fans out whenever an
+          -- invocation has more than one recorded outcome — which happens when
+          -- a tool_result record is itself stored more than once — and the
+          -- invocation is counted twice. Caught by the oracle gate: it inflated
+          -- Bash by exactly 1 in a session with 83 real invocations.
+          -- `bool_or`: errored if ANY recorded outcome says so.
+          LEFT JOIN (SELECT session_id, tool_use_id, bool_or(is_error) AS is_error
+                       FROM message_tool_results GROUP BY 1, 2) r
                  ON r.session_id = u.session_id AND r.tool_use_id = u.tool_use_id
           CROSS JOIN LATERAL (VALUES ('tool', u.tool_name),
                                      ('skill', u.skill_name),
@@ -332,7 +359,7 @@ async fn models(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ModelStats>> {
                 coalesce(sum(cache_creation_tokens),0)::bigint,
                 coalesce(sum(cache_read_tokens),0)::bigint,
                 sum(cost_usd)
-           FROM stats_scope WHERE model IS NOT NULL
+           FROM stats_scope WHERE model IS NOT NULL AND usage_row
           GROUP BY 1 ORDER BY 3 DESC"
     );
     let rows: Vec<ModelRow> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
@@ -361,7 +388,7 @@ async fn providers(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProviderUsag
                 count(DISTINCT session_id)::bigint,
                 count(*)::bigint,
                 {TOKEN_SUM}
-           FROM stats_scope GROUP BY 1 ORDER BY 4 DESC"
+           FROM stats_scope WHERE usage_row GROUP BY 1 ORDER BY 4 DESC"
     );
     let rows: Vec<(String, i64, i64, i64, i64)> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
@@ -383,6 +410,7 @@ async fn top_projects(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProjectRa
                 count(*)::bigint,
                 {TOKEN_SUM}
            FROM stats_scope d LEFT JOIN projects p ON p.id = d.project_id
+          WHERE d.usage_row
           GROUP BY 1 ORDER BY 4 DESC LIMIT 10"
     );
     let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;

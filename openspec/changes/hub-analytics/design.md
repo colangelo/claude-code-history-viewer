@@ -494,6 +494,75 @@ emits per-message cost. Cost-over-time will stay empty until some provider
 does — which is an argument for keeping cliproxyapi's Usage Keeper as the spend
 view, exactly as the arc design concluded.
 
+## Verification gate result (2026-07-25) — PASSES
+
+Task group 6. The desktop oracle was built with `--features webui-server` and run
+headlessly (`--serve --host 127.0.0.1 --no-auth`) beside a read-only hub, and the
+two were compared per session.
+
+**Comparison basis.** The oracle reads *local files*; the hub reads the *archive*,
+which is deliberately a superset (compaction, Time Machine backfill, three
+machines). Comparing arbitrary sessions would fail on differences that are not
+bugs. So the gate runs only on sessions where the DB and the on-disk transcript
+hold an **identical set of provider message ids** — 2 of 40 sampled m4m sessions
+qualified, itself a measure of how much the archive preserves beyond the live
+files.
+
+**Result — every token field and every tool count matches exactly:**
+
+| Field | Session 275 | Session 276 |
+|---|---|---|
+| `total_input_tokens` | 18,865 = 18,865 | 19,676 = 19,676 |
+| `total_output_tokens` | 32,839 = 32,839 | 30,552 = 30,552 |
+| `total_cache_creation_tokens` | 142,857 = 142,857 | 88,049 = 88,049 |
+| `total_cache_read_tokens` | 5,189,936 = 5,189,936 | 1,138,833 = 1,138,833 |
+| `total_tokens` | 5,384,497 = 5,384,497 | 1,277,110 = 1,277,110 |
+| tool counts (per tool) | identical, 83 total | identical, 22 total |
+
+### Two real bugs the gate caught
+
+Both would have shipped silently, and neither was visible to the unit tests.
+
+1. **Tool counts were ~4× low.** The rollup joined tools to the *deduplicated*
+   set. But a single assistant response is streamed across several records
+   sharing one `message.id` and one `usage` block, and **each record carries
+   different content blocks** — so its tool calls are distinct events. Dedup is
+   correct for usage and wrong for tools. The materialized scope now keeps every
+   scoped row and flags `usage_row`; usage rollups filter on it, tool joins do
+   not.
+2. **The outcome join fanned out.** Task 4.4b said to guard against an invocation
+   with more than one recorded outcome; the guard was never written. A duplicate
+   `tool_result` record inflated Bash by exactly 1 in a session with 83 real
+   invocations. Outcomes are now collapsed with `bool_or(is_error)` grouped by
+   `(session_id, tool_use_id)` before joining.
+
+### Documented divergences (3)
+
+- **`ToolUsageStats.success_rate`** (D10) — oracle reports a flat 1.0; the hub
+  reports real rates (e.g. 0.951, 0.625). One-directional: hub ≤ oracle.
+- **Tool counts vs the oracle's double-count** (D12) — not observed in these two
+  sessions, whose records carry the top-level restatement consistently; the
+  guard remains.
+- **`message_count`** — oracle 262/94, hub 161/44. Two compounding causes, both
+  correct: the archive is cumulative (934 stored rows vs 569 lines currently on
+  disk for session 275), and the two count different things. The oracle counts
+  raw parsed records; the hub counts *logical conversational messages* —
+  deduplicated, and excluding bookkeeping record types (`mode`,
+  `permission-mode`, `attachment`, `custom-title`, …) which were 680 of 934 rows
+  in session 275. Filtering on `role IS NOT NULL` is provider-agnostic, unlike
+  matching `type` values that differ per provider.
+
+**Deliverable 2 is unblocked**: the numbers that matter reproduce the oracle
+exactly, and every divergence is understood and deliberate.
+
+### Side effect worth noting
+
+Adding cost fields to the history-core stat types broke **four struct
+initializers** in `src-tauri/src/commands/stats.rs`. "Additive" held for serde
+but not for struct literals, and `rust-tests.yml` builds that crate — so CI on
+this branch would have failed. Fixed (the desktop predates cost, so `None` is
+correct); the crate builds again.
+
 ## Open Questions
 
 - None blocking. Batch size and the `messages (message_id)` index shape are to be
