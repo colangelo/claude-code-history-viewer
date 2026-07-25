@@ -68,54 +68,67 @@ impl Scope {
     }
 }
 
-/// The scoped + deduplicated message relation every usage rollup builds on.
+/// Materialize the scoped + deduplicated messages ONCE per request.
 ///
 /// **The dedup is the whole point.** One assistant response occupies several
 /// stored rows carrying an identical `usage` block, so a plain `SUM` over
-/// `messages` over-reports. `DISTINCT ON` collapses to one row per
-/// `(session, provider message id)`, falling back to `uuid` and finally the row
-/// id — reproducing `dedup_token_totals` in the desktop oracle exactly
-/// (`stats.rs:1500`). The row id fallback is unique, so a message carrying
-/// neither identifier is never folded into another.
+/// `messages` over-reports — measured at +51.5% on the live archive.
+/// `DISTINCT ON` collapses to one row per `(session, provider message id)`,
+/// falling back to `uuid` and finally the row id, reproducing
+/// `dedup_token_totals` in the desktop oracle (`stats.rs:1500`). The row id
+/// fallback is unique, so a message carrying neither identifier is never folded
+/// into another.
 ///
-/// Bind order is fixed for every caller: `$1` paths, `$2` session id, `$3` tz,
-/// `$4` from, `$5` to. Keeping it uniform is what lets one SQL body serve all
-/// three scopes.
-const SCOPED_DEDUPED: &str = r#"
-WITH scoped AS (
-    SELECT m.id, m.session_id, m.message_id, m.uuid, m.provider, m.model,
-           m."timestamp", m.input_tokens, m.output_tokens,
-           m.cache_creation_tokens, m.cache_read_tokens, m.cost_usd,
-           s.project_id
-      FROM messages m
-      JOIN sessions s  ON s.id = m.session_id
-      LEFT JOIN projects p ON p.id = s.project_id
-     WHERE ($1::text[]  IS NULL OR p.project_path = ANY($1))
-       AND ($2::bigint  IS NULL OR m.session_id = $2)
-       AND ($4::date    IS NULL OR (m."timestamp" AT TIME ZONE $3)::date >= $4)
-       AND ($5::date    IS NULL OR (m."timestamp" AT TIME ZONE $3)::date <= $5)
-),
-deduped AS (
-    SELECT DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text)) *
-      FROM scoped
-     ORDER BY session_id, COALESCE(message_id, uuid, id::text), id
-)
-"#;
-
-/// Bind the five uniform scope/window parameters, in order.
-macro_rules! bind_scope {
-    ($q:expr, $scope:expr, $w:expr) => {
-        $q.bind($scope.paths().map(<[String]>::to_vec))
-            .bind($scope.session())
-            .bind(&$w.tz)
-            .bind($w.from)
-            .bind($w.to)
-    };
+/// **Why a temp table rather than a CTE per query.** Each dedup pass is a
+/// parallel seq scan plus an external merge sort that spills ~60 MB per worker
+/// to disk — about 3 s on the 2.6M-row archive. A summary needs ~10 rollups, and
+/// re-deriving the CTE inside each one cost ~31 s per request (measured against
+/// pg1). Materializing once and aggregating over the result turns that into one
+/// sort plus cheap scans.
+///
+/// `ON COMMIT DROP` ties the table's lifetime to the surrounding transaction, so
+/// there is nothing to clean up and concurrent requests cannot collide — each
+/// session gets its own.
+async fn materialize_scope(
+    tx: &mut sqlx::PgConnection,
+    scope: &Scope,
+    w: &Window,
+) -> sqlx::Result<()> {
+    let sql = r#"
+        CREATE TEMP TABLE stats_scope ON COMMIT DROP AS
+        WITH scoped AS (
+            SELECT m.id, m.session_id, m.message_id, m.uuid, m.provider, m.model,
+                   m."timestamp", m.input_tokens, m.output_tokens,
+                   m.cache_creation_tokens, m.cache_read_tokens, m.cost_usd,
+                   s.project_id
+              FROM messages m
+              JOIN sessions s  ON s.id = m.session_id
+              LEFT JOIN projects p ON p.id = s.project_id
+             WHERE ($1::text[]  IS NULL OR p.project_path = ANY($1))
+               AND ($2::bigint  IS NULL OR m.session_id = $2)
+               AND ($4::date    IS NULL OR (m."timestamp" AT TIME ZONE $3)::date >= $4)
+               AND ($5::date    IS NULL OR (m."timestamp" AT TIME ZONE $3)::date <= $5)
+        )
+        SELECT DISTINCT ON (session_id, COALESCE(message_id, uuid, id::text)) *
+          FROM scoped
+         ORDER BY session_id, COALESCE(message_id, uuid, id::text), id
+    "#;
+    sqlx::query(sql)
+        .bind(scope.paths().map(<[String]>::to_vec))
+        .bind(scope.session())
+        .bind(&w.tz)
+        .bind(w.from)
+        .bind(w.to)
+        .execute(&mut *tx)
+        .await?;
+    // Without stats the planner treats the temp table as tiny and picks bad
+    // plans for the joins below.
+    sqlx::query("ANALYZE stats_scope").execute(&mut *tx).await?;
+    Ok(())
 }
 
 type DailyRow = (String, i64, i64, i64, i64, i64, i64, Option<f64>);
 type ModelRow = (String, i64, i64, i64, i64, i64, i64, Option<f64>);
-
 type TotalsRow = (
     Option<i64>,
     Option<i64>,
@@ -128,10 +141,16 @@ type TotalsRow = (
     Option<i64>,
 );
 
+/// Sum of the four token columns, as SQL. Repeated in several rollups, so it
+/// lives in one place rather than being retyped (and mistyped) per query.
+const TOKEN_SUM: &str = "coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)
+                       + coalesce(cache_creation_tokens,0)
+                       + coalesce(cache_read_tokens,0)), 0)::bigint";
+
 /// Token/cost totals, message and session counts, and cost coverage.
-async fn totals(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<TotalsRow> {
-    let sql = format!(
-        "{SCOPED_DEDUPED}
+async fn totals(tx: &mut sqlx::PgConnection) -> sqlx::Result<TotalsRow> {
+    sqlx::query_as::<_, TotalsRow>(
+        r"
         SELECT sum(input_tokens)::bigint,
                sum(output_tokens)::bigint,
                sum(cache_creation_tokens)::bigint,
@@ -143,34 +162,28 @@ async fn totals(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Totals
                count(*),
                count(DISTINCT session_id),
                count(DISTINCT project_id)
-          FROM deduped"
-    );
-    bind_scope!(sqlx::query_as::<_, TotalsRow>(&sql), scope, w)
-        .fetch_one(pool)
-        .await
+          FROM stats_scope",
+    )
+    .fetch_one(&mut *tx)
+    .await
 }
 
 /// Per-day buckets in the caller's timezone.
-async fn daily(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Vec<DailyStats>> {
+async fn daily(tx: &mut sqlx::PgConnection, tz: &str) -> sqlx::Result<Vec<DailyStats>> {
     let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT to_char((\"timestamp\" AT TIME ZONE $3)::date, 'YYYY-MM-DD') AS date,
-               coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)
-                          + coalesce(cache_creation_tokens,0)
-                          + coalesce(cache_read_tokens,0)), 0)::bigint AS total_tokens,
-               coalesce(sum(input_tokens), 0)::bigint  AS input_tokens,
-               coalesce(sum(output_tokens), 0)::bigint AS output_tokens,
-               count(*)                                AS message_count,
-               count(DISTINCT session_id)              AS session_count,
-               count(DISTINCT extract(hour FROM \"timestamp\" AT TIME ZONE $3)) AS active_hours,
-               sum(cost_usd)                           AS cost_usd
-          FROM deduped
-         WHERE \"timestamp\" IS NOT NULL
-         GROUP BY 1 ORDER BY 1"
+        r#"SELECT to_char(("timestamp" AT TIME ZONE $1)::date, 'YYYY-MM-DD'),
+                  {TOKEN_SUM},
+                  coalesce(sum(input_tokens), 0)::bigint,
+                  coalesce(sum(output_tokens), 0)::bigint,
+                  count(*),
+                  count(DISTINCT session_id),
+                  count(DISTINCT extract(hour FROM "timestamp" AT TIME ZONE $1)),
+                  sum(cost_usd)
+             FROM stats_scope
+            WHERE "timestamp" IS NOT NULL
+            GROUP BY 1 ORDER BY 1"#
     );
-    let rows: Vec<DailyRow> = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<DailyRow> = sqlx::query_as(&sql).bind(tz).fetch_all(&mut *tx).await?;
     Ok(rows
         .into_iter()
         .map(|r| DailyStats {
@@ -187,22 +200,17 @@ async fn daily(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Vec<Dai
 }
 
 /// Hour-of-day × day-of-week activity.
-async fn heatmap(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Vec<ActivityHeatmap>> {
+async fn heatmap(tx: &mut sqlx::PgConnection, tz: &str) -> sqlx::Result<Vec<ActivityHeatmap>> {
     let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT extract(hour FROM \"timestamp\" AT TIME ZONE $3)::int AS hour,
-               extract(dow  FROM \"timestamp\" AT TIME ZONE $3)::int AS day,
-               count(*)::bigint AS activity_count,
-               coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)
-                          + coalesce(cache_creation_tokens,0)
-                          + coalesce(cache_read_tokens,0)), 0)::bigint AS tokens_used
-          FROM deduped
-         WHERE \"timestamp\" IS NOT NULL
-         GROUP BY 1, 2 ORDER BY 2, 1"
+        r#"SELECT extract(hour FROM "timestamp" AT TIME ZONE $1)::int,
+                  extract(dow  FROM "timestamp" AT TIME ZONE $1)::int,
+                  count(*)::bigint,
+                  {TOKEN_SUM}
+             FROM stats_scope
+            WHERE "timestamp" IS NOT NULL
+            GROUP BY 1, 2 ORDER BY 2, 1"#
     );
-    let rows: Vec<(i32, i32, i64, i64)> = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<(i32, i32, i64, i64)> = sqlx::query_as(&sql).bind(tz).fetch_all(&mut *tx).await?;
     Ok(rows
         .into_iter()
         .map(|r| ActivityHeatmap {
@@ -240,32 +248,31 @@ impl ToolKind {
 /// `(session_id, tool_use_id)` — **`tool_use_id` alone is not unique across the
 /// archive and fans out** (design D11).
 ///
+/// Joining against `stats_scope` rather than `messages` means invocations are
+/// deduplicated with their messages: a response stored three times contributes
+/// its tool call once, exactly as it contributes its tokens once.
+///
 /// `avg_execution_time` is `None`: `duration_ms` is a per-message figure and
 /// cannot be attributed to one invocation of several in that message.
 async fn tools(
-    pool: &PgPool,
-    scope: &Scope,
-    w: &Window,
+    tx: &mut sqlx::PgConnection,
     kind: ToolKind,
     limit: i64,
 ) -> sqlx::Result<Vec<ToolUsageStats>> {
     let col = kind.column();
     let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT {col} AS name,
-               count(*)::bigint AS uses,
-               count(*) FILTER (WHERE NOT COALESCE(r.is_error, u.is_error, false))::bigint AS ok
-          FROM message_tool_uses u
-          JOIN deduped d ON d.id = u.message_ref
-          LEFT JOIN message_tool_results r
-                 ON r.session_id = u.session_id AND r.tool_use_id = u.tool_use_id
-         WHERE {col} IS NOT NULL
-         GROUP BY 1 ORDER BY 2 DESC LIMIT $6"
+        "SELECT {col},
+                count(*)::bigint,
+                count(*) FILTER (WHERE NOT COALESCE(r.is_error, u.is_error, false))::bigint
+           FROM message_tool_uses u
+           JOIN stats_scope d ON d.id = u.message_ref
+           LEFT JOIN message_tool_results r
+                  ON r.session_id = u.session_id AND r.tool_use_id = u.tool_use_id
+          WHERE {col} IS NOT NULL
+          GROUP BY 1 ORDER BY 2 DESC LIMIT $1"
     );
-    let rows: Vec<(String, i64, i64)> = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<(String, i64, i64)> =
+        sqlx::query_as(&sql).bind(limit).fetch_all(&mut *tx).await?;
     Ok(rows
         .into_iter()
         .map(|(name, uses, ok)| ToolUsageStats {
@@ -281,25 +288,18 @@ async fn tools(
         .collect())
 }
 
-async fn models(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Vec<ModelStats>> {
+async fn models(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ModelStats>> {
     let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT model,
-               count(*)::bigint,
-               coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)
-                          + coalesce(cache_creation_tokens,0)
-                          + coalesce(cache_read_tokens,0)), 0)::bigint,
-               coalesce(sum(input_tokens),0)::bigint,
-               coalesce(sum(output_tokens),0)::bigint,
-               coalesce(sum(cache_creation_tokens),0)::bigint,
-               coalesce(sum(cache_read_tokens),0)::bigint,
-               sum(cost_usd)
-          FROM deduped WHERE model IS NOT NULL
-         GROUP BY 1 ORDER BY 3 DESC"
+        "SELECT model, count(*)::bigint, {TOKEN_SUM},
+                coalesce(sum(input_tokens),0)::bigint,
+                coalesce(sum(output_tokens),0)::bigint,
+                coalesce(sum(cache_creation_tokens),0)::bigint,
+                coalesce(sum(cache_read_tokens),0)::bigint,
+                sum(cost_usd)
+           FROM stats_scope WHERE model IS NOT NULL
+          GROUP BY 1 ORDER BY 3 DESC"
     );
-    let rows: Vec<ModelRow> = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<ModelRow> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
         .into_iter()
         .map(|r| ModelStats {
@@ -318,25 +318,16 @@ async fn models(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Vec<Mo
         .collect())
 }
 
-async fn providers(
-    pool: &PgPool,
-    scope: &Scope,
-    w: &Window,
-) -> sqlx::Result<Vec<ProviderUsageStats>> {
+async fn providers(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProviderUsageStats>> {
     let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT provider,
-               count(DISTINCT project_id)::bigint,
-               count(DISTINCT session_id)::bigint,
-               count(*)::bigint,
-               coalesce(sum(coalesce(input_tokens,0) + coalesce(output_tokens,0)
-                          + coalesce(cache_creation_tokens,0)
-                          + coalesce(cache_read_tokens,0)), 0)::bigint
-          FROM deduped GROUP BY 1 ORDER BY 4 DESC"
+        "SELECT provider,
+                count(DISTINCT project_id)::bigint,
+                count(DISTINCT session_id)::bigint,
+                count(*)::bigint,
+                {TOKEN_SUM}
+           FROM stats_scope GROUP BY 1 ORDER BY 4 DESC"
     );
-    let rows: Vec<(String, i64, i64, i64, i64)> = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<(String, i64, i64, i64, i64)> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
         .into_iter()
         .map(|r| ProviderUsageStats {
@@ -350,17 +341,15 @@ async fn providers(
 }
 
 /// First/last message and the span between them.
-async fn date_range(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<DateRange> {
-    let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT to_char(min(\"timestamp\") AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SSZ'),
-               to_char(max(\"timestamp\") AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SSZ'),
-               coalesce(date_part('day', max(\"timestamp\") - min(\"timestamp\")), 0)::int
-          FROM deduped"
-    );
-    let r: (Option<String>, Option<String>, i32) = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .fetch_one(pool)
-        .await?;
+async fn date_range(tx: &mut sqlx::PgConnection) -> sqlx::Result<DateRange> {
+    let r: (Option<String>, Option<String>, i32) = sqlx::query_as(
+        r#"SELECT to_char(min("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
+                  to_char(max("timestamp") AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SSZ'),
+                  coalesce(date_part('day', max("timestamp") - min("timestamp")), 0)::int
+             FROM stats_scope"#,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     Ok(DateRange {
         first_message: r.0,
         last_message: r.1,
@@ -369,37 +358,26 @@ async fn date_range(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<Da
 }
 
 /// Summed session wall-clock, in minutes.
-async fn session_duration_minutes(pool: &PgPool, scope: &Scope, w: &Window) -> sqlx::Result<i64> {
-    let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT coalesce(sum(EXTRACT(EPOCH FROM (last - first)) / 60), 0)::bigint
-          FROM (SELECT session_id, min(\"timestamp\") AS first, max(\"timestamp\") AS last
-                  FROM deduped GROUP BY session_id) s"
-    );
-    bind_scope!(sqlx::query_scalar(&sql), scope, w)
-        .fetch_one(pool)
-        .await
+async fn session_duration_minutes(tx: &mut sqlx::PgConnection) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        r#"SELECT coalesce(sum(EXTRACT(EPOCH FROM (last - first)) / 60), 0)::bigint
+             FROM (SELECT session_id, min("timestamp") AS first, max("timestamp") AS last
+                     FROM stats_scope GROUP BY session_id) s"#,
+    )
+    .fetch_one(&mut *tx)
+    .await
 }
 
-async fn top_projects(
-    pool: &PgPool,
-    scope: &Scope,
-    w: &Window,
-) -> sqlx::Result<Vec<ProjectRanking>> {
+async fn top_projects(tx: &mut sqlx::PgConnection) -> sqlx::Result<Vec<ProjectRanking>> {
     let sql = format!(
-        "{SCOPED_DEDUPED}
-        SELECT coalesce(p.name, p.project_path, '(unknown)'),
-               count(DISTINCT d.session_id)::bigint,
-               count(*)::bigint,
-               coalesce(sum(coalesce(d.input_tokens,0) + coalesce(d.output_tokens,0)
-                          + coalesce(d.cache_creation_tokens,0)
-                          + coalesce(d.cache_read_tokens,0)), 0)::bigint
-          FROM deduped d LEFT JOIN projects p ON p.id = d.project_id
-         GROUP BY 1 ORDER BY 4 DESC LIMIT 10"
+        "SELECT coalesce(p.name, p.project_path, '(unknown)'),
+                count(DISTINCT d.session_id)::bigint,
+                count(*)::bigint,
+                {TOKEN_SUM}
+           FROM stats_scope d LEFT JOIN projects p ON p.id = d.project_id
+          GROUP BY 1 ORDER BY 4 DESC LIMIT 10"
     );
-    let rows: Vec<(String, i64, i64, i64)> = bind_scope!(sqlx::query_as(&sql), scope, w)
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<(String, i64, i64, i64)> = sqlx::query_as(&sql).fetch_all(&mut *tx).await?;
     Ok(rows
         .into_iter()
         .map(|r| ProjectRanking {
@@ -427,29 +405,34 @@ fn total_tokens(d: &TokenDistribution) -> u64 {
 
 /// Archive-wide statistics.
 pub async fn global(pool: &PgPool, w: &Window) -> sqlx::Result<GlobalStatsSummary> {
-    let scope = Scope::Global;
-    let t = totals(pool, &scope, w).await?;
+    let mut tx = pool.begin().await?;
+    materialize_scope(&mut tx, &Scope::Global, w).await?;
+
+    let t = totals(&mut tx).await?;
     let dist = distribution(&t);
-    Ok(GlobalStatsSummary {
+    let out = GlobalStatsSummary {
         total_projects: t.8.unwrap_or(0).max(0) as u32,
         total_sessions: t.7.max(0) as u32,
         total_messages: t.6.max(0) as u32,
         total_tokens: total_tokens(&dist),
         total_cost_usd: t.4,
         cost_reported_messages: t.5.max(0) as u32,
-        total_session_duration_minutes: session_duration_minutes(pool, &scope, w).await?.max(0)
-            as u64,
-        date_range: date_range(pool, &scope, w).await?,
+        total_session_duration_minutes: session_duration_minutes(&mut tx).await?.max(0) as u64,
+        date_range: date_range(&mut tx).await?,
         token_distribution: dist,
-        daily_stats: daily(pool, &scope, w).await?,
-        activity_heatmap: heatmap(pool, &scope, w).await?,
-        most_used_tools: tools(pool, &scope, w, ToolKind::Tool, 20).await?,
-        most_used_skills: tools(pool, &scope, w, ToolKind::Skill, 20).await?,
-        most_used_subagents: tools(pool, &scope, w, ToolKind::Subagent, 20).await?,
-        provider_distribution: providers(pool, &scope, w).await?,
-        model_distribution: models(pool, &scope, w).await?,
-        top_projects: top_projects(pool, &scope, w).await?,
-    })
+        daily_stats: daily(&mut tx, &w.tz).await?,
+        activity_heatmap: heatmap(&mut tx, &w.tz).await?,
+        most_used_tools: tools(&mut tx, ToolKind::Tool, 20).await?,
+        most_used_skills: tools(&mut tx, ToolKind::Skill, 20).await?,
+        most_used_subagents: tools(&mut tx, ToolKind::Subagent, 20).await?,
+        provider_distribution: providers(&mut tx).await?,
+        model_distribution: models(&mut tx).await?,
+        top_projects: top_projects(&mut tx).await?,
+    };
+    // Commit (not rollback) so `ON COMMIT DROP` fires normally; nothing was
+    // written outside the temp table.
+    tx.commit().await?;
+    Ok(out)
 }
 
 /// Statistics for one project identity, folded across its member paths.
@@ -463,18 +446,20 @@ pub async fn project(
     paths: Vec<String>,
     w: &Window,
 ) -> sqlx::Result<ProjectStatsSummary> {
-    let scope = Scope::Paths(paths);
-    let t = totals(pool, &scope, w).await?;
+    let mut tx = pool.begin().await?;
+    materialize_scope(&mut tx, &Scope::Paths(paths), w).await?;
+
+    let t = totals(&mut tx).await?;
     let dist = distribution(&t);
     let sessions = t.7.max(0) as usize;
-    let duration = session_duration_minutes(pool, &scope, w).await?.max(0) as u32;
-    let heat = heatmap(pool, &scope, w).await?;
+    let duration = session_duration_minutes(&mut tx).await?.max(0) as u32;
+    let heat = heatmap(&mut tx, &w.tz).await?;
     let most_active_hour = heat
         .iter()
         .max_by_key(|h| h.activity_count)
         .map_or(0, |h| h.hour);
     let tokens = total_tokens(&dist);
-    Ok(ProjectStatsSummary {
+    let out = ProjectStatsSummary {
         project_name: name,
         total_sessions: sessions,
         total_messages: t.6.max(0) as usize,
@@ -493,13 +478,15 @@ pub async fn project(
         },
         total_session_duration: duration,
         most_active_hour,
-        most_used_tools: tools(pool, &scope, w, ToolKind::Tool, 20).await?,
-        most_used_skills: tools(pool, &scope, w, ToolKind::Skill, 20).await?,
-        most_used_subagents: tools(pool, &scope, w, ToolKind::Subagent, 20).await?,
-        daily_stats: daily(pool, &scope, w).await?,
+        most_used_tools: tools(&mut tx, ToolKind::Tool, 20).await?,
+        most_used_skills: tools(&mut tx, ToolKind::Skill, 20).await?,
+        most_used_subagents: tools(&mut tx, ToolKind::Subagent, 20).await?,
+        daily_stats: daily(&mut tx, &w.tz).await?,
         activity_heatmap: heat,
         token_distribution: dist,
-    })
+    };
+    tx.commit().await?;
+    Ok(out)
 }
 
 /// Statistics for one session. `None` when the session does not exist.
@@ -522,11 +509,13 @@ pub async fn session(
         return Ok(None);
     };
 
-    let scope = Scope::Session(session_pk);
-    let t = totals(pool, &scope, w).await?;
+    let mut tx = pool.begin().await?;
+    materialize_scope(&mut tx, &Scope::Session(session_pk), w).await?;
+
+    let t = totals(&mut tx).await?;
     let dist = distribution(&t);
-    let range = date_range(pool, &scope, w).await?;
-    Ok(Some(SessionTokenStats {
+    let range = date_range(&mut tx).await?;
+    let out = SessionTokenStats {
         session_id: provider_session_id,
         project_name: project_name.unwrap_or_else(|| "(unknown)".to_string()),
         total_input_tokens: dist.input,
@@ -540,6 +529,8 @@ pub async fn session(
         first_message_time: range.first_message.unwrap_or_default(),
         last_message_time: range.last_message.unwrap_or_default(),
         summary,
-        most_used_tools: tools(pool, &scope, w, ToolKind::Tool, 20).await?,
-    }))
+        most_used_tools: tools(&mut tx, ToolKind::Tool, 20).await?,
+    };
+    tx.commit().await?;
+    Ok(Some(out))
 }

@@ -414,6 +414,53 @@ say "cost across N of M messages" instead of implying full coverage.
 `total_reasoning_tokens` stays 0 — `TokenUsage` in history-core has no reasoning
 field at all, so the oracle's value is 0 too. Parity, not a gap.
 
+## Endpoint performance, measured against pg1 (2026-07-25)
+
+A hub was run read-only against the live archive (no `embed_model_dir`, so the
+embedding sweeper never started; only `/v1/stats/*` was called).
+
+| Request | Messages in scope | Latency |
+|---|---|---|
+| `/v1/stats/global`, first implementation | 2,532,204 | **30.9 s** |
+| `/v1/stats/global`, after materializing once | 2,534,911 | **13.9 s** |
+| `?from=2026-05-01` | 2,355,921 | 12.7 s |
+| `?from=2026-07-20` | 614,498 | 5.1 s |
+
+**Why it was 30.9 s.** Each rollup re-derived the dedup CTE, and a dedup pass is
+a parallel seq scan plus an external merge sort spilling ~60 MB per worker
+(`EXPLAIN` on pg1). A summary runs ~10 rollups, so the archive was sorted ten
+times per request. Materializing the deduped set once into an `ON COMMIT DROP`
+temp table and aggregating over that halved it, with byte-identical output.
+
+**It is still not interactive**, and windowing helps less than expected because
+the archive's mass is recent: 2.25M of 2.53M messages fall in the last month, so
+"last 30 days" is most of the corpus. Cost is ~linear at ~8 µs/message.
+
+Remaining options, in increasing order of commitment:
+
+1. **Expression index** `(session_id, COALESCE(message_id, uuid, id::text), id)`
+   so `DISTINCT ON` becomes an ordered index scan and the external sort
+   disappears. A new migration (`0005` is deployed; amending it is no longer
+   available). Removes the sort, but the ~10 aggregate scans over 2.5M rows
+   remain — expect seconds, not milliseconds.
+2. **Fold independent aggregates into fewer statements** so the temp table is
+   scanned ~4 times instead of ~10.
+3. **Precomputed rollup tables** refreshed on a schedule, with the live query
+   reserved for narrow windows. This is what actually reaches sub-second, and it
+   is a genuine design change rather than a tuning pass.
+
+Not decided here — it is a product judgement about whether an analytics page may
+take several seconds on first load.
+
+## An honest gap: no cost data exists
+
+`cost_reported_messages` is **0** across the entire archive: not one message
+carries `costUSD`. The cost plumbing (D-amendment above) is correct and tested,
+but it currently has nothing to report, because no provider in this archive
+emits per-message cost. Cost-over-time will stay empty until some provider
+does — which is an argument for keeping cliproxyapi's Usage Keeper as the spend
+view, exactly as the arc design concluded.
+
 ## Open Questions
 
 - None blocking. Batch size and the `messages (message_id)` index shape are to be

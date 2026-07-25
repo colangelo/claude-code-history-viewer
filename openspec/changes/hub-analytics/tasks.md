@@ -35,12 +35,12 @@
 
 ## 5. Endpoints
 
-- [ ] 5.1 Add a `stats` module to `crates/hub` and mount `/v1/stats/global`, `/v1/stats/projects/{identity_key}`, `/v1/stats/sessions/{id}` behind the existing read-token auth
-- [ ] 5.2 Support optional inclusive `from`/`to` date-window params and the `tz` param on all three endpoints
-- [ ] 5.3 Fold per-project statistics across every path and machine of an identity, reusing the existing `project-identity` grouping (design D6)
-- [ ] 5.4 Return `404` for unknown identity keys and unknown session ids; `401` for missing or invalid tokens
-- [ ] 5.5 Serialize responses as the existing `history-core` stat types with no changes to `crates/history-core/src/models/stats.rs`
-- [ ] 5.6 Add endpoint tests covering auth rejection, date-window narrowing, identity folding across machines, and both not-found cases
+- [x] 5.1 Add a `stats` module to `crates/hub` and mount `/v1/stats/global`, `/v1/stats/projects/{identity_key}`, `/v1/stats/sessions/{id}` behind the existing read-token auth
+- [x] 5.2 Support optional inclusive `from`/`to` date-window params and the `tz` param on all three endpoints
+- [x] 5.3 Fold per-project statistics across every path and machine of an identity, reusing the existing `project-identity` grouping (design D6)
+- [x] 5.4 Return `404` for unknown identity keys and unknown session ids; `401` for missing or invalid tokens
+- [x] 5.5 Serialize responses as the existing `history-core` stat types with no changes to `crates/history-core/src/models/stats.rs`
+- [x] 5.6 Add endpoint tests covering auth rejection, date-window narrowing, identity folding across machines, and both not-found cases
 
 ## 6. Verification gate
 
