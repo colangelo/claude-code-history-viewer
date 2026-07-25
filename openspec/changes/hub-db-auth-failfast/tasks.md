@@ -59,9 +59,9 @@ property, so they get tests before implementation. Run Rust tests with
 
 - [x] 8.1 Update `docs/archive/deployment.md` §3b: rotation pickup is now automatic, and note the ~90 s detection window
 - [x] 8.2 Merge `feature/hub-db-auth-failfast` to `main` (rebase first — `main` sees concurrent pushes) and push to `internal` + `origin`
-- [ ] 8.3 Bump the version, `just sync-version`, commit, tag `cchv-vX.Y.Z`, push tag to both remotes
-- [ ] 8.4 Confirm CI published the release with the hub binary asset + `.sha256`
-- [ ] 8.5 Relay the §2b hub binary swap to infra as **two messages** (home-network #34): swap instructions first, then the verification ask
+- [x] 8.3 Bump the version, `just sync-version`, commit, tag `cchv-vX.Y.Z`, push tag to both remotes
+- [x] 8.4 Confirm CI published the release with the hub binary asset + `.sha256`
+- [x] 8.5 Relay the §2b hub binary swap to infra as **two messages** (home-network #34): swap instructions first, then the verification ask
 - [ ] 8.6 After infra confirms: verify `/v1/healthz` is ok and the launch log still shows `db password from bao static-creds/cchv-svc`
 - [ ] 8.7 Close cchv Gitea #25 with the commit refs and the deployed version
 - [ ] 8.8 Archive this OpenSpec change (`openspec archive`), which promotes `hub-credential-resilience` into `openspec/specs/`
