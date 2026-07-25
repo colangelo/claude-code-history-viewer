@@ -64,5 +64,5 @@
 - [x] 8.1 Run the frontend gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`, `pnpm run i18n:validate`
 - [x] 8.2 Run the Rust gate: `cargo test -- --test-threads=1`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check`
 - [x] 8.3 Merge `feature/hub-analytics` into `main` and cut a `cchv-v*` release per CLAUDE.md § Release Process — **cchv-v0.14.0**, 2026-07-25. Merged `--no-ff`, no conflicts. Full gate re-run on the merged tree (tsc · 927 vitest · eslint · i18n · archive crates against a local Postgres · clippy `-D warnings` · fmt · 306 desktop tests), all green
-- [ ] 8.4 Relay the deploy to infra: migration against pg1, hub binary swap on m4m per `docs/archive/deployment.md` §2b, then the webapp `static_dir` swap
+- [x] 8.4 Relay the deploy to infra: ~~migration against pg1~~ (already applied — see the handoff), hub binary swap on m4m per `docs/archive/deployment.md` §2b, catch-up `hub backfill-analytics`, then the webapp `static_dir` swap. **Relayed 2026-07-25 14:52, thread `7bf6a920`** — `auto`, pinned to m4m, naming the release asset + sha256, the 404→200 `/v1/stats/global` rev probe, and the ~13–14 s unwindowed response time so a correct answer isn't read as a hang
 - [ ] 8.5 Verify live: statistics load in the deployed webapp and agree with the pre-deploy comparison

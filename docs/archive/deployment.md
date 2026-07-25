@@ -317,6 +317,25 @@ sidecar and the GitHub API digest; pid 10517; preswap backup
 block untouched — `no-store` is scoped to `/v1/*`). Recorded infra-side in
 `hosts/m4m.md`, home-network `bd04e4e`.
 
+**2026-07-25, hub `v0.13.1` → `v0.14.0` (thread `7bf6a920`) — RELAYED, awaiting
+infra.** Hub analytics: the swap-proof probe is a **new route**, which is
+stronger than a new header — `GET /v1/stats/global` 404s on `v0.13.1` (verified
+from ac-mbm5 pre-swap, 13 ms) and answers 200 on `v0.14.0`. Asset
+`cchv-hub-0.14.0-aarch64-apple-darwin`, sha256 `accf9daa…07b06b6`. Two things
+that make this deploy unlike the others:
+
+- **The schema landed a deploy early.** Migration `0005` and its backfill were
+  applied to pg1 on 2026-07-25 (09:51Z / 10:04Z) while `v0.13.1` was still
+  live — the column is nullable and the old binary never touched the new
+  tables. So this is a binary swap with *no* migration step, and it needs a
+  catch-up `hub backfill-analytics` afterwards for whatever the old binary
+  ingested in between (idempotent, resumable).
+- **A correct response can look like a hang.** `/v1/stats/global` unwindowed
+  takes ~13–14 s over 2.5M messages (cchv Gitea #24). Any probe needs a
+  generous `--max-time`, or a one-day window (`?from=…&to=…`), which is fast.
+  Naming this in the relay is the difference between a verification and a
+  false rollback.
+
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
 A webapp-only bump (`dist-archive/` contents, no Rust change) is **much cheaper
