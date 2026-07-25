@@ -393,15 +393,17 @@ The user looked at the live hub themselves, in a real window, through
 v0.11.1 toolbar hierarchy, and the long-pending `cchv-v0.10.6` rose topic chips.
 The backlog reopens on the next CSS-changing deploy.
 
-**Still owed: two older claims the close did not name** — the `cchv-v0.10.4`
-ultrawide rail/feed centering (`4a0fc78`) and the `cchv-v0.10.5` selected-day +
-date-pill contrast in **both** themes (`7af316f`). The infra side asked whether
-our global "the backlog is empty" sentence swallowed them (relay `513e4dd8`);
-the answer is no, and the reason is the rule itself. Each carries a *condition*
-the confirmed pass gives no evidence of meeting — an ultrawide viewport, and a
-light/dark toggle — and a global sentence that closes an unnamed item is exactly
-the inference our own close-in-pieces rule forbids. They are cheap to retire:
-one wide window plus one theme toggle on any future look, relayed by name.
+**Discharged 2026-07-25 (relay `74263172`): the two older claims, closed by
+name** — the `cchv-v0.10.4` ultrawide rail/feed centering (`4a0fc78`) and the
+`cchv-v0.10.5` selected-day + date-pill contrast in **both** themes
+(`7af316f`). The infra side had asked whether the earlier global "the backlog
+is empty" sentence swallowed them (relay `513e4dd8`); the answer was no — each
+carried a *condition* that pass gave no evidence of meeting (an ultrawide
+viewport; a light/dark toggle), and a global sentence that closes an unnamed
+item is exactly the inference the close-in-pieces rule forbids. An attended
+look on 2026-07-25 met both conditions and the close relay named both items.
+**The backlog is now empty with nothing unnamed behind it**; it reopens on the
+next CSS-changing deploy.
 
 **2026-07-24, webapp `v0.12.0` → `v0.13.0` swap (thread `c8109762`): CSS
 byte-identical.** Both trees ship the *same* chunk `archive-BBzvspm0.css` —
