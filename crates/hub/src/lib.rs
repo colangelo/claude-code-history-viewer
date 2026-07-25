@@ -5,6 +5,7 @@
 //! are public so integration tests can drive them against a throwaway database.
 
 pub mod auth;
+pub mod backfill;
 pub mod browse;
 pub mod config;
 pub mod embed;
@@ -146,6 +147,33 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
             HeaderValue::from_static("no-store"),
         ))
         .with_state(state)
+}
+
+/// Load config, connect, and run the analytics backfill to completion.
+///
+/// A separate entry point rather than a startup sweep: this is a one-time
+/// catch-up over the whole archive, not a steady-state reconciliation, so it
+/// should be run deliberately and watched — not fired on every hub boot where it
+/// would compete with serving traffic. Migrations are applied first so the
+/// target columns are guaranteed to exist.
+pub async fn run_backfill(batch: i64) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+
+    let stats = backfill::run(&pool, batch).await?;
+    tracing::info!(
+        scanned = stats.scanned,
+        message_ids = stats.message_ids,
+        tool_uses = stats.tool_uses,
+        tool_results = stats.tool_results,
+        "analytics backfill finished"
+    );
+    Ok(())
 }
 
 /// Load config, connect to Postgres, apply migrations, and serve until shutdown.

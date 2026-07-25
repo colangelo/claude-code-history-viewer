@@ -30,10 +30,21 @@
 -- up" by splitting the two meanings apart. Snapshot rows carry no `usage`, so
 -- they cannot perturb token totals.
 --
--- Left NULL here and backfilled in batches; the supporting index is created
--- afterwards (concurrently, in its own migration) so the bulk UPDATE does not
--- pay per-row index maintenance, and so the index shape can be chosen against
--- a real EXPLAIN of the rollup queries.
+-- Left NULL here and backfilled in batches (`hub backfill-analytics`).
+--
+-- The index is PARTIAL and created here rather than concurrently afterwards.
+-- The original plan was "backfill, then CREATE INDEX CONCURRENTLY in its own
+-- migration", to avoid per-row index maintenance during the bulk UPDATE. That
+-- plan does not survive contact with the migrator: sqlx applies all pending
+-- migrations at startup, so a later migration would run immediately after this
+-- one and long before any backfill — the ordering it depends on cannot happen.
+--
+-- Creating it here is cheap anyway: measured on pg1, only 10.6% of rows carry a
+-- messageId, and at creation time the column is entirely NULL, so the partial
+-- index starts EMPTY and the build is a single scan indexing nothing. The
+-- backfill then maintains ~280k entries incrementally, which is the cost the
+-- original plan was avoiding — accepted, because it buys a far simpler
+-- deployment with no ordering constraint between migration and backfill.
 --
 -- NOT a GENERATED column on purpose: that would weld the schema to today's
 -- `raw` format, which is already slated to become byte-exact original-line
@@ -42,6 +53,11 @@
 -- rule in Rust means the `raw`-format change has to confront it.
 
 ALTER TABLE messages ADD COLUMN message_id TEXT;
+
+-- Partial: ~89% of rows have no provider message id (only assistant responses
+-- carry one), and no query looks for rows lacking it.
+CREATE INDEX messages_message_id_idx
+    ON messages (message_id) WHERE message_id IS NOT NULL;
 
 COMMENT ON COLUMN messages.message_id IS
     'Provider response id (Anthropic msg_…), else the file-history-snapshot '

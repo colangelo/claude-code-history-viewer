@@ -18,10 +18,10 @@
 ## 3. Backfill
 
 - [x] 3.1 Measure first: `COUNT(*)` over `messages`, count of rows where `raw->>'messageId'` is non-null, and `EXPLAIN` the extraction — record the numbers in the change before sizing the job (design Open Questions)
-- [ ] 3.2 Write a resumable, idempotent batch backfill for `message_id` over existing rows, re-runnable without double work
-- [ ] 3.3 Extend the backfill to populate `message_tool_uses` and `message_tool_results` from stored `content`, sharing the extractors from 2.2 and 2.3 (design D4 — one code path for live and backfill)
-- [ ] 3.4 Create the `messages (message_id)` index concurrently once the backfill has drained
-- [ ] 3.5 Verify post-backfill: spot-check a session whose assistant messages are known, confirming `message_id` matches the `msg_…` ids in its transcript
+- [x] 3.2 Write a resumable, idempotent batch backfill for `message_id` over existing rows, re-runnable without double work
+- [x] 3.3 Extend the backfill to populate `message_tool_uses` and `message_tool_results` from stored `content`, sharing the extractors from 2.2 and 2.3 (design D4 — one code path for live and backfill)
+- [x] 3.4 ~~Create the index concurrently once the backfill has drained~~ — **superseded**: sqlx applies all pending migrations at startup, so a later migration cannot be ordered after the backfill. A PARTIAL index in `0005` instead, which starts empty (column all-NULL at creation) so the build indexes nothing; the backfill maintains ~280k entries incrementally. Recorded in the migration
+- [ ] 3.5 Verify post-backfill on pg1: spot-check a session whose assistant messages are known, confirming `message_id` matches the `msg_…` ids in its transcript. **Deploy-time** — requires WRITING to production, so it runs with task 8.4, not now
 
 ## 4. Dedup and rollups
 
