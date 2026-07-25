@@ -347,14 +347,29 @@ rm "$LIVE"
 # 3. cp the staged binary → a fresh inode.
 cp "$STAGED" "$LIVE"
 
-# 4. Re-sign ad-hoc (the kernel rejects the cached signature otherwise).
+# 4. chmod — `gh release download` stages assets -rw-r--r--, and because step 2
+#    removed the old inode, the cp above inherits the SOURCE mode: without this
+#    the live binary is not executable and bootstrap fails to exec it.
+chmod 755 "$LIVE"
+
+# 5. Re-sign ad-hoc (the kernel rejects the cached signature otherwise).
 codesign --force --sign - "$LIVE"
 
-# 5. bootout + bootstrap — NOT `kickstart -k` (which can wedge in
+# 6. Eyeball the mode before restarting — must read -rwxr-xr-x.
+ls -l "$LIVE"
+
+# 7. bootout + bootstrap — NOT `kickstart -k` (which can wedge in
 #    "spawn scheduled"). If a prior kickstart hung, kill it first.
 launchctl bootout  gui/$(id -u)/dev.cchv.hub 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.hub.plist
 ```
+
+Step 4 was missing until the `v0.16.0` swap (2026-07-26, thread `1b97e64b`),
+where infra caught the live binary sitting `-rw-r--r--` *before* the restart
+and fixed it by hand — and found `staging/cchv-hub-0.15.0-…` is `-rw-r--r--`
+too, so every release-asset swap had been one forgotten off-recipe `chmod`
+away from a failed bootstrap. The local-build fallback path masks the gap
+(cargo emits the bit); only the release-asset path trips it.
 
 Verify: `curl -s https://hub.internal:8788/v1/healthz` → `{"status":"ok",…}`
 and the process is running clean (fresh pid, no respawn churn).
@@ -490,12 +505,16 @@ the run, both worth knowing before the next swap:
   after a short pause before escalating; the first I/O error is not a wedged
   job (that failure mode is the hung `kickstart -k` described above).
 
-**PENDING next swap — the release carrying `345f3459` (honest browse lists):
-probe set, pre-measured baseline, and a header-grep trap.** Infra measured the
-pre-swap baseline on m4m against the live `v0.15.0` hub at 2026-07-25 19:03Z
-(thread `82f10631`, recorded infra-side in `hosts/m4m.md`, home-network
-`739f098`), so each probe below has a verified old-binary reading to flip
-against:
+**LANDED with `v0.16.0` — the release carrying `345f3459` (honest browse
+lists): probe set, pre-measured baseline, and a header-grep trap.** `345f3459`
+shipped in `cchv-v0.16.0` (swapped 2026-07-26, record below). The swap proof
+actually used was the release's stronger new-route flip (`/v1/healthz/stats`,
+404 → non-404), so the probe set below was **not individually re-run** — the
+baseline readings stand as historical, and the ⚠ decoy warning is permanent
+regardless. Infra measured the pre-swap baseline on m4m against the live
+`v0.15.0` hub at 2026-07-25 19:03Z (thread `82f10631`, recorded infra-side in
+`hosts/m4m.md`, home-network `739f098`), so each probe below had a verified
+old-binary reading to flip against:
 
 - `GET /v1/sessions?projectid=1` → 200 today, **must become 400** naming the
   unknown field (`deny_unknown_fields`). Clean and discriminating as written —
@@ -520,6 +539,45 @@ against:
 - `GET /v1/sessions/<uuid>/messages?limitt=1` → 200 today, **must become
   400**. (The messages endpoint already sent `X-Total-Count` pre-fix, so the
   header is not a probe there.)
+
+**2026-07-26, hub `v0.15.0` → `v0.16.0` swap (thread `1b97e64b`, infra reply
+`b48d04b3`): the DuckDB stats mirror is live, and the mirror finished its cold
+build inside the handler window.** Swapped ~00:55 local, fresh pid 25286 (was
+60157); preswap backup `staging/cchv-hub-preswap-20260726-0055` (= the 0.15.0
+rollback point, 15,291,680 B). Digest `d636ab84…7331c4da` (57,631,264 B)
+agreed **four ways** before anything was copied — relay, `.sha256` sidecar,
+infra's local re-hash, GitHub API digest — and the installed file was *not*
+re-hashed, per the v0.15.0 lesson. `otool -L` shows no `libduckdb` dylib
+reference (statically linked, as shipped). Swap proof: `/v1/healthz/stats`
+404 pre-swap → `503 warming` immediately post-swap → `200
+{"status":"ok","ready":true,…}` once the mirror landed. Binary only — webapp,
+`static_dir`, `hub.toml` all untouched, no migration. Operational readings
+worth keeping:
+
+- **Mirror cold build: 480 s** for 2,920,083 messages / 142,160 tool_uses /
+  141,988 tool_results (the 497 s / 2,898,915-row estimate was within 4%);
+  final file **789 MB** (confirming the corrected ~792 MB figure — the 119 MB
+  draft number was wrong). Ingest ran clean throughout; `mirror rebuild`
+  serves from the old mirror while building and needs no restart.
+- **Perf reproduces on m4m**: `/v1/stats/global` 30-day `Europe/Rome`
+  0.59 s / 0.55 s (dev box: 0.48 s); unwindowed 0.65 s (dev box: 0.57 s).
+- **Probe hygiene**: `/v1/stats/*` `from`/`to` want `YYYY-MM-DD` — RFC3339
+  gets a clean `400 invalid from date (want YYYY-MM-DD)`. That 400 is caller
+  error, not a regression.
+- **The exec-bit gap** (recipe step 4 above) was caught live on this swap:
+  the live path (`~/.local/bin/cchv-hub` on m4m) came out `-rw-r--r--` after
+  the `cp` and would have failed bootstrap; infra `chmod 755`'d before the
+  restart. Recorded infra-side in `hosts/m4m.md`, home-network `f7cbb36`.
+- ⚠ **m4m disk was at 98.9% used (22.5 GB free) at swap time** — the 121 GiB
+  figure quoted in the handoff was a day stale, ~95 GiB consumed in between.
+  Not cchv (all of `~/.config/cchv` is under 1.6 GB); leading theory is APFS
+  local Time Machine snapshots, filed as home-network **#35** (needs sudo).
+  Until resolved this bounds headroom for mirror rebuilds, which write a
+  fresh ~800 MB file alongside the old one before swapping.
+- The `backfill-analytics` + `mirror rebuild` standing rule (old dedup
+  grouping → silent token over-count) is recorded infra-side in
+  `hosts/m4m.md`; nothing was backfilled on this swap. The Gatus check for
+  `/v1/healthz/stats` goes out as a separate relay.
 
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
