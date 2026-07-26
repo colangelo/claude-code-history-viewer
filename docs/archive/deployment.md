@@ -341,8 +341,17 @@ STAMP=$(date +%Y%m%d-%H%M)
 # 1. Back up the currently-live binary (to staging, timestamped).
 cp "$LIVE" ~/.config/cchv/staging/cchv-hub-preswap-$STAMP
 
-# 2. rm the old binary FIRST — do not cp over it (inode codesign cache).
+# 2. Unlink the old binary FIRST — do not cp over it (inode codesign cache).
+#    `trash` is the house rule and works the same here: either way the path is
+#    unlinked and step 3 gets a fresh inode; step 1's backup is the rollback
+#    point regardless.
 rm "$LIVE"
+
+# 2b. Assert the removal actually took before copying. This makes the
+#     inode-codesign trap unreachable: the one way step 3 quietly becomes an
+#     in-place overwrite is a removal that failed while the script carried on.
+#     (Infra hardening from the v0.17.0 swap, thread e05b6f2e.)
+[ ! -e "$LIVE" ]
 
 # 3. cp the staged binary → a fresh inode.
 cp "$STAGED" "$LIVE"
@@ -585,6 +594,50 @@ worth keeping:
   grouping → silent token over-count) is recorded infra-side in
   `hosts/m4m.md`; nothing was backfilled on this swap. The Gatus check for
   `/v1/healthz/stats` goes out as a separate relay.
+
+**2026-07-26, hub `v0.16.0` → `v0.17.0` swap (thread `e05b6f2e`, infra report
+`8c4be5ef`, home-network `2634104`): step 2b/3 hardening lands, and the mirror's
+no-503-window property gets its first live confirmation.** Swapped ~17:57 local,
+pid 25286 → 77531, no respawn churn, downtime well under a minute; preswap
+backup `staging/cchv-hub-preswap-20260726-1757` (= the 0.16.0 rollback point,
+57,314,320 B). Digest `f75eeeaa…97baccf` (57,613,056 B) agreed **four ways**
+before anything was copied — relay, `.sha256` sidecar, GitHub API digest,
+infra's local re-hash — and the installed file was not re-hashed, per the
+v0.15.0 lesson. Swap proof: `model_distribution` at the **project** stats scope
+(`/v1/stats/projects/{identity_key}` — `ProjectStatsSummary` grew from 15 keys
+to 16), measured pre-swap False/15 independently on both sides, post-swap
+True/16 with a populated 4-entry array. Both of infra's readings ran on m4m
+(stated, per the machine-honesty rule); the independent cross-machine check ran
+from **ac-mbm5** (`scutil`-verified) after the report: bare `curl` over the
+tailnet HTTPS front, no ssh wrapping — 200, 16 keys, `model_distribution`
+populated, 5.85 s cold (first materialization of that project scope; warm
+readings are ~0.3 s). Operational notes:
+
+- **The step 4 `chmod 755` earned its keep on its first outing**: the 0.17.0
+  release asset staged `-rw-r--r--` exactly as v0.16.0's did, step 4 fired, and
+  `ls -l` read `-rwxr-xr-x` before the restart. The gap is closed in practice,
+  not just on paper.
+- **Recipe hardened (step 2b above, infra suggestion from this swap)**:
+  `[ ! -e "$LIVE" ]` between the unlink and the cp makes the in-place-overwrite
+  codesign trap unreachable rather than merely avoided.
+- **`bootstrap` succeeded on the first attempt** — the transient
+  `Input/output error` from the v0.15.0 swap did not recur. It is intermittent;
+  the retry-after-a-pause guidance stands.
+- **First live confirmation that mirror readiness persists across a restart**
+  (the v0.16.0 design property): `/v1/healthz/stats` read `ready:true` within
+  ~14 s of restart (`age_seconds` 14, `lag_rows` 454), never `warming`. Routine
+  §2b deploys do not cold-build the mirror. The mirror file was untouched and
+  reopened as-is; no backfill ran (none owed — no schema/grouping change).
+- **`.swap-lock` was clean on arrival** (unlike v0.15.0), held for the swap,
+  released after verification.
+- **Resources, measured at swap time**: 98 Gi free / 95% used before, 97 Gi
+  after; `staging/` 609 M → 718 M. Correction to our relay: the hub binary is
+  **55 MB, not ~15 MB** (DuckDB statically linked since v0.16.0) — the ~15 MB
+  figure was stale from the pre-DuckDB line and matters if it ever feeds a
+  sizing estimate.
+- Binary only — this entry is 1 of 2. The webapp swap (§2c) follows as its own
+  relay, closing the chip-vs-API divergence (chip v0.16.0 against a v0.17.0
+  API) that the every-release-ships-the-webapp rule exists to prevent.
 
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
