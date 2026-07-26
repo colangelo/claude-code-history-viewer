@@ -18,18 +18,15 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, GitBranch, Link2, Loader2 } from "lucide-react";
-import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
-import { MessageContentDisplay } from "@/components/messageRenderer";
-import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
+import { GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatCount, humanizeTimestamp } from "@/utils/journalFormat";
-import { getProviderLabel } from "@/utils/providers";
-import { ArchiveRenderContext } from "@/contexts/ArchiveRenderContext";
 import { JournalView } from "./JournalView";
 import { AnalyticsView } from "./AnalyticsView";
 import { SearchBar } from "./SearchBar";
 import { SearchResults } from "./SearchResults";
+import { ProjectsPane } from "./ProjectsPane";
+import { SessionsPane } from "./SessionsPane";
+import { MessagesPane, type OpenSession } from "./MessagesPane";
 import {
   aliasKeyByPath,
   groupProjects,
@@ -46,7 +43,6 @@ import {
 } from "./archiveRoute";
 import {
   hubApi,
-  hubMessageToClaudeMessage,
   identityProjectFilter,
   type HubConfig,
   type HubIdentity,
@@ -71,11 +67,6 @@ const PAGE_SIZE = 200;
 
 type ArchiveView = "journal" | "browse" | "analytics";
 
-interface OpenSession {
-  ref: number | string;
-  label: string;
-}
-
 /** Optional project context for a session opened from Journal or a search
  * hit — used to sync the Browse panes (select the project, load its
  * sessions) so the surrounding lists match what's open. */
@@ -90,59 +81,6 @@ export interface SessionOpenContext {
 export interface SessionOpenTarget {
   position: number;
   messageId?: number;
-}
-
-/** Roles that get a turn-boundary gutter; record types (`attachment`, `mode`,
- * …) neither render one nor reset the turn. */
-const GUTTER_ROLES = new Set(["user", "assistant", "system", "summary"]);
-
-/** The previous conversation-role before `index`, skipping record rows. */
-function lastConversationRole(
-  messages: HubMessage[],
-  index: number
-): string | null {
-  for (let i = index - 1; i >= 0; i--) {
-    const role = messages[i]!.role ?? messages[i]!.message_type;
-    if (role != null && GUTTER_ROLES.has(role)) return role;
-  }
-  return null;
-}
-
-/** Localized role label for the message gutter; unknown roles pass through. */
-function roleLabel(role: string, t: (key: string) => string): string {
-  switch (role) {
-    case "user":
-      return t("navigator.role.user");
-    case "assistant":
-      return t("navigator.role.assistant");
-    case "system":
-      return t("navigator.role.system");
-    case "summary":
-      return t("navigator.role.summary");
-    default:
-      return role;
-  }
-}
-
-/** Renders one archived message via the existing content renderers, keeping
- * structured content (tool use/results/thinking, etc.) intact rather than
- * collapsing it to a text preview. */
-function ArchivedMessage({ row, sessionId }: { row: HubMessage; sessionId: string }) {
-  const claudeMessage = hubMessageToClaudeMessage(row, sessionId);
-  const content = claudeMessage.content;
-
-  return (
-    <ExpandKeyProvider value={claudeMessage.uuid}>
-      {Array.isArray(content) ? (
-        <ClaudeContentArrayRenderer content={content} />
-      ) : (
-        <MessageContentDisplay
-          content={typeof content === "string" ? content : null}
-          messageType={claudeMessage.type}
-        />
-      )}
-    </ExpandKeyProvider>
-  );
 }
 
 export function ArchiveBrowser({
@@ -555,6 +493,17 @@ export function ArchiveBrowser({
     }
   }, [config, openSession, messages.length, isLoadingMessages, windowStart]);
 
+  // The pane's one button toggles between starting and stopping the walk, so
+  // it gets both verbs. Starting swallows the promise here rather than in the
+  // click handler; stopping only raises the flag `handleLoadAll` reads.
+  const handleLoadAllClick = useCallback(() => {
+    void handleLoadAll();
+  }, [handleLoadAll]);
+
+  const handleStopLoadAll = useCallback(() => {
+    abortLoadAllRef.current = true;
+  }, []);
+
   // Center the matched message once its page has rendered.
   useEffect(() => {
     const id = pendingScrollRef.current;
@@ -944,454 +893,51 @@ export function ArchiveBrowser({
         </div>
       ) : (
         <div className="flex flex-1 min-h-0 gap-3">
-          {/* Projects pane: identity-grouped (one entry per repo identity,
-              members inspectable on selection). Below `md` the three panes
-              stack: exactly one level is visible with back buttons. */}
-          <div
-            className={cn(
-              "w-full md:w-60 md:shrink-0 overflow-y-auto border border-border/50 rounded-md",
-              (selectedGroup || openSession) && "hidden md:block"
-            )}
-          >
-            <p className="px-2 py-1.5 text-px12 font-medium text-muted-foreground">
-              {t("settings.archiveHub.browser.projects.title")}
-            </p>
-            {isLoadingProjects && (
-              <p className="px-2 py-1 text-px14 text-muted-foreground">
-                {t("settings.archiveHub.browser.projects.loading")}
-              </p>
-            )}
-            {projectsError && (
-              <p className="px-2 py-1 text-px14 text-destructive">{projectsError}</p>
-            )}
-            {!isLoadingProjects && !projectsError && projectGroups.length === 0 && (
-              <p className="px-2 py-1 text-px14 text-muted-foreground">
-                {t("settings.archiveHub.browser.projects.empty")}
-              </p>
-            )}
-            <ul>
-              {projectGroups.map((group) => {
-                const isSelected = activeGroup?.key === group.key;
-                const identityInfo = group.identityKey
-                  ? identities.find((i) => i.identity_key === group.identityKey)
-                  : undefined;
-                // A path already listed under LOCATIONS must not double as
-                // a suggestion (guards against hubs predating the
-                // fingerprinted-anywhere orphan exclusion).
-                const orphanSuggestions =
-                  identityInfo?.suggestions.filter(
-                    (s) =>
-                      s.kind === "orphan_path" &&
-                      s.project_path &&
-                      !group.paths.includes(s.project_path)
-                  ) ?? [];
-                return (
-                  <li key={group.key}>
-                    <button
-                      type="button"
-                      data-testid="project-group"
-                      onClick={() => handleSelectGroup(group)}
-                      className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
-                        isSelected ? "bg-accent/15 dark:bg-accent/25" : ""
-                      }`}
-                      title={group.paths.join("\n")}
-                    >
-                      <p className="truncate">
-                        {group.displayName}
-                        {group.disambiguator && (
-                          <span className="text-px12 text-muted-foreground">
-                            {" — "}
-                            {group.disambiguator}
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-px12 text-muted-foreground truncate">
-                        {group.machines.join(", ")}
-                        {group.providers.map((provider) => (
-                          <span
-                            key={provider}
-                            className="ml-1.5 rounded border border-border bg-muted/50 px-1 py-px text-foreground/75"
-                          >
-                            {getProviderLabel(t, provider)}
-                          </span>
-                        ))}
-                        {group.worktreePaths.length > 0 && (
-                          <span className="ml-1.5 rounded bg-info/10 text-info px-1 py-px">
-                            {t("settings.archiveHub.identity.worktree")}
-                          </span>
-                        )}
-                      </p>
-                    </button>
-                    {/* Member inspection: locations, worktree/linked labels,
-                        alias link/unlink affordances. */}
-                    {isSelected &&
-                      (group.paths.length > 1 ||
-                        orphanSuggestions.length > 0 ||
-                        (identityInfo?.aliases.length ?? 0) > 0 ||
-                        group.worktreePaths.length > 0) && (
-                        <div
-                          data-testid="identity-members"
-                          className="px-2 pb-2 space-y-2"
-                        >
-                          {/* Confirmed members: paths already in this
-                              identity's scope. Solid accent rail continues the
-                              selected row's accent wash. */}
-                          <div className="space-y-1">
-                            <p className="text-px11 font-medium uppercase tracking-wide text-accent">
-                              {t("settings.archiveHub.identity.locations")}
-                            </p>
-                            <div className="space-y-1 border-l-2 border-accent/40 pl-2">
-                              {group.paths.map((path) => {
-                                const alias = identityInfo?.aliases.find(
-                                  (a) => a.project_path === path
-                                );
-                                return (
-                                  <div
-                                    key={path}
-                                    className="flex items-center gap-1.5 text-px12 text-foreground/70"
-                                  >
-                                    <span className="truncate" title={path}>
-                                      {path}
-                                    </span>
-                                    {group.worktreePaths.includes(path) && (
-                                      <span className="shrink-0 rounded bg-info/10 text-info px-1 py-px">
-                                        {t(
-                                          "settings.archiveHub.identity.worktree"
-                                        )}
-                                      </span>
-                                    )}
-                                    {alias && (
-                                      <>
-                                        <span className="shrink-0 rounded border border-accent/30 bg-accent/10 px-1 py-px text-accent">
-                                          {t(
-                                            "settings.archiveHub.identity.linked"
-                                          )}
-                                        </span>
-                                        <button
-                                          type="button"
-                                          data-testid="identity-unlink"
-                                          onClick={() =>
-                                            handleUnlinkAlias(alias.id)
-                                          }
-                                          className="shrink-0 rounded border border-border px-1 py-px text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
-                                        >
-                                          {t(
-                                            "settings.archiveHub.identity.unlink"
-                                          )}
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-
-                          {/* Link candidates: paths the hub suspects belong
-                              here but cannot prove by git fingerprint. Dashed
-                              rail + dimmer text so they never read as members
-                              until the user links them. */}
-                          {orphanSuggestions.length > 0 && (
-                            <div className="space-y-1">
-                              <p
-                                className="text-px11 font-medium uppercase tracking-wide text-muted-foreground"
-                                title={t(
-                                  "settings.archiveHub.identity.suggestionHint"
-                                )}
-                              >
-                                {t("settings.archiveHub.identity.suggested")}
-                              </p>
-                              <div className="space-y-1 border-l-2 border-dashed border-border pl-2">
-                                {orphanSuggestions.map((suggestion) => (
-                                  <div
-                                    key={suggestion.project_path}
-                                    className="flex items-center gap-1.5 text-px12 text-muted-foreground/80"
-                                  >
-                                    <span
-                                      className="truncate"
-                                      title={`${suggestion.project_path} — ${t(
-                                        "settings.archiveHub.identity.suggestionHint"
-                                      )}`}
-                                    >
-                                      {suggestion.project_path}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      data-testid="identity-link"
-                                      title={t(
-                                        "settings.archiveHub.identity.linkHint"
-                                      )}
-                                      onClick={() =>
-                                        handleLinkAlias(
-                                          suggestion.project_path!,
-                                          group.identityKey!
-                                        )
-                                      }
-                                      className="shrink-0 flex items-center gap-1 rounded border border-accent/30 bg-accent/10 px-1.5 py-px font-medium text-accent transition-colors hover:bg-accent hover:text-accent-foreground"
-                                    >
-                                      <Link2
-                                        className="w-3 h-3"
-                                        aria-hidden="true"
-                                      />
-                                      {t("settings.archiveHub.identity.link")}
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {aliasError && (
-                            <p className="text-px12 text-destructive">{aliasError}</p>
-                          )}
-                        </div>
-                      )}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-
-          {/* Sessions pane */}
-          <div
-            className={cn(
-              "w-full md:w-80 md:shrink-0 overflow-y-auto border border-border/50 rounded-md",
-              (!selectedGroup || openSession) && "hidden md:block"
-            )}
-          >
-            <div className="flex items-center gap-1 px-2 py-1.5">
-              <button
-                type="button"
-                data-testid="browse-back-to-projects"
-                onClick={handleBackToProjects}
-                className="md:hidden flex items-center gap-0.5 text-px12 text-muted-foreground hover:text-foreground"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                {t("settings.archiveHub.browser.backToProjects")}
-              </button>
-              <p className="text-px12 font-medium text-muted-foreground">
-                {t("settings.archiveHub.browser.sessions.title")}
-              </p>
-            </div>
-            {!selectedGroup && (
-              <p className="px-2 py-1 text-px14 text-muted-foreground">
-                {t("settings.archiveHub.browser.selectProject")}
-              </p>
-            )}
-            {selectedGroup && isLoadingSessions && (
-              <p className="px-2 py-1 text-px14 text-muted-foreground">
-                {t("settings.archiveHub.browser.sessions.loading")}
-              </p>
-            )}
-            {sessionsError && (
-              <p className="px-2 py-1 text-px14 text-destructive">{sessionsError}</p>
-            )}
-            {selectedGroup &&
-              !isLoadingSessions &&
-              !sessionsError &&
-              sessions.length === 0 && (
-                <p className="px-2 py-1 text-px14 text-muted-foreground">
-                  {t("settings.archiveHub.browser.sessions.empty")}
-                </p>
-              )}
-            <ul>
-              {sessions.map((session) => (
-                <li key={session.id}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openSessionRef(session.id, session.summary ?? session.session_id)
-                    }
-                    className={`w-full text-left px-2 py-2 text-px14 hover:bg-muted ${
-                      openSession?.ref === session.id ||
-                      openSession?.ref === session.session_id
-                        ? "bg-accent/15 dark:bg-accent/25"
-                        : ""
-                    }`}
-                  >
-                    <p className="truncate">{session.summary ?? session.session_id}</p>
-                    <p className="text-px12 text-muted-foreground truncate">
-                      {formatCount(session.message_count)}{" "}
-                      {t("settings.archiveHub.browser.sessions.messageCountUnit")}
-                      {session.last_message_time
-                        ? ` · ${humanizeTimestamp(session.last_message_time)}`
-                        : ""}
-                    </p>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Messages pane */}
-          <div
-            className={cn(
-              "flex-1 min-w-0 overflow-y-auto border border-border/50 rounded-md",
-              !openSession && "hidden md:block"
-            )}
-          >
-            {/* Header rides the same centered column as the messages — on
-                ultrawide screens label and count otherwise sit 1400px apart. */}
-            <div className="w-full max-w-4xl mx-auto flex items-center gap-2 px-2 py-1.5 min-w-0">
-              {openSession && (
-                <button
-                  type="button"
-                  data-testid="browse-back-from-messages"
-                  onClick={handleBackFromMessages}
-                  className="md:hidden flex items-center gap-0.5 shrink-0 text-px12 text-muted-foreground hover:text-foreground"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
-                  {selectedGroup
-                    ? t("settings.archiveHub.browser.backToSessions")
-                    : t("settings.archiveHub.browser.backToProjects")}
-                </button>
-              )}
-              <p className="text-px12 font-medium text-muted-foreground truncate">
-                {openSession?.label ?? t("settings.archiveHub.browser.selectSession")}
-              </p>
-              {openSession && totalCount != null && (
-                <p
-                  className="ml-auto shrink-0 text-px12 text-muted-foreground tabular-nums"
-                  data-testid="message-progress"
-                >
-                  {windowStart > 0
-                    ? t("settings.archiveHub.browser.messages.progressRange", {
-                        from: formatCount(windowStart + 1),
-                        to: formatCount(windowStart + messages.length),
-                        total: formatCount(totalCount),
-                      })
-                    : t("settings.archiveHub.browser.messages.progress", {
-                        loaded: formatCount(messages.length),
-                        total: formatCount(totalCount),
-                      })}
-                </p>
-              )}
-            </div>
-            {!openSession && (
-              <p className="px-2 py-1 text-px14 text-muted-foreground">
-                {t("settings.archiveHub.browser.selectSession")}
-              </p>
-            )}
-            {openSession && isLoadingMessages && messages.length === 0 && (
-              <p className="px-2 py-1 text-px14 text-muted-foreground">
-                {t("settings.archiveHub.browser.messages.loading")}
-              </p>
-            )}
-            {messagesError && (
-              <p className="px-2 py-1 text-px14 text-destructive">{messagesError}</p>
-            )}
-            {openSession &&
-              !isLoadingMessages &&
-              !messagesError &&
-              messages.length === 0 && (
-                <p className="px-2 py-1 text-px14 text-muted-foreground">
-                  {t("settings.archiveHub.browser.messages.empty")}
-                </p>
-              )}
-            {openSession && windowStart > 0 && (
-              <div className="px-2 pt-1 w-full max-w-4xl mx-auto">
-                <button
-                  type="button"
-                  data-testid="archive-load-earlier"
-                  onClick={handleLoadEarlier}
-                  disabled={isLoadingMessages}
-                  className="w-full rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
-                >
-                  {t("settings.archiveHub.browser.messages.loadEarlier")}
-                </button>
-              </div>
-            )}
-            {/* Reading-measure column: don't span the full pane on wide screens. */}
-            <ArchiveRenderContext.Provider value={true}>
-              <div className="px-2 py-1 space-y-1 w-full max-w-4xl mx-auto">
-                {messages.map((row, index) => {
-                  const role = row.role ?? row.message_type;
-                  // Role/timestamp gutter at turn boundaries only, and only
-                  // for real conversation roles: record types like
-                  // `attachment`/`mode` interleave constantly and would strew
-                  // noise gutters between every real turn (they also must not
-                  // RESET the turn, so compare against the last real role).
-                  const isConversationRole =
-                    role != null && GUTTER_ROLES.has(role);
-                  const showGutter =
-                    isConversationRole &&
-                    role !== lastConversationRole(messages, index);
-                  return (
-                    <div
-                      key={row.id}
-                      data-msg-id={row.id}
-                      className={cn(
-                        row.id === highlightMessageId &&
-                          "ring-2 ring-accent/70 rounded-md"
-                      )}
-                    >
-                      {showGutter && (
-                        <div
-                          data-testid="message-gutter"
-                          className="flex items-baseline gap-2 pt-2 pb-0.5 text-px12 text-muted-foreground"
-                        >
-                          <span className="font-medium">{roleLabel(role, t)}</span>
-                          {row.timestamp && (
-                            <span title={row.timestamp}>
-                              {humanizeTimestamp(row.timestamp)}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <ArchivedMessage
-                        row={row}
-                        sessionId={String(openSession?.ref ?? "")}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </ArchiveRenderContext.Provider>
-            {hasMoreMessages && (
-              <div className="px-2 pb-2 w-full max-w-4xl mx-auto flex gap-2">
-                <button
-                  type="button"
-                  data-testid="archive-load-more"
-                  onClick={handleLoadMore}
-                  disabled={isLoadingMessages}
-                  className="flex-1 rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
-                >
-                  {isLoadingMessages ? (
-                    <>
-                      <Loader2
-                        className="w-3.5 h-3.5 mx-auto animate-spin"
-                        aria-hidden="true"
-                      />
-                      <span className="sr-only">{t("common.loading")}</span>
-                    </>
-                  ) : (
-                    t("settings.archiveHub.browser.messages.loadMore")
-                  )}
-                </button>
-                {/* Quieter than its neighbour: paging one screen at a time is
-                    the ordinary move, walking the whole session is the
-                    occasional one. The count is on the label so a 5,000-message
-                    session announces the cost before the click, not after. */}
-                <button
-                  type="button"
-                  data-testid="archive-load-all"
-                  onClick={() =>
-                    isLoadingAll
-                      ? (abortLoadAllRef.current = true)
-                      : void handleLoadAll()
-                  }
-                  disabled={isLoadingMessages && !isLoadingAll}
-                  className="shrink-0 rounded-md px-3 py-2 text-px14 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-                >
-                  {isLoadingAll
-                    ? t("settings.archiveHub.browser.messages.loadAllStop")
-                    : t("settings.archiveHub.browser.messages.loadAll", {
-                        remaining: remainingMessages,
-                      })}
-                </button>
-              </div>
-            )}
-          </div>
+          {/* Below `md` the three panes stack: exactly one level is visible,
+              and the back buttons walk back up. Which level that is depends
+              on the drill-down state, so the panes take `hidden` rather than
+              deriving it. */}
+          <ProjectsPane
+            groups={projectGroups}
+            activeGroup={activeGroup}
+            identities={identities}
+            isLoading={isLoadingProjects}
+            error={projectsError}
+            aliasError={aliasError}
+            hidden={Boolean(selectedGroup || openSession)}
+            onSelectGroup={handleSelectGroup}
+            onLinkAlias={handleLinkAlias}
+            onUnlinkAlias={handleUnlinkAlias}
+          />
+          <SessionsPane
+            sessions={sessions}
+            hasSelection={selectedGroup != null}
+            openSessionRef={openSession?.ref ?? null}
+            isLoading={isLoadingSessions}
+            error={sessionsError}
+            hidden={!selectedGroup || Boolean(openSession)}
+            onBackToProjects={handleBackToProjects}
+            onOpenSession={openSessionRef}
+          />
+          <MessagesPane
+            messages={messages}
+            openSession={openSession}
+            totalCount={totalCount}
+            windowStart={windowStart}
+            highlightMessageId={highlightMessageId}
+            isLoadingMessages={isLoadingMessages}
+            isLoadingAll={isLoadingAll}
+            error={messagesError}
+            hasMore={hasMoreMessages}
+            remaining={remainingMessages}
+            hasSelectedGroup={selectedGroup != null}
+            hidden={!openSession}
+            onBack={handleBackFromMessages}
+            onLoadEarlier={handleLoadEarlier}
+            onLoadMore={handleLoadMore}
+            onLoadAll={handleLoadAllClick}
+            onStopLoadAll={handleStopLoadAll}
+          />
         </div>
       )}
     </div>
