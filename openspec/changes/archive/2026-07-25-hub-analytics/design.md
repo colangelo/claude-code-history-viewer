@@ -651,6 +651,11 @@ TRUNCATE message_tool_uses, message_tool_results;
 - **Performance**: `/v1/stats/global` ~13.7 s over 2.5M messages. Fully
   researched in **cchv Gitea #24** with measurements and three costed options;
   the cheapest untried lever is `SET LOCAL work_mem` (pg1 is at 4 MB, so the
-  dedup sort must spill).
+  dedup sort must spill). *(2026-07-27: no longer open — closed by a fourth
+  option none of the three costed, the `hub-stats-duckdb-mirror` change
+  shipped in `cchv-v0.16.0`. The endpoint now reads the DuckDB mirror at
+  ~0.8 s unwindowed (infra: 0.807 s mean, n=10, post-v0.18.0 swap). The
+  13.7 s figure describes the Postgres path only, which survives as the
+  mirror's cold-rebuild fallback — do not quote it as the endpoint's cost.)*
 - **No cost data exists**: `cost_reported_messages` is 0 archive-wide. The
   displayed "Estimated Cost" comes from client-side model pricing, not `costUSD`.

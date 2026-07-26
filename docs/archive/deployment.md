@@ -448,7 +448,14 @@ that made this deploy unlike the others:
   takes ~13–14 s over 2.5M messages (cchv Gitea #24). Any probe needs a
   generous `--max-time`, or a one-day window (`?from=…&to=…`), which is fast.
   Naming this in the relay is the difference between a verification and a
-  false rollback.
+  false rollback. *(2026-07-27: the 13–14 s figure is stale as of
+  `cchv-v0.16.0` — the endpoint reads the DuckDB mirror at ~0.8 s unwindowed
+  (infra measured 0.807 s mean, n=10, post-v0.18.0 swap; 30-day
+  `Europe/Rome` window 1.29–1.40 s). Do not quote 13.7 s as the current cost
+  or size probe budgets from it — a probe budgeted for 14 s masks a mirror
+  regression. The general lesson stands; the current caveat is instead
+  infra's settle rule (`hosts/m4m.md`): a post-swap perf sample taken in the
+  first minute measures the restart, not the release.)*
 - **The CSS entry chunk was NOT a valid swap marker for this release.**
   `assets/archive-BBzvspm0.css` is byte-identical between `v0.13.1` and
   `v0.14.0`, so asserting on it passes on the *old* bundle — the v0.11.1
