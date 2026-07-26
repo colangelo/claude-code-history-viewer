@@ -119,6 +119,10 @@ export interface ProjectStatsSummary {
     cache_creation: number;
     cache_read: number;
   };
+  /** Per-model usage within the project scope, same shape as the global
+   * distribution. Optional: hubs older than analytics-ux-costs omit it, and
+   * consumers must then show cost as unavailable — never as $0. */
+  model_distribution?: ModelStats[];
 }
 
 export interface ProjectRanking {

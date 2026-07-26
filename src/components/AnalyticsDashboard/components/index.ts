@@ -10,5 +10,6 @@ export { BillingBreakdownCard } from "./BillingBreakdownCard";
 export { ActivityHeatmapComponent } from "./ActivityHeatmap";
 export { ToolUsageChart } from "./ToolUsageChart";
 export { ProviderDistributionChart } from "./ProviderDistributionChart";
+export { ModelDistributionCard } from "./ModelDistributionCard";
 export { DailyTrendChart } from "./DailyTrendChart";
 export { TokenDistributionChart } from "./TokenDistributionChart";

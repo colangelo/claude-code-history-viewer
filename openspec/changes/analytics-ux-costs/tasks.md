@@ -17,26 +17,26 @@
 
 ## 3. Webapp: project cost surfaces
 
-- [ ] 3.1 `ProjectStatsSummary` TS type gains optional `model_distribution`; `hubApi.statsProject` unchanged otherwise
-- [ ] 3.2 `ProjectStatsView`: estimated-cost metric card (coverage sub-line), Estimated/coverage badges, model-distribution section with $ figures — reusing the global view's estimator and components
-- [ ] 3.3 Old-hub degradation: absent `model_distribution` → explicit "not available" state on the cost card, never `$0.00`
+- [x] 3.1 `ProjectStatsSummary` TS type gains optional `model_distribution`; `hubApi.statsProject` unchanged otherwise
+- [x] 3.2 `ProjectStatsView`: estimated-cost metric card (coverage sub-line), Estimated/coverage badges, model-distribution section with $ figures — reusing the global view's estimator and components
+- [x] 3.3 Old-hub degradation: absent `model_distribution` → explicit "not available" state on the cost card, never `$0.00`
 
 ## 4. Cost primacy + layout (both scopes)
 
-- [ ] 4.1 Metric card order Global: Cost | Tokens | Messages | Session time; "N tools used" card dropped
-- [ ] 4.2 Metric card order Project: same
-- [ ] 4.3 Section order both views: row 1 = Activity Heatmap | Model Distribution; tools/skills/subagents after
-- [ ] 4.4 Audit note: token-only grains (top projects, provider distribution, daily trend) documented as unpriceable client-side; no invented cost rendered
+- [x] 4.1 Metric card order Global: Cost | Tokens | Messages | Session time; "N tools used" card dropped
+- [x] 4.2 Metric card order Project: same
+- [x] 4.3 Section order both views: row 1 = Activity Heatmap | Model Distribution; tools/skills/subagents after
+- [x] 4.4 Audit note: token-only grains (top projects, provider distribution, daily trend) documented as unpriceable client-side; no invented cost rendered
 
 ## 5. Range control
 
-- [ ] 5.1 `AnalyticsView`: preset select (7/14/30/60/90/180/365/all) + "Custom…" numeric days input replacing the three buttons
-- [ ] 5.2 Custom input validates positive integer, applies on commit, survives scope switches
-- [ ] 5.3 Vitest coverage for window → `from=` mapping incl. custom days
+- [x] 5.1 `AnalyticsView`: preset select (7/14/30/60/90/180/365/all) + "Custom…" numeric days input replacing the three buttons
+- [x] 5.2 Custom input validates positive integer, applies on commit, survives scope switches
+- [x] 5.3 Vitest coverage for window → `from=` mapping incl. custom days
 
 ## 6. i18n + gate
 
-- [ ] 6.1 New keys ×5 locales (presets, custom days, cost card, n/a state); `generate:i18n-types`; `i18n:validate`
+- [x] 6.1 New keys ×5 locales (presets, custom days, cost card, n/a state); `generate:i18n-types`; `i18n:validate`
 - [ ] 6.2 Full gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`
 
 ## 7. Eyeball + close-out

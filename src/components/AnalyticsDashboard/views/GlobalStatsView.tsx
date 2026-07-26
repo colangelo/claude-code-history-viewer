@@ -10,8 +10,8 @@ import {
   Activity,
   MessageCircle,
   Clock,
+  DollarSign,
   Wrench,
-  Cpu,
   Layers,
   BarChart3,
   Server,
@@ -28,11 +28,11 @@ import {
   ActivityHeatmapComponent,
   ToolUsageChart,
   ProviderDistributionChart,
+  ModelDistributionCard,
 } from "../components";
 import {
   formatNumber,
   formatCurrency,
-  calculateModelMetrics,
   calculateGlobalCostSummary,
   getRankMedal,
   hasMedal,
@@ -110,17 +110,22 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
         )}
       </p>
 
-      {/* Metric Cards */}
+      {/* Metric Cards. Cost leads (analytics-ux-costs): it is the figure a
+          user looks for first. The old "N tools used" card is gone — a count
+          of distinct tools was the least informative number on the page, and
+          its content lives in the Most Used Tools chart below. */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+        <MetricCard
+          icon={DollarSign}
+          label={t("analytics.estimatedCost")}
+          value={formatCurrency(totalEstimatedCost)}
+          subValue={`${t("analytics.pricingCoverage", "Pricing coverage")}: ${costSummary.coveragePercent.toFixed(1)}%`}
+          colorVariant="amber"
+        />
         <MetricCard
           icon={Activity}
           label={t("analytics.totalTokens")}
           value={formatNumber(globalSummary.total_tokens)}
-          subValue={
-            t("analytics.estimatedCostValue", "Estimated Cost: {{cost}}", {
-              cost: formatCurrency(totalEstimatedCost),
-            })
-          }
           colorVariant="blue"
         />
         <MetricCard
@@ -136,12 +141,6 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
           value={formatDuration(totalSessionTime)}
           colorVariant="green"
         />
-        <MetricCard
-          icon={Wrench}
-          label={t("analytics.toolsUsed")}
-          value={globalSummary.most_used_tools.length}
-          colorVariant="amber"
-        />
       </div>
 
       {showBillingBreakdown && (
@@ -154,113 +153,18 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
       />
       )}
 
+      {/* Coverage moved onto the cost card itself — one fact, one place. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-2 py-1 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 text-px11">
           {t("analytics.estimatedLabel", "Estimated")}
-        </span>
-        <span className="px-2 py-1 rounded-md bg-muted/40 text-muted-foreground text-px11">
-          {t("analytics.pricingCoverage", "Pricing coverage")}: {costSummary.coveragePercent.toFixed(1)}%
         </span>
         <span className="px-2 py-1 rounded-md bg-muted/40 text-muted-foreground text-px11">
           {t("analytics.lastUpdated", "Last updated")}: {lastUpdated}
         </span>
       </div>
 
-      {/* Model Distribution & Tool Usage */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {globalSummary.provider_distribution.length > 0 && (
-          <SectionCard
-            title={t("analytics.providerDistribution", "Provider Distribution")}
-            icon={Server}
-            colorVariant="green"
-          >
-            <ProviderDistributionChart providers={globalSummary.provider_distribution} />
-          </SectionCard>
-        )}
-
-        {globalSummary.model_distribution.length > 0 && (
-          <SectionCard title={t("analytics.modelDistribution")} icon={Cpu} colorVariant="blue">
-            <div className="space-y-3">
-              {globalSummary.model_distribution.map((model) => {
-                const { percentage, formattedPrice, formattedTokens } = calculateModelMetrics(
-                  model.model_name,
-                  model.token_count,
-                  model.input_tokens,
-                  model.output_tokens,
-                  model.cache_creation_tokens,
-                  model.cache_read_tokens,
-                  globalSummary.total_tokens
-                );
-
-                return (
-                  <div key={model.model_name}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className="block max-w-[60%] text-px12 font-medium text-foreground truncate text-left cursor-default"
-                          >
-                            {model.model_name}
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {model.model_name}
-                        </TooltipContent>
-                      </Tooltip>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-px12 text-muted-foreground">
-                          {formattedPrice}
-                        </span>
-                        <span className="font-mono text-px12 font-semibold text-foreground">
-                          {formattedTokens}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="h-2 bg-muted/30 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${percentage}%`,
-                          background:
-                            "linear-gradient(90deg, var(--metric-purple), var(--metric-blue))",
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </SectionCard>
-        )}
-
-        <SectionCard
-          title={t("analytics.mostUsedToolsTitle")}
-          icon={Wrench}
-          colorVariant="amber"
-        >
-          <ToolUsageChart tools={globalSummary.most_used_tools} />
-        </SectionCard>
-      </div>
-
-      {/* Skill / Subagent usage (#321) — only shown when there is data */}
-      {(globalSummary.most_used_skills.length > 0 ||
-        globalSummary.most_used_subagents.length > 0) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {globalSummary.most_used_skills.length > 0 && (
-            <SectionCard title={t("analytics.mostUsedSkillsTitle")} icon={Sparkles} colorVariant="pink">
-              <ToolUsageChart tools={globalSummary.most_used_skills} />
-            </SectionCard>
-          )}
-          {globalSummary.most_used_subagents.length > 0 && (
-            <SectionCard title={t("analytics.mostUsedSubagentsTitle")} icon={Bot} colorVariant="teal">
-              <ToolUsageChart tools={globalSummary.most_used_subagents} />
-            </SectionCard>
-          )}
-        </div>
-      )}
-
-      {/* Heatmap & Top Projects */}
+      {/* Section order (analytics-ux-costs): the heatmap and per-model costs
+          lead — they are what gets read; tool charts follow. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <SectionCard title={t("analytics.activityHeatmapTitle")} icon={Layers} colorVariant="green">
           {globalSummary.daily_stats.length > 0 ? (
@@ -271,6 +175,26 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
             </div>
           )}
         </SectionCard>
+
+        {globalSummary.model_distribution.length > 0 && (
+          <ModelDistributionCard
+            models={globalSummary.model_distribution}
+            totalTokens={globalSummary.total_tokens}
+          />
+        )}
+      </div>
+
+      {/* Provider split & Top Projects */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {globalSummary.provider_distribution.length > 0 && (
+          <SectionCard
+            title={t("analytics.providerDistribution", "Provider Distribution")}
+            icon={Server}
+            colorVariant="green"
+          >
+            <ProviderDistributionChart providers={globalSummary.provider_distribution} />
+          </SectionCard>
+        )}
 
         {globalSummary.top_projects.length > 0 && (
           <SectionCard title={t("analytics.topProjects")} icon={BarChart3} colorVariant="purple">
@@ -330,6 +254,28 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
                 );
               })}
             </div>
+          </SectionCard>
+        )}
+      </div>
+
+      {/* Tool / Skill / Subagent usage (#321) — demoted below the charts that
+          answer "what did this cost and when was I active". */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <SectionCard
+          title={t("analytics.mostUsedToolsTitle")}
+          icon={Wrench}
+          colorVariant="amber"
+        >
+          <ToolUsageChart tools={globalSummary.most_used_tools} />
+        </SectionCard>
+        {globalSummary.most_used_skills.length > 0 && (
+          <SectionCard title={t("analytics.mostUsedSkillsTitle")} icon={Sparkles} colorVariant="pink">
+            <ToolUsageChart tools={globalSummary.most_used_skills} />
+          </SectionCard>
+        )}
+        {globalSummary.most_used_subagents.length > 0 && (
+          <SectionCard title={t("analytics.mostUsedSubagentsTitle")} icon={Bot} colorVariant="teal">
+            <ToolUsageChart tools={globalSummary.most_used_subagents} />
           </SectionCard>
         )}
       </div>

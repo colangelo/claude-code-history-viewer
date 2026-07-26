@@ -19,7 +19,13 @@ import {
   type HubIdentity,
 } from "../../services/hubApi";
 import type { GlobalStatsSummary, ProjectStatsSummary } from "../../types";
-import { cn } from "@/lib/utils";
+import {
+  RANGE_ALL,
+  RANGE_CUSTOM,
+  RANGE_PRESET_DAYS,
+  isoDaysAgo,
+  parseCustomDays,
+} from "./analyticsRange";
 
 export interface AnalyticsViewProps {
   config: HubConfig;
@@ -30,24 +36,21 @@ export interface AnalyticsViewProps {
 /** `all` = whole archive; otherwise a project identity key. */
 type Scope = { kind: "all" } | { kind: "identity"; key: string; label: string };
 
-/** Relative windows, resolved against today in the viewer's timezone. */
-const RANGES = [
-  { id: "30d", days: 30 },
-  { id: "90d", days: 90 },
-  { id: "all", days: null },
-] as const;
-type RangeId = (typeof RANGES)[number]["id"];
-
-function isoDaysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
-}
-
 export function AnalyticsView({ config, identities }: AnalyticsViewProps) {
   const { t } = useTranslation();
   const [scope, setScope] = useState<Scope>({ kind: "all" });
-  const [range, setRange] = useState<RangeId>("30d");
+  // The select holds a preset day count, "all", or "custom"; a committed
+  // custom count lives beside it so an uncommitted draft keeps the previous
+  // window instead of fetching something surprising (analytics-ux-costs).
+  const [rangeSel, setRangeSel] = useState<string>("30");
+  const [customDays, setCustomDays] = useState<number | null>(null);
+  const [customDraft, setCustomDraft] = useState("");
+  const rangeDays: number | null =
+    rangeSel === RANGE_ALL
+      ? null
+      : rangeSel === RANGE_CUSTOM
+        ? customDays
+        : Number(rangeSel);
   const [global, setGlobal] = useState<GlobalStatsSummary | null>(null);
   const [project, setProject] = useState<ProjectStatsSummary | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -66,11 +69,16 @@ export function AnalyticsView({ config, identities }: AnalyticsViewProps) {
   }, []);
 
   const load = useCallback(async () => {
+    // Custom picked but no count committed yet: keep showing the previous
+    // window rather than silently fetching all time.
+    if (rangeSel === RANGE_CUSTOM && rangeDays == null) return;
     setIsLoading(true);
     setError(null);
     setUnsupported(false);
-    const days = RANGES.find((r) => r.id === range)?.days ?? null;
-    const options = { tz, ...(days ? { from: isoDaysAgo(days) } : {}) };
+    const options = {
+      tz,
+      ...(rangeDays ? { from: isoDaysAgo(rangeDays) } : {}),
+    };
     try {
       if (scope.kind === "all") {
         setProject(null);
@@ -93,7 +101,7 @@ export function AnalyticsView({ config, identities }: AnalyticsViewProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [config, range, scope, t, tz]);
+  }, [config, rangeSel, rangeDays, scope, t, tz]);
 
   useEffect(() => {
     void load();
@@ -139,23 +147,51 @@ export function AnalyticsView({ config, identities }: AnalyticsViewProps) {
           ))}
         </select>
 
-        <div className="flex items-center gap-1">
-          {RANGES.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setRange(r.id)}
-              className={cn(
-                "rounded-md px-2 py-1 text-xs transition-colors",
-                range === r.id
-                  ? "bg-accent/15 text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/10"
-              )}
-            >
-              {t(`analytics.range.${r.id}`)}
-            </button>
+        <label className="sr-only" htmlFor="analytics-range">
+          {t("analytics.range.label")}
+        </label>
+        <select
+          id="analytics-range"
+          data-testid="analytics-range"
+          className="rounded-md border bg-background px-2 py-1 text-sm"
+          value={rangeSel}
+          onChange={(e) => {
+            setRangeSel(e.target.value);
+            if (e.target.value !== RANGE_CUSTOM) {
+              setCustomDays(null);
+              setCustomDraft("");
+            }
+          }}
+        >
+          {RANGE_PRESET_DAYS.map((d) => (
+            <option key={d} value={String(d)}>
+              {t("analytics.range.days", { days: d })}
+            </option>
           ))}
-        </div>
+          <option value={RANGE_ALL}>{t("analytics.range.all")}</option>
+          <option value={RANGE_CUSTOM}>{t("analytics.range.custom")}</option>
+        </select>
+        {rangeSel === RANGE_CUSTOM && (
+          <input
+            type="number"
+            min={1}
+            data-testid="analytics-range-custom"
+            aria-label={t("analytics.range.customDays")}
+            placeholder={t("analytics.range.customDays")}
+            className="w-28 rounded-md border bg-background px-2 py-1 text-sm"
+            value={customDraft}
+            onChange={(e) => setCustomDraft(e.target.value)}
+            // Applied on commit (blur / Enter), not per keystroke — every
+            // committed value triggers a full stats fetch.
+            onBlur={() => setCustomDays(parseCustomDays(customDraft))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setCustomDays(parseCustomDays(customDraft));
+              }
+            }}
+          />
+        )}
 
         {isLoading && (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
