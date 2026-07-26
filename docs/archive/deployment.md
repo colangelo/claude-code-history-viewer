@@ -698,6 +698,17 @@ static bump.
 >   pending eyeball item carries forward unchanged; changed ⇒ it re-opens and a
 >   new look is owed. It hashes *content*, so an asset-hash bump over identical
 >   bytes still reads as unchanged.
+> - **When a release splits into §2b + §2c halves, the webapp relay must
+>   additionally NAME the joined integration check** — the rendered view that
+>   proves the two halves actually join (for v0.17.0: a *project-scoped*
+>   Analytics view rendering real per-project `model_distribution` data, not the
+>   "Not reported by this hub version" fallback). A split release is the one
+>   shape where every per-message assertion can pass while the feature is still
+>   dead: the §2b half proves the API grew, this half proves the bundle is
+>   served, and neither proves they join. The handler of the SECOND half owes
+>   that check, so ask for it explicitly instead of leaving it to be inferred
+>   (infra suggestion from the v0.17.0 swap, thread `e05b6f2e` — our
+>   fallback-state note made the check constructible there, but only just).
 >
 > Verified end-to-end on m4m, not syntax-checked: an idempotent v0.10.7 redeploy
 > passes all four; a bogus `--expect-entry` and a wrong marker count each abort
@@ -897,6 +908,57 @@ is correct) are folded into the rules above, both verified against
 `d7c4b43`, which also corrects their own v0.16.0 binary entry — "webapp
 byte-identical to v0.15.0's frontend" was true of the source, false of the
 built bundle, and that distinction is the argument for this deploy.
+
+**2026-07-26, webapp `v0.16.0` → `v0.17.0` swap (thread `e05b6f2e`, infra reply
+`d333bedd`, home-network `d78bfe9`): 2 of 2 of the v0.17.0 deploy (hub binary
+in §2b above) — and the deploy that named the missing relay field, the joined
+check.** Landed 18:04:02 local, run on m4m itself (no ssh). Ordering honoured —
+binary 17:57, webapp 18:04 — so the new Analytics UI never rendered against a
+hub that could not serve it, the exact chip-vs-API divergence class this
+sequencing exists to prevent. Nothing was staged beforehand, so the recipe
+staged straight from the release for the tag and the staged-vs-released diff
+was a deliberate no-op (the announced §2c path). Assertions all green: entry
+chunk `archive-DCMJMiIB.js` → `archive-CYB_PMQN.js`, the predicted chunk
+matching the release **pre-swap** (live tree never touched to find out); marker
+`cchv-v0.17.0` ×2 in the release bundle and in the served chunk; ×2-in-chunk vs
+×1-in-DOM held again (rendered DOM: `cchv-v0.17.0` ×1, `cchv-v0.16.0` ×0), chip
+reads (v0.17.0) and agrees with the API; healthz trio 200 (`/v1/healthz`,
+`/v1/healthz/ingest?exclude=ac-mbp`, the `:8788` tailnet front). Rollback
+point: `staging/webapp-preswap-20260726-180402-cchv-v0.16.0`. Notes that
+outlive the green:
+
+- **The joined check — what neither half's assertions prove.** The §2b relay
+  proved the API grew `model_distribution`; this one proved the bundle is
+  served; only a rendered **project-scoped** Analytics view proves they join.
+  Infra ran it headlessly: selecting home-network issues
+  `GET /v1/stats/projects/g%3Abf967c7d…?from=2026-06-26&tz=Europe/Rome` → 200
+  and the model-distribution card renders genuinely per-project data
+  (claude-opus-4-8 1370.3M leading, vs the global view's claude-fable-5
+  3956.1M) — not the "Not reported by this hub version" fallback. Zero console
+  errors on either view. The standing rule this produced is in the
+  handoff-shape block above: a split release's second-half relay names the
+  joined check. This time infra constructed it from our fallback-state note —
+  enough, but inferred rather than asked for.
+- **CSS moved this release**: `archive-BBzvspm0.css` → `archive-DetcOCbl.css`,
+  sha256 `9453cec9…bc04bc05` — our announced prefix, verified by infra both on
+  disk and over the wire. Free discriminator that comes with it: the OLD
+  stylesheet 404s post-swap too, a second swap marker that **only exists when
+  the CSS actually moves** (on v0.16.0 the filename survived and only the JS
+  404 was available). Per the one-discriminating-marker rule, count it only on
+  releases where the stylesheet filename flips.
+- **The eyeball the CSS change re-opens is ours, and was already
+  part-served.** The analytics restyle got its attended real-window look the
+  same day, pre-deploy (analytics-ux-costs task 7.1, `ceef5244`: light+dark,
+  cost card + heatmap against the live hub, project n/a state live,
+  injected-cost layout). The residue was always the deploy-gated leg this very
+  swap unblocked: **project-scope REAL figures in a real window on the live
+  hub** — which infra's headless render above narrows but, per the standing
+  rule, cannot discharge. Infra records nothing owed on their side. The eyeball
+  backlog is therefore two named items: the `cchv-v0.12.0` degraded-hint
+  (unchanged, above) and this project-scope-real-figures residue (tracked in
+  `openspec/changes/analytics-ux-costs/tasks.md` 7.1).
+- Machine caveat, stated per the honesty rule: all probes ran ON m4m, the hub
+  host, skipping the tailnet hop — not an independent cross-machine check.
 
 Note what did *not* close it: the scripted screenshot set below is what finally
 retired the chips item only in the sense that it stopped being needed — the
