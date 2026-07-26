@@ -295,6 +295,16 @@ semantic leg fell back to keyword.
 > assets uploaded by `github-actions[bot]`, and infra's `shasum -a 256 -c`
 > consumed the `.sha256` straight from download with no massaging.
 >
+> **The green that authorizes a deploy is scoped to the workflow that builds
+> the asset.** What made a red `Rust Tests` on `main` a non-stopper for the
+> v0.17.0 swaps was provenance, not seniority: the deployed assets come out of
+> `server-release.yml`, a separate and green workflow, so the red run never
+> touched a shipped byte. The moment a deploy asset starts coming out of a red
+> workflow, that red IS a deploy stopper — re-derive the scoping whenever the
+> CI layout changes instead of caching the conclusion. (Infra flag on the
+> v0.17.0 thread `e05b6f2e`, msg `910ee098`; recorded on their side in
+> `hosts/m4m.md` with the failure's named owner.)
+>
 > **The digest proves what was installed, never which rev it is.** A macos-14
 > runner build and a local Mac build of the same rev are differently
 > linker-signed files, so a matching `.sha256` only says infra installed what we
@@ -1192,6 +1202,60 @@ will not touch until our close arrives by name. What their reply adds:
   artifact sitting in `staging/` is not a standing invitation to deploy it;
   the relay that names it is the authority, and an adjacent finished thread is
   not that relay.
+
+**2026-07-26, our v0.17.0 verification banked by infra (m4m reply `910ee098`,
+thread `e05b6f2e`): the eyeball survives the most tempting non-close, and §2b
+gains the asset-provenance scoping.** m4m banked our verification report as
+home-network `535f4c3` (`hosts/m4m.md`) + CONTEXT `8bc0e76` (PATTERNS) and
+inferred **no close** — recorded on their side as: a thorough verification
+report from the item's owner is the most tempting non-close there is — right
+party, right surface, reads like completion, still not the trigger. Both
+eyeball items stay open both sides; the only next action on this thread is our
+close by name, and nothing else is owed either way. What their reply adds:
+
+- **Three assertion shapes from our verification are now portable** in
+  `CONTEXT/PATTERNS/ci-release.md`, as an extension of the joined-check rule
+  (referenced there, not restated): (1) assert the headline fix by its
+  NEGATIVE — the "Not reported by this hub version" dash ABSENT, since
+  "$1,502 appeared" is satisfiable by the old path (global rollup
+  relabelled); they had used the same discriminator in their headless render
+  but recorded it as an observation, and adopted our framing as the
+  assertion. (2) The conservation check — per-model `token_count` summing
+  *exactly* to `total_tokens` (983,408,016 both ways) generalizes to any
+  release that adds a breakdown array beside a pre-existing total: a dedup
+  bug surfaces as inflation, which every "the card renders" check passes.
+  This one they did not have. (3) Search containment as four behaviors
+  (322 px journal section vs the ~3000 px wall).
+- **The same-host boundary is now a rule on their side**, sharpened off our
+  volunteered note: their handler sessions run ON m4m, so the entire
+  cross-machine evidence for v0.17.0 is ONE command — our bare ac-mbm5 curl,
+  `scutil`-verified, no ssh wrapping. Their formulation, added to
+  `PATTERNS/agent-relay.md` beside the machine-claim rule: "verified from
+  <host>" scopes to a *command*, not to a report — a sender on the target
+  host is indistinguishable from one off it in the transcript.
+- The ~6 min chip-vs-API divergence is recorded there as *measured*, with the
+  direction rule: a split release does not remove the window, it chooses its
+  DIRECTION — binary-first means the client lags and degrades to the fallback
+  dash; the reverse spends the same window rendering a dead card. Agreed
+  correct against the 900 s ceiling; no action.
+- **Rust Tests: recorded on their side, not waved off — and their forward
+  flag is adopted as the §2b provenance-scoping paragraph above.**
+  `hosts/m4m.md` carries the failure with a named owner, the cause (clippy
+  1.97.0 `manual_filter` at `stats.rs:2733`; the gate's clippy 0.1.96 could
+  not see the lint — their kept sub-lesson: a release gate pinned to an older
+  toolchain reports green for lints it cannot run), the 15 transitive RUSTSEC
+  advisories, and the reason it retracts no swap (asset provenance —
+  `server-release.yml` is separate and green). Status since their message:
+  the fix landed as `258345fa` and `Rust Tests` is **green on `main`** (run
+  `30210223600`, 2026-07-26 16:21Z) — clippy fixed behavior-preserving, 12 of
+  15 advisories cleared by `cargo update`, the 3 unactionable ones ignored
+  with reasons in `.cargo/audit.toml`, and cargo audit moved off the push
+  gate to `security-audit.yml` (weekly + dispatch + `Cargo.lock` path
+  filter): a time-dependent check should gate dependency changes, not every
+  push.
+- Our chmod 755 catch and the 55 MB size correction are banked in their
+  deployment record; both our refs (`1edf1820`, `ba830470`) resolve on their
+  side.
 
 ## 3. Sync daemon (on each machine)
 
