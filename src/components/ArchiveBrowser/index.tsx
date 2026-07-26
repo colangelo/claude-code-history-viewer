@@ -18,7 +18,14 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, GitBranch, Link2, Loader2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  GitBranch,
+  Link2,
+  Loader2,
+  X,
+} from "lucide-react";
 import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
 import { MessageContentDisplay } from "@/components/messageRenderer";
 import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
@@ -815,15 +822,25 @@ export function ArchiveBrowser({
         >
           <p className="px-1 text-px12 font-medium text-info uppercase tracking-wide">
             {t("settings.archiveHub.journal.searchSection")}
-            {journalDegraded && (
-              <span
-                data-testid="journal-search-degraded"
-                className="ml-2 normal-case font-normal tracking-normal text-muted-foreground"
-              >
-                {t("settings.archiveHub.journal.searchDegraded")}
-              </span>
-            )}
           </p>
+          {/* Its own row, not a tail on the eyebrow: inline, the sentence
+              orphan-wraps under the label on narrow viewports. `warning` (amber)
+              rather than `muted-foreground` because the neutral gray was
+              pixel-identical to each hit's date/path line — a status styled like
+              a timestamp reads as a timestamp. Amber, not `destructive`: search
+              still returned results, it just ranked them by keyword. */}
+          {journalDegraded && (
+            <p
+              data-testid="journal-search-degraded"
+              className="flex items-start gap-1.5 px-1 text-px12 text-warning"
+            >
+              <AlertTriangle
+                className="w-3.5 h-3.5 shrink-0 mt-px"
+                aria-hidden="true"
+              />
+              <span>{t("settings.archiveHub.journal.searchDegraded")}</span>
+            </p>
+          )}
           <ul className="space-y-1">
             {journalHits.map((hit, index) => (
               <li key={`${hit.entry_date}-${hit.project_path}-${index}`}>
