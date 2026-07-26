@@ -624,8 +624,21 @@ export function ArchiveBrowser({
     [searchQuery, runSearch, writeHash]
   );
 
+  // Dismiss the current results without clearing the query input. Hoisted
+  // above the hit activators, which dismiss on activation: the user asked to
+  // go somewhere, so land them there — not under the results overlay.
+  const handleClearSearch = useCallback(() => {
+    ++searchGenerationRef.current;
+    setSearchHits(null);
+    setJournalHits([]);
+    setJournalDegraded(false);
+    setSearchError(null);
+    setIsSearching(false);
+  }, []);
+
   const handleActivateHit = useCallback(
     (hit: HubSearchHit) => {
+      handleClearSearch();
       // Land the user ON the session — a hit activated from the Journal view
       // used to open it invisibly behind the feed.
       setView("browse");
@@ -644,17 +657,24 @@ export function ArchiveBrowser({
           : undefined
       );
     },
-    [openSessionRef]
+    [openSessionRef, handleClearSearch]
   );
 
-  const handleActivateJournalHit = useCallback((hit: JournalSearchHit) => {
-    setView("journal");
-    setAnchorDate(hit.entry_date);
-    setAnchorNonce((n) => n + 1);
-  }, []);
+  const handleActivateJournalHit = useCallback(
+    (hit: JournalSearchHit) => {
+      handleClearSearch();
+      setView("journal");
+      setAnchorDate(hit.entry_date);
+      setAnchorNonce((n) => n + 1);
+    },
+    [handleClearSearch]
+  );
 
   // `/` focuses the search input from anywhere non-editable (issue #21).
+  // Analytics renders no search surface, so there `/` first switches to
+  // Journal — the view where search lives — and focuses once it exists.
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingSearchFocusRef = useRef(false);
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -667,11 +687,21 @@ export function ArchiveBrowser({
           el.isContentEditable);
       if (editable) return;
       e.preventDefault();
-      searchInputRef.current?.focus();
+      if (searchInputRef.current) {
+        searchInputRef.current.focus();
+      } else {
+        pendingSearchFocusRef.current = true;
+        setView("journal");
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  useEffect(() => {
+    if (!pendingSearchFocusRef.current) return;
+    pendingSearchFocusRef.current = false;
+    searchInputRef.current?.focus();
+  }, [view]);
 
   // Arrow-key navigation on the Journal|Browse tablist (issue #21).
   const handleTablistKeyDown = useCallback(
@@ -698,16 +728,6 @@ export function ArchiveBrowser({
     },
     [view]
   );
-
-  // Dismiss the current results without clearing the query input.
-  const handleClearSearch = useCallback(() => {
-    ++searchGenerationRef.current;
-    setSearchHits(null);
-    setJournalHits([]);
-    setJournalDegraded(false);
-    setSearchError(null);
-    setIsSearching(false);
-  }, []);
 
   // Mobile drill-up: the stacked (<md) Browse shows one level at a time.
   const handleBackToProjects = useCallback(() => {
@@ -812,136 +832,145 @@ export function ArchiveBrowser({
       data-testid="archive-browser"
       className="flex flex-col h-full gap-3 overflow-hidden"
     >
-      <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 shrink-0">
-        <input
-          ref={searchInputRef}
-          data-testid="archive-search-input"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={t("settings.archiveHub.browser.searchPlaceholder")}
-          aria-label={t("settings.archiveHub.browser.searchPlaceholder")}
-          className="flex-1 h-9 rounded-md border border-border bg-background px-2.5 text-px14"
-        />
-        {/* The one primary verb in the archive: solid accent, so it is never
-            mistaken for the neutral utilities sharing the toolbar. */}
-        <button
-          type="submit"
-          className="h-9 shrink-0 rounded-md bg-accent px-3 text-px14 font-medium text-accent-foreground transition-colors hover:bg-accent/90"
-        >
-          {t("settings.archiveHub.browser.searchButton")}
-        </button>
-      </form>
-
-      {/* Search results (global, above both views) */}
-      {isSearching && (
-        <p className="text-px13 text-muted-foreground shrink-0 flex items-center gap-1.5">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-          {t("settings.archiveHub.browser.search.loading")}
-        </p>
-      )}
-      {searchError && (
-        <p className="text-px13 text-destructive shrink-0">{searchError}</p>
-      )}
-      {!isSearching && (searchHits != null || journalHits.length > 0) && (
-        <div className="flex items-center justify-between shrink-0">
-          <p className="text-px12 text-muted-foreground" data-testid="search-result-count">
-            {t("settings.archiveHub.browser.search.count", {
-              count: (searchHits?.length ?? 0) + journalHits.length,
-            })}
-          </p>
+      {/* Search lives with content: the bar and its results render in
+          Journal and Browse only. Analytics keeps its own toolbar; result
+          state survives the round-trip because only rendering is gated. */}
+      {view !== "analytics" && (
+        <>
+        <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 shrink-0">
+          <input
+            ref={searchInputRef}
+            data-testid="archive-search-input"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t("settings.archiveHub.browser.searchPlaceholder")}
+            aria-label={t("settings.archiveHub.browser.searchPlaceholder")}
+            className="flex-1 h-9 rounded-md border border-border bg-background px-2.5 text-px14"
+          />
+          {/* The one primary verb in the archive: solid accent, so it is never
+              mistaken for the neutral utilities sharing the toolbar. */}
           <button
-            type="button"
-            data-testid="search-clear"
-            onClick={handleClearSearch}
-            aria-label={t("settings.archiveHub.browser.search.clear")}
-            title={t("settings.archiveHub.browser.search.clear")}
-            className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted"
+            type="submit"
+            className="h-9 shrink-0 rounded-md bg-accent px-3 text-px14 font-medium text-accent-foreground transition-colors hover:bg-accent/90"
           >
-            <X className="w-3.5 h-3.5" aria-hidden="true" />
+            {t("settings.archiveHub.browser.searchButton")}
           </button>
-        </div>
-      )}
-      {journalHits.length > 0 && (
-        <section
-          data-testid="journal-search-section"
-          className="shrink-0 space-y-1 border border-info/40 bg-info/5 rounded-md p-1"
-        >
-          <p className="px-1 text-px12 font-medium text-info uppercase tracking-wide">
-            {t("settings.archiveHub.journal.searchSection")}
+        </form>
+
+        {/* Search results (global, above both views) */}
+        {isSearching && (
+          <p className="text-px13 text-muted-foreground shrink-0 flex items-center gap-1.5">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+            {t("settings.archiveHub.browser.search.loading")}
           </p>
-          {/* Its own row, not a tail on the eyebrow: inline, the sentence
-              orphan-wraps under the label on narrow viewports. `warning` (amber)
-              rather than `muted-foreground` because the neutral gray was
-              pixel-identical to each hit's date/path line — a status styled like
-              a timestamp reads as a timestamp. Amber, not `destructive`: search
-              still returned results, it just ranked them by keyword. */}
-          {journalDegraded && (
-            <p
-              data-testid="journal-search-degraded"
-              className="flex items-start gap-1.5 px-1 text-px12 text-warning"
-            >
-              <AlertTriangle
-                className="w-3.5 h-3.5 shrink-0 mt-px"
-                aria-hidden="true"
-              />
-              <span>{t("settings.archiveHub.journal.searchDegraded")}</span>
+        )}
+        {searchError && (
+          <p className="text-px13 text-destructive shrink-0">{searchError}</p>
+        )}
+        {!isSearching && (searchHits != null || journalHits.length > 0) && (
+          <div className="flex items-center justify-between shrink-0">
+            <p className="text-px12 text-muted-foreground" data-testid="search-result-count">
+              {t("settings.archiveHub.browser.search.count", {
+                count: (searchHits?.length ?? 0) + journalHits.length,
+              })}
             </p>
-          )}
-          <ul className="space-y-1">
-            {journalHits.map((hit, index) => (
-              <li key={`${hit.entry_date}-${hit.project_path}-${index}`}>
+            <button
+              type="button"
+              data-testid="search-clear"
+              onClick={handleClearSearch}
+              aria-label={t("settings.archiveHub.browser.search.clear")}
+              title={t("settings.archiveHub.browser.search.clear")}
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        {journalHits.length > 0 && (
+          <section
+            data-testid="journal-search-section"
+            className="shrink-0 space-y-1 border border-info/40 bg-info/5 rounded-md p-1"
+          >
+            <p className="px-1 text-px12 font-medium text-info uppercase tracking-wide">
+              {t("settings.archiveHub.journal.searchSection")}
+            </p>
+            {/* Its own row, not a tail on the eyebrow: inline, the sentence
+                orphan-wraps under the label on narrow viewports. `warning` (amber)
+                rather than `muted-foreground` because the neutral gray was
+                pixel-identical to each hit's date/path line — a status styled like
+                a timestamp reads as a timestamp. Amber, not `destructive`: search
+                still returned results, it just ranked them by keyword. */}
+            {journalDegraded && (
+              <p
+                data-testid="journal-search-degraded"
+                className="flex items-start gap-1.5 px-1 text-px12 text-warning"
+              >
+                <AlertTriangle
+                  className="w-3.5 h-3.5 shrink-0 mt-px"
+                  aria-hidden="true"
+                />
+                <span>{t("settings.archiveHub.journal.searchDegraded")}</span>
+              </p>
+            )}
+            {/* Same cap as the message-hits list below: 100 journal hits once
+                rendered as a ~3000px wall burying the active view. */}
+            <ul className="space-y-1 max-h-72 overflow-y-auto">
+              {journalHits.map((hit, index) => (
+                <li key={`${hit.entry_date}-${hit.project_path}-${index}`}>
+                  <button
+                    type="button"
+                    data-testid="journal-search-hit"
+                    onClick={() => handleActivateJournalHit(hit)}
+                    className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
+                  >
+                    <p className="text-px14 font-medium truncate">
+                      {hit.headline ?? hit.project_path}
+                    </p>
+                    <p className="text-px12 text-muted-foreground truncate">
+                      <span>{hit.entry_date}</span>
+                      {" · "}
+                      <span>{hit.project_path}</span>
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+        {searchHits && searchHits.length === 0 && journalHits.length === 0 && !isSearching && (
+          <p className="text-px13 text-muted-foreground shrink-0">
+            {t("settings.archiveHub.browser.search.empty")}
+          </p>
+        )}
+        {searchHits && searchHits.length > 0 && (
+          <ul className="shrink-0 space-y-1 max-h-72 overflow-y-auto border border-border/50 rounded-md p-1">
+            {searchHits.map((hit, index) => (
+              <li key={`${hit.session_id}-${index}`}>
                 <button
                   type="button"
-                  data-testid="journal-search-hit"
-                  onClick={() => handleActivateJournalHit(hit)}
+                  onClick={() => handleActivateHit(hit)}
                   className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
                 >
-                  <p className="text-px14 font-medium truncate">
-                    {hit.headline ?? hit.project_path}
-                  </p>
+                  <p className="text-px14 truncate">{renderSnippet(hit.snippet)}</p>
                   <p className="text-px12 text-muted-foreground truncate">
-                    <span>{hit.entry_date}</span>
+                    <span>{hit.project_name ?? hit.project_path}</span>
                     {" · "}
-                    <span>{hit.project_path}</span>
+                    <span>{hit.machine_hostname}</span>
+                    {hit.timestamp && (
+                      <>
+                        {" · "}
+                        <span title={hit.timestamp}>
+                          {humanizeTimestamp(hit.timestamp)}
+                        </span>
+                      </>
+                    )}
                   </p>
                 </button>
               </li>
             ))}
           </ul>
-        </section>
-      )}
-      {searchHits && searchHits.length === 0 && journalHits.length === 0 && !isSearching && (
-        <p className="text-px13 text-muted-foreground shrink-0">
-          {t("settings.archiveHub.browser.search.empty")}
-        </p>
-      )}
-      {searchHits && searchHits.length > 0 && (
-        <ul className="shrink-0 space-y-1 max-h-72 overflow-y-auto border border-border/50 rounded-md p-1">
-          {searchHits.map((hit, index) => (
-            <li key={`${hit.session_id}-${index}`}>
-              <button
-                type="button"
-                onClick={() => handleActivateHit(hit)}
-                className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
-              >
-                <p className="text-px14 truncate">{renderSnippet(hit.snippet)}</p>
-                <p className="text-px12 text-muted-foreground truncate">
-                  <span>{hit.project_name ?? hit.project_path}</span>
-                  {" · "}
-                  <span>{hit.machine_hostname}</span>
-                  {hit.timestamp && (
-                    <>
-                      {" · "}
-                      <span title={hit.timestamp}>
-                        {humanizeTimestamp(hit.timestamp)}
-                      </span>
-                    </>
-                  )}
-                </p>
-              </button>
-            </li>
-          ))}
-        </ul>
+        )}
+        </>
       )}
 
       {/* View switcher + worktree visibility toggle */}
