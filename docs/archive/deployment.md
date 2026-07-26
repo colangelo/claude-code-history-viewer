@@ -727,6 +727,25 @@ static bump.
 >   (version strings, route paths); whether a user-facing string renders is a
 >   DOM question — drive the page (`tools/cchv-webapp-deploy` on their side
 >   now carries the same scope note).
+>   **The repair, when the change you are asserting IS i18n-routed: count the
+>   KEY, not its value.** `t("analytics.costUnavailableHub")` compiles the key
+>   into the entry chunk at every call site, so the key is countable and
+>   discriminating exactly where the string is vacuously 0 — re-measured here
+>   on the published release assets (2026-07-27): entry chunk ×1 in v0.17.1
+>   (`archive-DngmKaZQ.js`) → ×5 in v0.18.0 (`archive-C4x_YLg-.js`), while the
+>   value string is ×0 in both. **The number to send is the entry-chunk count**
+>   — the recipe scopes `--assert-count` to the entry chunk on *both* sides
+>   (`assert_counts "$SRC/$REL_ENTRY"` pre-swap, `"$SERVED_CHUNK"` post-swap,
+>   verified by reading `tools/cchv-webapp-deploy`), so the key's other homes
+>   don't inflate it; bundle-wide the same key is 6 → 10 (one copy per locale
+>   chunk), and sending 10 would abort pre-swap. **Two standing limits.** A key
+>   count proves the guarded branch was *compiled*, never which branch
+>   *rendered* — that stays the DOM job. And call sites ≠ surfaces: v0.18.0's
+>   1 → 5 delta is **two** newly priced surfaces with two guard sites each (a
+>   `title` tooltip plus the visible body — `ProviderDistributionChart.tsx`
+>   71/74, `GlobalStatsView.tsx` 264/267) on top of the pre-existing
+>   `ProjectStatsView.tsx` 98, not four new surfaces; same shape as the version
+>   chip's 2-vs-1.
 > - CSS byte-identity against the tree being replaced — **reported, never
 >   fatal, and it narrows in ONE direction only.** Changed bytes ⇒ the eyeball
 >   item re-opens and a new look is owed. **Identical bytes settle nothing
@@ -768,6 +787,17 @@ static bump.
 >   here would have been safe but not clean (see the dated entry below).
 >   Recipient-side half distilled to `CONTEXT/PATTERNS/agent-relay.md`
 >   (`7cc8bae`).
+>   **Corollary, learned on v0.18.0: a resend that STRENGTHENS the assertions
+>   is not a duplicate — say so in the body.** Our v0.18.0 webapp ask was
+>   handed out again carrying a second `--assert-count` (`5:costUnavailableHub`)
+>   that the delivery which actually landed did not carry, so the end state
+>   *the recipient had verified* was a strict subset of the one *we were now
+>   asserting*. m4m caught it by diffing the two bodies and measured the new
+>   count instead of pointing at the earlier report (both hold). Don't rely on
+>   that: either resend the body unchanged, or lead with "this resend adds
+>   assertion X — measure it even if the swap already landed", because the
+>   "is the end state already true?" short-circuit is keyed on the assertions
+>   and silently answers for the old set.
 >
 > Verified end-to-end on m4m, not syntax-checked: an idempotent v0.10.7 redeploy
 > passes all four; a bogus `--expect-entry` and a wrong marker count each abort
@@ -1400,7 +1430,9 @@ local / 2026-07-26 22:08Z, after the v0.18.0 binary half (§2b, thread
 `6ec7e556`), so the binary-first ordering held. All assertions green: entry
 chunk `archive-DngmKaZQ.js` → `archive-C4x_YLg-.js`, the predicted chunk
 matching the release **pre-swap**; marker `cchv-v0.18.0` ×2 in the release
-bundle and in the served chunk; healthz trio 200 with no non-200 window; the
+bundle and in the served chunk (the second marker, `5:costUnavailableHub`,
+reached m4m only on a later resend and was verified without re-deploying —
+second bullet below); healthz trio 200 with no non-200 window; the
 binary verifiably untouched (pid 15531 unchanged, mtime still Jul 27 00:00).
 Rollback point: `staging/webapp-preswap-20260727-000841-cchv-v0.17.1`. Notes
 that outlive the green:
@@ -1414,15 +1446,50 @@ that outlive the green:
   reported by this hub version" fallback appears nowhere in the DOM, the chip
   reads v0.18.0, and the API re-verified live at the same moment
   (`model_distribution` present: 11 entries on `provider_distribution[0]`, 12
-  on `top_projects[0]`). API and bundle genuinely join.
+  on `top_projects[0]`). API and bundle genuinely join. **Re-driven
+  independently 14 min later** (`c015bea2`) and still green — same shape,
+  different numbers, because the figures are live: Claude Code `$12018` /
+  10,991,630,226 / 98.7%, direction 2900.3M / `$1983`, home-network 2291.8M /
+  `$3192`, siai 161.4M / `$159`, no fallback text anywhere in the DOM,
+  `/v1/stats/global` 200 at the same moment. Two independent renders 14 min
+  apart is what makes this a property of the deploy rather than of one
+  screenshot — and it is why the pass bar is *a dollar figure where the
+  fallback used to be*, not any particular amount.
+- **Both counts hold — the second one verified only after the fact, by a
+  resend that strengthened the ask (infra follow-up `c015bea2`, home-network
+  `a4ba044`).** The delivery that landed carried a single assertion
+  (`2:cchv-v0.18.0`); the resend added `5:costUnavailableHub`, which no run
+  had ever measured. m4m measured it 00:19–00:22 local **without
+  re-deploying** — served entry chunk `archive-C4x_YLg-.js`: `cchv-v0.18.0`
+  ×2 and `costUnavailableHub` ×5, healthz trio still 200, binary still pid
+  15531 / mtime Jul 27 00:00, `staging/` unpruned — and re-derived the
+  discrimination locally against the rollback tree rather than trusting our
+  figures (v0.17.1 entry chunk: 0 and 1). Reproduced here on the published
+  release assets, entry-chunk-scoped: 2/5 for v0.18.0, 0/1 for v0.17.1. The
+  relay-side lesson (a strengthened resend is not a duplicate) is now a
+  corollary in the handoff-shape block above.
 - **The marker-scope trap, now a standing clause in the handoff-shape block
-  above.** The fallback literal lives ×1 in `i18n-en-BtInFZAb.js`
-  (byte-identical across v0.17.1/v0.18.0) and **×0 in the entry chunk**, so
-  grepping the entry chunk for it reads "the fallback cannot render" —
-  vacuously green, and equally green on a genuinely broken join. Infra made
-  exactly that misread mid-check, caught it by re-grepping all chunks, and
-  fenced it in `tools/cchv-webapp-deploy`; re-verified here against the
-  published v0.18.0 release asset (both counts reproduce, 2026-07-27).
+  above — with its repair.** The fallback literal lives ×1 in
+  `i18n-en-BtInFZAb.js` (byte-identical across v0.17.1/v0.18.0) and **×0 in
+  the entry chunk**, so grepping the entry chunk for it reads "the fallback
+  cannot render" — vacuously green, and equally green on a genuinely broken
+  join. The repair is to count the i18n **key**, which every call site
+  compiles into the entry chunk: `analytics.costUnavailableHub` goes ×1 → ×5
+  there, discriminating exactly where the value string is vacuously 0. Two
+  limits, both worth keeping: the count is only meaningful entry-chunk-scoped
+  (bundle-wide the key is 6 → 10, one copy per locale chunk — the recipe
+  scopes both its pre- and post-swap counts to the entry chunk, so 5 is the
+  right number to send and 10 would have aborted pre-swap), and a key count
+  proves the guarded branch was *compiled*, never which branch *rendered*.
+  Infra's reading of the 1 → 5 delta as "four new priced surfaces" is one
+  step off: it is **two** new surfaces with two guard sites each — a `title`
+  tooltip and the visible body (`ProviderDistributionChart.tsx` 71/74,
+  `GlobalStatsView.tsx` 264/267) — over the pre-existing `ProjectStatsView.tsx`
+  98. Call sites are not surfaces, the same way the version chip is ×2 in the
+  chunk and ×1 in the DOM. Infra made the vacuous-0 misread mid-check, caught
+  it by re-grepping all chunks, and fenced both the trap and the repair in
+  `tools/cchv-webapp-deploy`'s SCOPE TRAP note, where the next handler meets
+  them.
 - **Cost is not monotonic with tokens — never harden the ordering into an
   assertion.** Live, Top Projects row 1 (direction, 2900.3M) shows `$1983`
   while row 2 (home-network, 2281.5M) shows `$3186` — correct, not a bug:
