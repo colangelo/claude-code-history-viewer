@@ -1046,6 +1046,68 @@ byte-identical CSS run on their side will ever stand in for the line.
 > form to script against**; the https name form works too. Sample of the same
 > run: `GET /v1/stats/global` → 200 in 16.8 s, `total_tokens` 20,213,333,261.
 
+**2026-07-26, webapp `v0.16.0` → `v0.17.0` swap (thread `e05b6f2e`, message 2 of
+2 behind the binary): the chip-vs-API divergence closed in ~6 min, and the CSS
+eyeball item RE-OPENS.** Entry chunk `archive-DCMJMiIB.js` →
+`archive-CYB_PMQN.js`, deployed straight from the release for the tag — nothing
+was staged on either Mac and the relay *said so*, rather than letting the
+staged-tree diff become a silent no-op (the v0.10.4 lesson). Assertions sent as
+`--expect-entry archive-CYB_PMQN.js --assert-count '2:cchv-v0.17.0'`, counted in
+the published tarball, not a local build. From our minute-resolution poller: the
+binary field flipped between 17:57:27 and 17:58:28, the entry chunk between
+18:03:39 and 18:04:39 — so the chip read `v0.16.0` against a `v0.17.0` API for
+~6 min. That is what splitting the relays costs, and it is the right trade
+against the 900 s handler ceiling.
+
+Post-swap verification (ours), all against the **deployed** build:
+
+- Chip `(v0.17.0)` read via `data-testid="app-version"` — the anchored form,
+  never a loose `cchv-v` grep. Zero console errors on load.
+- **The headline fix, which only a deploy could prove:** project scope renders a
+  real estimated cost — `$1,502` at 23.9% coverage with a populated per-model
+  breakdown (`claude-fable-5 $355 / 757.6M`, `claude-opus-5 $181 / 445.3M`, …)
+  where `v0.16.0` could only show the "Not reported by this hub version" dash.
+  Asserted the **dash is absent**, not merely that a `$` appeared somewhere.
+- A rollup consistency check worth repeating on any future scope: the per-model
+  `token_count`s sum to **exactly** `total_tokens` (983,408,016 both ways). A
+  dedup bug in the new project-scope statement would surface here as inflation.
+- Search containment, all four behaviors live: journal-hits section **322 px**
+  (was an unbounded ~3000 px wall), no search input in Analytics, `/` there
+  restores *and focuses* it, results survive the Analytics round-trip, and
+  activating a hit dismisses the overlay.
+- Cross-machine leg from **ac-mbm5** (`scutil`-verified on the remote, bare
+  `curl` over the tailnet, no ssh wrapping): healthz `ok`, new chunk served.
+
+> **The CSS changed this release** (`archive-BBzvspm0.css` `5ac5d2de…` →
+> `archive-DetcOCbl.css` `9453cec9…`), so the eyeball item **re-opens and is
+> still owed.** The real-window screenshots behind the verification above were
+> taken by an *agent*, and this section is explicit that screenshots narrow such
+> an item and never discharge it. No "a human has looked" line has been sent for
+> `v0.17.0`; infra's standing UNVERIFIED caveat correctly stands until one is.
+> Recorded here *and* in the memory lane — the last item that lived in only one
+> of the two places survived three separate "backlog empty" closes.
+
+> **A release gate that passes locally does not predict CI clippy.** The
+> `v0.17.0` gate ran `cargo clippy --workspace --all-targets --all-features -D
+> warnings` clean on **clippy 0.1.96**; CI runs stable, now **1.97.0**, whose
+> `clippy::manual_filter` fires on `src-tauri/src/commands/stats.rs:2733` and
+> fails `Rust Tests`. Not platform-gated code and not a workspace-membership gap
+> (`src-tauri` is a root workspace member) — purely a toolchain-version delta, so
+> no amount of local care catches it. The failure predates this release (same
+> failure on `v0.16.0`'s `2bc81dc6` and back to at least 2026-07-24) and the
+> release assets build regardless, since `server-release.yml` is a separate
+> workflow. Treat a red `Rust Tests` as **standing, diagnosed, and owned** —
+> never as "pre-existing, therefore fine". Its sibling failure in the same
+> workflow is `Security Audit`: 15 RUSTSEC advisories, all transitive
+> (`bytes` 2026-0007, `quick-xml` ×2, `quinn-proto` ×2, `rkyv`, `rsa` 2023-0071,
+> `crossbeam-epoch`, plus unmaintained `proc-macro-error`). **Both were being
+> fixed in a concurrent session as this was written** (that session held the
+> tree's rw lock and was editing `stats.rs`, `rust-tests.yml`, and adding a
+> `security-audit.yml`), so the red state above is the *release-time* record,
+> not necessarily today's. The durable part is the gate gap, which no fix to
+> either failure removes: pin or match the CI toolchain if the release gate is
+> ever meant to predict CI.
+
 ## 3. Sync daemon (on each machine)
 
 Build it:
