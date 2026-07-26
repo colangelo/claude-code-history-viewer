@@ -220,6 +220,10 @@ export function ArchiveBrowser({
   // Scroll-once flag: consumed by the effect that centers the matched message.
   const pendingScrollRef = useRef<number | null>(null);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  // Distinct from `isLoadingMessages` so only the multi-page walk offers a
+  // stop: a 59k-message session takes minutes, and measured, it had no escape.
+  const [isLoadingAll, setIsLoadingAll] = useState(false);
+  const abortLoadAllRef = useRef(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState(
@@ -517,6 +521,46 @@ export function ArchiveBrowser({
       });
   }, [config, openSession, isLoadingMessages, windowStart]);
 
+  // Issue #28: a long session took a dozen "Load more" clicks to walk. Pages
+  // are still fetched PAGE_SIZE at a time and appended as each lands, so the
+  // list visibly fills rather than hanging on one long request — and the
+  // generation check both stops the loop and leaves the loading flag alone
+  // when the user navigates away mid-walk (whoever superseded us owns it).
+  const handleLoadAll = useCallback(async () => {
+    if (!openSession || isLoadingMessages) return;
+    const generation = messagesGenerationRef.current;
+    abortLoadAllRef.current = false;
+    setIsLoadingAll(true);
+    setIsLoadingMessages(true);
+    // Tracked locally: `messages.length` is captured by this closure and would
+    // stay at its first-render value for every iteration after the first.
+    let offset = windowStart + messages.length;
+    try {
+      for (;;) {
+        const page = await hubApi.sessionMessages(config, openSession.ref, {
+          limit: PAGE_SIZE,
+          offset,
+        });
+        if (messagesGenerationRef.current !== generation) return;
+        setTotalCount(page.totalCount);
+        if (page.messages.length === 0) return;
+        setMessages((prev) => [...prev, ...page.messages]);
+        offset += page.messages.length;
+        if (offset >= page.totalCount) return;
+        // Checked after the append so a stop always keeps the page in hand.
+        if (abortLoadAllRef.current) return;
+      }
+    } catch (err) {
+      if (messagesGenerationRef.current !== generation) return;
+      setMessagesError(String(err));
+    } finally {
+      if (messagesGenerationRef.current === generation) {
+        setIsLoadingMessages(false);
+        setIsLoadingAll(false);
+      }
+    }
+  }, [config, openSession, messages.length, isLoadingMessages, windowStart]);
+
   // Center the matched message once its page has rendered.
   useEffect(() => {
     const id = pendingScrollRef.current;
@@ -760,6 +804,8 @@ export function ArchiveBrowser({
 
   const hasMoreMessages =
     totalCount !== null && windowStart + messages.length < totalCount;
+  const remainingMessages =
+    totalCount === null ? 0 : totalCount - (windowStart + messages.length);
 
   return (
     <div
@@ -1395,13 +1441,13 @@ export function ArchiveBrowser({
               </div>
             </ArchiveRenderContext.Provider>
             {hasMoreMessages && (
-              <div className="px-2 pb-2 w-full max-w-4xl mx-auto">
+              <div className="px-2 pb-2 w-full max-w-4xl mx-auto flex gap-2">
                 <button
                   type="button"
                   data-testid="archive-load-more"
                   onClick={handleLoadMore}
                   disabled={isLoadingMessages}
-                  className="w-full rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
+                  className="flex-1 rounded-md border border-border px-3 py-2 text-px14 hover:bg-muted disabled:opacity-50"
                 >
                   {isLoadingMessages ? (
                     <>
@@ -1414,6 +1460,27 @@ export function ArchiveBrowser({
                   ) : (
                     t("settings.archiveHub.browser.messages.loadMore")
                   )}
+                </button>
+                {/* Quieter than its neighbour: paging one screen at a time is
+                    the ordinary move, walking the whole session is the
+                    occasional one. The count is on the label so a 5,000-message
+                    session announces the cost before the click, not after. */}
+                <button
+                  type="button"
+                  data-testid="archive-load-all"
+                  onClick={() =>
+                    isLoadingAll
+                      ? (abortLoadAllRef.current = true)
+                      : void handleLoadAll()
+                  }
+                  disabled={isLoadingMessages && !isLoadingAll}
+                  className="shrink-0 rounded-md px-3 py-2 text-px14 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                >
+                  {isLoadingAll
+                    ? t("settings.archiveHub.browser.messages.loadAllStop")
+                    : t("settings.archiveHub.browser.messages.loadAll", {
+                        remaining: remainingMessages,
+                      })}
                 </button>
               </div>
             )}

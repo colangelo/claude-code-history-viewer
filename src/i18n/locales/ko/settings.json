@@ -555,6 +555,8 @@
   "settings.archiveHub.browser.messages.loading": "메시지 불러오는 중...",
   "settings.archiveHub.browser.messages.empty": "이 세션에는 메시지가 없습니다",
   "settings.archiveHub.browser.messages.loadMore": "더 보기",
+  "settings.archiveHub.browser.messages.loadAll": "모두 불러오기 ({{remaining}})",
+  "settings.archiveHub.browser.messages.loadAllStop": "중지",
   "settings.archiveHub.browser.messages.progress": "{{total}}개 중 {{loaded}}개 메시지",
   "settings.archiveHub.browser.messages.loadEarlier": "이전 메시지 불러오기",
   "settings.archiveHub.browser.messages.progressRange": "{{total}}개 중 {{from}}–{{to}}번째 메시지",

@@ -5,8 +5,8 @@
  * 직접 수정하지 마세요.
  *
  * 생성 명령: pnpm run generate:i18n-types
- * 생성 시간: 2026-07-25T11:28:37.183Z
- * 총 키 개수: 1896
+ * 생성 시간: 2026-07-26T14:28:07.061Z
+ * 총 키 개수: 1898
  * Namespace 수: 11
  */
 
@@ -645,7 +645,7 @@ export type SessionKeys =
   | 'settings.archiveHub.journal.tab.analytics';
 
 /**
- * settings namespace의 번역 키 (591개)
+ * settings namespace의 번역 키 (593개)
  * 파일: locales/{lang}/settings.json
  */
 export type SettingsKeys =
@@ -670,6 +670,8 @@ export type SettingsKeys =
   | 'settings.archiveHub.browser.backToProjects'
   | 'settings.archiveHub.browser.backToSessions'
   | 'settings.archiveHub.browser.messages.empty'
+  | 'settings.archiveHub.browser.messages.loadAll'
+  | 'settings.archiveHub.browser.messages.loadAllStop'
   | 'settings.archiveHub.browser.messages.loadEarlier'
   | 'settings.archiveHub.browser.messages.loadMore'
   | 'settings.archiveHub.browser.messages.loading'
@@ -3081,6 +3083,8 @@ export type TranslationKey =
   | 'settings.archiveHub.browser.backToProjects'
   | 'settings.archiveHub.browser.backToSessions'
   | 'settings.archiveHub.browser.messages.empty'
+  | 'settings.archiveHub.browser.messages.loadAll'
+  | 'settings.archiveHub.browser.messages.loadAllStop'
   | 'settings.archiveHub.browser.messages.loadEarlier'
   | 'settings.archiveHub.browser.messages.loadMore'
   | 'settings.archiveHub.browser.messages.loading'
