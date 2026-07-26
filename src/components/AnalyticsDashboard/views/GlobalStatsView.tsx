@@ -34,6 +34,7 @@ import {
   formatNumber,
   formatCurrency,
   calculateGlobalCostSummary,
+  calculateRowCost,
   getRankMedal,
   hasMedal,
 } from "../utils";
@@ -201,6 +202,10 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
             <div className="space-y-2">
               {globalSummary.top_projects.slice(0, 8).map((project, index) => {
                 const medal = getRankMedal(index);
+                const cost = calculateRowCost(
+                  project.model_distribution,
+                  project.tokens
+                );
                 return (
                   <div
                     key={project.project_name}
@@ -244,11 +249,23 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
                         </p>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0">
                       <p className="font-mono text-px12 font-bold text-foreground">
                         {formatNumber(project.tokens)}
                       </p>
-                      <p className="text-px12 text-muted-foreground">{t("analytics.tokens")}</p>
+                      {/* Cost sits under the token count rather than beside it:
+                          these rows already carry a name, a rank and a meta
+                          line, and a fourth column squeezed the names. */}
+                      <p
+                        className="font-mono text-px12 text-muted-foreground"
+                        title={
+                          cost.formatted
+                            ? `${t("analytics.pricingCoverage")}: ${cost.coveragePercent.toFixed(1)}%`
+                            : t("analytics.costUnavailableHub")
+                        }
+                      >
+                        {cost.formatted ?? t("analytics.costUnavailableHub")}
+                      </p>
                     </div>
                   </div>
                 );

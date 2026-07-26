@@ -516,6 +516,46 @@ fn models(conn: &Connection) -> duckdb::Result<Vec<ModelStats>> {
     rows.collect()
 }
 
+/// Per-model token split grouped by an arbitrary leading key column.
+///
+/// Exists because cost is **not** a stored quantity: `cost_usd` is `NULL` on
+/// every row in the archive, so the only cost path is client-side pricing,
+/// which charges per model AND per token type. A provider's or project's flat
+/// token total cannot be priced; its per-model split can. Same shape and same
+/// dedup filter as [`models`], so a row's breakdown sums to that row's tokens.
+///
+/// `sql` must select `(key, model, messages, tokens, input, output,
+/// cache_creation, cache_read, cost_usd)` in that order.
+fn models_by_key(
+    conn: &Connection,
+    sql: &str,
+) -> duckdb::Result<std::collections::HashMap<String, Vec<ModelStats>>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            ModelStats {
+                model_name: r.get(1)?,
+                message_count: r.get::<_, i64>(2)?.max(0) as u32,
+                token_count: r.get::<_, i64>(3)?.max(0) as u64,
+                input_tokens: r.get::<_, i64>(4)?.max(0) as u64,
+                output_tokens: r.get::<_, i64>(5)?.max(0) as u64,
+                cache_creation_tokens: r.get::<_, i64>(6)?.max(0) as u64,
+                cache_read_tokens: r.get::<_, i64>(7)?.max(0) as u64,
+                reasoning_tokens: 0,
+                cost_usd: r.get(8)?,
+            },
+        ))
+    })?;
+    let mut out: std::collections::HashMap<String, Vec<ModelStats>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let (key, model) = row?;
+        out.entry(key).or_default().push(model);
+    }
+    Ok(out)
+}
+
 fn providers(conn: &Connection) -> duckdb::Result<Vec<ProviderUsageStats>> {
     let sql = format!(
         "SELECT provider,
@@ -536,9 +576,30 @@ fn providers(conn: &Connection) -> duckdb::Result<Vec<ProviderUsageStats>> {
             sessions: r.get::<_, i64>(2)?.max(0) as u32,
             messages: r.get::<_, i64>(3)?.max(0) as u32,
             tokens: r.get::<_, i64>(4)?.max(0) as u64,
+            model_distribution: Vec::new(),
         })
     })?;
-    rows.collect()
+    let mut out: Vec<ProviderUsageStats> = rows.collect::<duckdb::Result<_>>()?;
+
+    let by_provider = models_by_key(
+        conn,
+        &format!(
+            "SELECT provider, model,
+                    count(*) FILTER (WHERE conversational)::BIGINT, {TOKEN_SUM},
+                    coalesce(sum(input_tokens),0)::BIGINT,
+                    coalesce(sum(output_tokens),0)::BIGINT,
+                    coalesce(sum(cache_creation_tokens),0)::BIGINT,
+                    coalesce(sum(cache_read_tokens),0)::BIGINT,
+                    sum(cost_usd)
+               FROM stats_scope WHERE model IS NOT NULL AND usage_row
+              GROUP BY 1, 2 ORDER BY 1, 4 DESC, 2"
+        ),
+    )?;
+    let mut by_provider = by_provider;
+    for row in &mut out {
+        row.model_distribution = by_provider.remove(&row.provider_id).unwrap_or_default();
+    }
+    Ok(out)
 }
 
 fn top_projects(conn: &Connection) -> duckdb::Result<Vec<ProjectRanking>> {
@@ -558,9 +619,33 @@ fn top_projects(conn: &Connection) -> duckdb::Result<Vec<ProjectRanking>> {
             sessions: r.get::<_, i64>(1)?.max(0) as u32,
             messages: r.get::<_, i64>(2)?.max(0) as u32,
             tokens: r.get::<_, i64>(3)?.max(0) as u64,
+            model_distribution: Vec::new(),
         })
     })?;
-    rows.collect()
+    let mut out: Vec<ProjectRanking> = rows.collect::<duckdb::Result<_>>()?;
+
+    // Grouped by the SAME display-name expression as above, so a row's
+    // breakdown belongs to exactly the row it is attached to — projects that
+    // collapse into one display name here collapse identically there.
+    let mut by_project = models_by_key(
+        conn,
+        &format!(
+            "SELECT coalesce(p.project_name, p.project_path, '(unknown)'), d.model,
+                    count(*) FILTER (WHERE d.conversational)::BIGINT, {TOKEN_SUM},
+                    coalesce(sum(d.input_tokens),0)::BIGINT,
+                    coalesce(sum(d.output_tokens),0)::BIGINT,
+                    coalesce(sum(d.cache_creation_tokens),0)::BIGINT,
+                    coalesce(sum(d.cache_read_tokens),0)::BIGINT,
+                    sum(d.cost_usd)
+               FROM stats_scope d LEFT JOIN projects p ON p.id = d.project_id
+              WHERE d.model IS NOT NULL AND d.usage_row
+              GROUP BY 1, 2 ORDER BY 1, 4 DESC, 2"
+        ),
+    )?;
+    for row in &mut out {
+        row.model_distribution = by_project.remove(&row.project_name).unwrap_or_default();
+    }
+    Ok(out)
 }
 
 fn distribution(t: &Totals) -> TokenDistribution {

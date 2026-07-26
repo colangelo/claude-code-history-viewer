@@ -799,6 +799,82 @@ async fn model_and_provider_breakdowns_are_deduped_too() {
     assert!(g.total_messages >= 1);
 }
 
+/// The per-row model split must SUM to the row it hangs off.
+///
+/// This is the invariant that makes client-side cost trustworthy: cost is
+/// priced per model and per token type, so a provider/project row is priced by
+/// summing its `model_distribution`. If that breakdown did not add up to the
+/// row's own `tokens`, the displayed cost would silently disagree with the
+/// displayed token count on the same line.
+///
+/// The exact invariant is **`breakdown <= row`, never `>`**. Under is legitimate
+/// and expected: rows with a NULL `model` count toward the row's tokens but are
+/// excluded from the breakdown, because an unnamed model cannot be priced.
+/// Over would mean the dedup filter or the grouping key had drifted between the
+/// two queries and tokens were being double-counted — which is the direction
+/// that would silently inflate a displayed cost.
+///
+/// The shortfall is not a defect to hide: it is why each card prices against
+/// its OWN token total, so the coverage percentage reflects both unnamed models
+/// and known-but-unpriced ones.
+#[tokio::test]
+async fn model_breakdowns_sum_to_their_parent_row() {
+    let hub = spawn().await;
+    let mut m = tok_msg(
+        "s1",
+        "k1",
+        "2026-07-20T10:00:00Z",
+        Some("msg_A"),
+        None,
+        100,
+        50,
+        None,
+        text(),
+    );
+    m.model = Some("claude-opus-5".into());
+    let b = batch(&hub, "s1", vec![m]);
+    assert_eq!(post_ingest(&hub, &b).await, 200);
+
+    let g = global_stats(&hub).await;
+
+    let provider = g
+        .provider_distribution
+        .iter()
+        .find(|p| p.provider_id == "claude")
+        .expect("claude provider present");
+    assert!(
+        !provider.model_distribution.is_empty(),
+        "provider row carries no model split, so it cannot be priced"
+    );
+    let split: u64 = provider
+        .model_distribution
+        .iter()
+        .map(|m| m.token_count)
+        .sum();
+    assert!(
+        split <= provider.tokens,
+        "provider model split ({split}) exceeds the provider's own tokens ({}) \
+         — dedup filter or grouping key has drifted between the two queries",
+        provider.tokens
+    );
+
+    // Same invariant on the project ranking, which groups through a LEFT JOIN
+    // and a coalesce'd display name — the likelier of the two to drift.
+    for project in &g.top_projects {
+        let split: u64 = project
+            .model_distribution
+            .iter()
+            .map(|m| m.token_count)
+            .sum();
+        assert!(
+            split <= project.tokens,
+            "project {} model split ({split}) exceeds its own tokens ({})",
+            project.project_name,
+            project.tokens
+        );
+    }
+}
+
 /// Design D3, kept from the differential gate that has now been retired with the
 /// implementation it compared against.
 ///

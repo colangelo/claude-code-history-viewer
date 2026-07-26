@@ -4,6 +4,7 @@ import { Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ProviderUsageStats } from "../../../types";
 import { getProviderId, getProviderLabel } from "../../../utils/providers";
+import { calculateRowCost } from "../utils";
 
 interface ProviderDistributionChartProps {
   providers: ProviderUsageStats[];
@@ -43,6 +44,7 @@ export const ProviderDistributionChart: React.FC<ProviderDistributionChartProps>
         const color = PROVIDER_COLORS[normalizedId] ?? "var(--metric-purple)";
         const percentage = totalTokens > 0 ? (provider.tokens / totalTokens) * 100 : 0;
         const barWidth = (provider.tokens / maxTokens) * 100;
+        const cost = calculateRowCost(provider.model_distribution, provider.tokens);
 
         return (
           <div
@@ -58,8 +60,22 @@ export const ProviderDistributionChart: React.FC<ProviderDistributionChartProps>
                 <span className="text-px11 font-medium text-foreground/90 truncate pr-2">
                   {getProviderLabel((key, fallback) => t(key, fallback), provider.provider_id)}
                 </span>
-                <span className="font-mono text-px11 font-semibold tabular-nums shrink-0 text-foreground">
-                  {provider.tokens.toLocaleString()}
+                {/* Cost then tokens, in the same order and weights the model
+                    card uses — the two read as one language. */}
+                <span className="flex items-baseline gap-2 shrink-0">
+                  <span
+                    className="font-mono text-px11 tabular-nums text-muted-foreground"
+                    title={
+                      cost.formatted
+                        ? `${t("analytics.pricingCoverage")}: ${cost.coveragePercent.toFixed(1)}%`
+                        : t("analytics.costUnavailableHub")
+                    }
+                  >
+                    {cost.formatted ?? t("analytics.costUnavailableHub")}
+                  </span>
+                  <span className="font-mono text-px11 font-semibold tabular-nums text-foreground">
+                    {provider.tokens.toLocaleString()}
+                  </span>
                 </span>
               </div>
 

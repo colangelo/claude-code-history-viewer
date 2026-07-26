@@ -130,6 +130,10 @@ export interface ProjectRanking {
   sessions: number;
   messages: number;
   tokens: number;
+  /** Per-model split of this row's tokens, so it can be priced client-side.
+   * Optional: hubs before cchv-v0.18.0 omit it, and cost must then render as
+   * "not reported by this hub version" rather than $0. */
+  model_distribution?: ModelStats[];
 }
 
 export interface ProviderUsageStats {
@@ -138,6 +142,8 @@ export interface ProviderUsageStats {
   sessions: number;
   messages: number;
   tokens: number;
+  /** See {@link ProjectRanking.model_distribution}. */
+  model_distribution?: ModelStats[];
 }
 
 // ============================================================================

@@ -37,6 +37,8 @@ export {
 export {
   calculateModelMetrics,
   calculateGlobalCostSummary,
+  calculateRowCost,
+  formatUsd,
   getRankMedal,
   hasMedal,
   type ModelDisplayMetrics,

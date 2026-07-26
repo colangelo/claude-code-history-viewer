@@ -3730,6 +3730,11 @@ pub async fn get_global_stats_summary(
                 sessions,
                 messages,
                 tokens,
+                // Left empty here: the per-provider model split is a hub-side
+                // rollup, and this desktop path is slated for deletion by
+                // web-only-cut. `serde(default)` means an empty vec renders the
+                // honest "not reported" state rather than a fabricated $0.
+                model_distribution: Vec::new(),
             },
         )
         .collect();
@@ -3778,6 +3783,8 @@ pub async fn get_global_stats_summary(
                 sessions,
                 messages,
                 tokens,
+                // See the provider_distribution note above.
+                model_distribution: Vec::new(),
             },
         )
         .collect();

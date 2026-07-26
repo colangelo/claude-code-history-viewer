@@ -30,6 +30,46 @@ interface ModelUsageLike {
   cache_read_tokens: number;
 }
 
+/** One rendering rule for every dollar figure in Analytics, so the model,
+ * provider and project cards cannot drift apart on formatting. Coarser as the
+ * number grows: cents matter at $3.40, not at $8,777. */
+export const formatUsd = (price: number): string =>
+  `$${price.toFixed(price >= 100 ? 0 : price >= 10 ? 1 : 2)}`;
+
+export interface RowCost {
+  /** `null` when this hub reported no model breakdown for the row — render
+   * "not reported by this hub version", NEVER `$0`, which would read as a
+   * measured zero rather than an absent measurement. */
+  formatted: string | null;
+  /** Share of the ROW's own tokens that carry an explicitly priced model.
+   * Below 100% for two distinct reasons that look the same here: rows whose
+   * `model` is NULL (excluded from the breakdown server-side) and models with
+   * no entry in the pricing table. */
+  coveragePercent: number;
+}
+
+/**
+ * Cost for one provider or project row, priced from its own model breakdown.
+ *
+ * Cost is not stored — `cost_usd` is NULL throughout the archive — so it is
+ * derived from the model AND the token type, which is why a row needs its
+ * breakdown rather than just a token total. Priced against the row's own
+ * tokens so the coverage figure describes that row, not the archive.
+ */
+export const calculateRowCost = (
+  models: ModelUsageLike[] | undefined,
+  rowTokens: number
+): RowCost => {
+  if (!models || models.length === 0) {
+    return { formatted: null, coveragePercent: 0 };
+  }
+  const { totalEstimatedCost, coveragePercent } = calculateGlobalCostSummary(
+    models,
+    rowTokens
+  );
+  return { formatted: formatUsd(totalEstimatedCost), coveragePercent };
+};
+
 export interface GlobalCostSummary {
   totalEstimatedCost: number;
   coveragePercent: number;
@@ -58,7 +98,7 @@ export const calculateModelMetrics = (
 
   const percentage = (tokenCount / Math.max(totalTokens, 1)) * 100;
 
-  const formattedPrice = `$${price.toFixed(price >= 100 ? 0 : price >= 10 ? 1 : 2)}`;
+  const formattedPrice = formatUsd(price);
   const formattedTokens = formatNumber(tokenCount);
 
   return {

@@ -135,21 +135,38 @@ pub struct ModelStats {
     pub cost_usd: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectRanking {
     pub project_name: String,
     pub sessions: u32,
     pub messages: u32,
     pub tokens: u64,
+    /// Per-model split of this row's tokens, so a client can price it.
+    ///
+    /// Cost is not a stored quantity — `cost_usd` is `NULL` on every row
+    /// because no provider writes it into the archive — so the only cost path
+    /// is client-side pricing, which needs the model AND the token type
+    /// (input/output/cache-creation/cache-read are all charged differently).
+    /// A flat `tokens` total is therefore unpriceable, which is why this
+    /// breakdown exists rather than a `cost_usd` field here.
+    ///
+    /// `serde(default)`: additive, so an older client ignores it and a newer
+    /// client reading an older hub sees an empty vec and renders "not
+    /// reported" rather than a fabricated $0.
+    #[serde(default)]
+    pub model_distribution: Vec<ModelStats>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderUsageStats {
     pub provider_id: String,
     pub projects: u32,
     pub sessions: u32,
     pub messages: u32,
     pub tokens: u64,
+    /// Per-model split of this row's tokens — see [`ProjectRanking::model_distribution`].
+    #[serde(default)]
+    pub model_distribution: Vec<ModelStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
