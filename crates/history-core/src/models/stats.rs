@@ -83,6 +83,13 @@ pub struct ProjectStatsSummary {
     pub daily_stats: Vec<DailyStats>,
     pub activity_heatmap: Vec<ActivityHeatmap>,
     pub token_distribution: TokenDistribution,
+    /// Per-model usage within this project's scope, same shape and dedup
+    /// semantics as the global distribution. Added for project-scope cost
+    /// estimation (analytics-ux-costs): clients price tokens per model, so
+    /// without this split a project could show no cost at all. `default` keeps
+    /// pre-field hubs deserializable.
+    #[serde(default)]
+    pub model_distribution: Vec<ModelStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -10,10 +10,10 @@
 
 ## 2. Hub: project-scope model distribution
 
-- [ ] 2.1 `crates/hub/src/stats.rs`: per-model rollup over the identity-scoped deduped set (mirror of the global `model_distribution` statement)
-- [ ] 2.2 `stats_api.rs` project response gains `model_distribution` (additive, serde-default)
-- [ ] 2.3 Hub tests: known identity returns per-model rows scoped to that identity and window; empty-model messages fold as the global query does
-- [ ] 2.4 Validate: cargo test locally if runnable, else lean on CI; live-shape check post-deploy
+- [x] 2.1 `crates/hub/src/stats.rs`: per-model rollup over the identity-scoped deduped set (mirror of the global `model_distribution` statement)
+- [x] 2.2 `stats_api.rs` project response gains `model_distribution` (additive, serde-default)
+- [x] 2.3 Hub tests: known identity returns per-model rows scoped to that identity and window; empty-model messages fold as the global query does
+- [x] 2.4 Validate: ran locally (13/13, throwaway local pg db) + clippy/fmt clean; live-shape check still owed post-deploy
 
 ## 3. Webapp: project cost surfaces
 

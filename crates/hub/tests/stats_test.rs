@@ -873,3 +873,85 @@ async fn a_group_straddling_the_window_edge_attributes_usage_outside_it() {
          documented D3 divergence from the Postgres original, which reported 1000"
     );
 }
+
+/// analytics-ux-costs: project scope gains `model_distribution` so clients can
+/// price a single project's tokens — without the per-model split, a project
+/// could show no cost at all. Same rollup, same dedup as the global one.
+#[tokio::test]
+async fn project_scope_reports_a_model_distribution() {
+    let hub = spawn().await;
+    let mut other_model = tok_msg(
+        "s1",
+        "k3",
+        "2026-07-20T10:01:00Z",
+        Some("msg_B"),
+        None,
+        40,
+        10,
+        None,
+        text(),
+    );
+    other_model.model = Some("claude-sonnet-5".into());
+    let b = batch(
+        &hub,
+        "s1",
+        vec![
+            tok_msg(
+                "s1",
+                "k1",
+                "2026-07-20T10:00:00Z",
+                Some("msg_A"),
+                Some("u1"),
+                100,
+                50,
+                None,
+                text(),
+            ),
+            // Same logical message as k1: must not inflate the opus row.
+            tok_msg(
+                "s1",
+                "k2",
+                "2026-07-20T10:00:01Z",
+                Some("msg_A"),
+                Some("u2"),
+                100,
+                50,
+                None,
+                text(),
+            ),
+            other_model,
+        ],
+    );
+    assert_eq!(post_ingest(&hub, &b).await, 200);
+
+    let s = project_stats(&hub).await;
+    assert_eq!(s.model_distribution.len(), 2);
+    // Ordered by token_count descending, like the global rollup.
+    let opus = &s.model_distribution[0];
+    assert_eq!(opus.model_name, "claude-opus-5");
+    assert_eq!(
+        opus.token_count, 150,
+        "duplicate usage row must not inflate"
+    );
+    assert_eq!(opus.input_tokens, 100);
+    assert_eq!(opus.output_tokens, 50);
+    assert_eq!(opus.message_count, 1);
+    let sonnet = &s.model_distribution[1];
+    assert_eq!(sonnet.model_name, "claude-sonnet-5");
+    assert_eq!(sonnet.token_count, 50);
+
+    // The window narrows the distribution with everything else.
+    let later = project_stats_in(
+        &hub,
+        &Window {
+            from: Some("2026-07-21".parse().unwrap()),
+            to: None,
+            tz: chrono_tz::UTC,
+        },
+    )
+    .await;
+    assert!(
+        later.model_distribution.is_empty(),
+        "no messages inside the window, so no per-model rows"
+    );
+}

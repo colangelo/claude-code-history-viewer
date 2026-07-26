@@ -658,6 +658,9 @@ pub fn project(
         daily_stats: daily(conn)?,
         activity_heatmap: heat,
         token_distribution: dist,
+        // Same rollup as the global scope: `models` reads the materialized
+        // `stats_scope`, which here already carries only this identity's rows.
+        model_distribution: models(conn)?,
     })
 }
 
