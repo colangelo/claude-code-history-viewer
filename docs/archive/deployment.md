@@ -573,7 +573,14 @@ worth keeping:
   Not cchv (all of `~/.config/cchv` is under 1.6 GB); leading theory is APFS
   local Time Machine snapshots, filed as home-network **#35** (needs sudo).
   Until resolved this bounds headroom for mirror rebuilds, which write a
-  fresh ~800 MB file alongside the old one before swapping.
+  fresh ~800 MB file alongside the old one before swapping. The same volume
+  then read **54.1 GB free at 02:07** with nothing deleted (infra report
+  `067118a5`; two APFS local TM snapshots present at 02:10 — one being
+  thinned is the right order of magnitude, but nobody sampled the snapshot
+  list at 00:55, so consistent-with, not proven). Standing rule from that
+  report: **any recorded free-space number on m4m is a timestamped sample,
+  not a state** — re-measure at the moment of a rebuild instead of trusting
+  a recorded figure.
 - The `backfill-analytics` + `mirror rebuild` standing rule (old dedup
   grouping → silent token over-count) is recorded infra-side in
   `hosts/m4m.md`; nothing was backfilled on this swap. The Gatus check for
@@ -626,7 +633,12 @@ static bump.
 >   site" change is a *surviving un-narrowed* call site, which is invisible to a
 >   presence check and only shows up as a wrong count. Pick the literal from the
 >   diff and count it in our own `dist-archive/` first — the number we send is
->   the assertion.
+>   the assertion. **The bundle count and the rendered-DOM count legitimately
+>   differ:** the version-chip literal is ×2 in the chunk but ×1 in the DOM —
+>   the two `title` sites in `ConnectGate.tsx` are the connect gate and the
+>   connected header, and only one mounts at a time. 2-vs-1 is a healthy
+>   deploy, not a half-landed one (infra flagged the misread risk on the
+>   v0.16.0 swap, thread `1d2b8f90`).
 > - CSS byte-identity against the tree being replaced — **reported, never
 >   fatal.** It answers "does this deploy touch the tokens", which is headless;
 >   it cannot answer "has anyone looked yet", which is not. Identical bytes ⇒ a
@@ -664,7 +676,15 @@ Post-swap verification (no restart involved, so all of it is client-visible):
   bundle's — these are the authoritative identity of the deploy
 - the served entry chunk actually carries the version: probe it by the version
   chip's `title:"cchv-v<x.y.z>"` marker rather than by filename (a marker is
-  stabler than a hashed asset name)
+  stabler than a hashed asset name). If the check goes one level further — a
+  headless browser against the *rendered* page — **anchor on
+  `data-testid="app-version"`, never a loose version grep**: the rendered DOM
+  also carries version literals from **archived session content** (on the
+  v0.16.0 render: `cchv-v0.13.0` ×2 and `cchv-v0.6.0` ×3, all from old
+  transcripts), so an unanchored `grep cchv-v` happily reports somebody's
+  transcript as the chip. Another member of §2b's marker-trap family, and the
+  anchor is on both chip sites in `ConnectGate.tsx`, so it holds whichever
+  view is mounted.
 - a string unique to the new release is present (e.g. a new i18n key in
   `assets/i18n-en-<hash>.js`)
 - `/v1/healthz` 200, `/v1/healthz/ingest?exclude=ac-mbp` 200, and the HTTPS
@@ -791,6 +811,39 @@ never seen* (headless run), per the standing rule. Rollback point:
 `staging/webapp-preswap-20260725-180203-cchv-v0.14.0`. No home-network commit
 (routine bundle swap; `RELAY_AUDIT` is the trail per the 2026-07-19 standing
 decision).
+
+**2026-07-26, webapp `v0.15.0` → `v0.16.0` swap (thread `1d2b8f90`, infra
+report `067118a5`): the chip-lag correction — and the first chip verified by
+render, not just by serve.** The v0.16.0 hub swap (§2b above) deliberately
+told infra to skip the webapp ("frontend byte-identical to v0.15.0"), which
+was true of `src/` and wrong about the bundle: `package.json`'s version
+compiles into the entry chunk and is exactly what the header chip renders, so
+the live chip announced v0.15.0 against a v0.16.0 hub — user-spotted within
+the hour. Rule from that miss (tasks 7.5b): **a release bumps the version
+string, so the webapp ships with every release** — "no frontend change" is a
+statement about behaviour, not a reason to skip the deploy.
+`just cchv-webapp-deploy 0.16.0 --expect-entry archive-DCMJMiIB.js
+--assert-count '2:cchv-v0.16.0'` landed 02:07:55, run on m4m itself. Nothing
+was staged, so it staged straight from the release artifact — the announced
+§2c no-op-diff path. Served entry `archive-DCMJMiIB.js` 200 (matched the
+prediction **pre-swap**, so the live tree was never touched to find out); old
+`archive-CU7Vo6RB.js` **404** (swap, not cache); marker `cchv-v0.16.0` ×2 in
+the release bundle and in the served chunk; healthz trio 200. CSS
+`archive-BBzvspm0.css` byte-identical on the live and preswap trees (sha256
+`5ac5d2de786c…`, hashed on both), so the `cchv-v0.12.0` degraded-hint item
+above stays the only open eyeball item. Rollback point:
+`staging/webapp-preswap-20260726-020755-cchv-v0.15.0`. Infra then closed the
+gap the standing "served, never seen" caveat names — since the chip *being
+seen* was the whole point of this deploy, proving the bundle would have
+re-created the miss in miniature: headless Chrome `--dump-dom` against the
+live `:8788` front renders `<span data-testid="app-version" …
+title="cchv-v0.16.0">(v0.16.0)</span>`. Their two findings from that render
+(the `data-testid` anchor vs the transcript decoy; ×2-in-chunk vs ×1-in-DOM
+is correct) are folded into the rules above, both verified against
+`ConnectGate.tsx` here before recording. Infra-side record: home-network
+`d7c4b43`, which also corrects their own v0.16.0 binary entry — "webapp
+byte-identical to v0.15.0's frontend" was true of the source, false of the
+built bundle, and that distinction is the argument for this deploy.
 
 Note what did *not* close it: the scripted screenshot set below is what finally
 retired the chips item only in the sense that it stopped being needed — the
