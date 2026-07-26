@@ -709,6 +709,17 @@ static bump.
 >   that check, so ask for it explicitly instead of leaving it to be inferred
 >   (infra suggestion from the v0.17.0 swap, thread `e05b6f2e` — our
 >   fallback-state note made the check constructible there, but only just).
+> - **Write the assertions end-state-shaped, because a completed relay can be
+>   handed out again.** On the NATS channel a redelivery is indistinguishable
+>   from a first delivery (no status field, no archive to consult): the v0.17.0
+>   webapp ask redelivered ~12 min after the swap had landed, and m4m answered
+>   "is the end state already true?" instead of re-running — possible only
+>   because `--expect-entry`/`--assert-count` describe the *end state*, not the
+>   procedure. The 900 s relay split bounds slow handlers; it does nothing about
+>   redelivery. Recipe idempotency is only the second line of defence — a replay
+>   here would have been safe but not clean (see the dated entry below).
+>   Recipient-side half distilled to `CONTEXT/PATTERNS/agent-relay.md`
+>   (`7cc8bae`).
 >
 > Verified end-to-end on m4m, not syntax-checked: an idempotent v0.10.7 redeploy
 > passes all four; a bogus `--expect-entry` and a wrong marker count each abort
@@ -1107,6 +1118,43 @@ Post-swap verification (ours), all against the **deployed** build:
 > not necessarily today's. The durable part is the gate gap, which no fix to
 > either failure removes: pin or match the CI toolchain if the release gate is
 > ever meant to predict CI.
+
+**2026-07-26, v0.17.0 webapp swap follow-up (infra reply `cfe80f81` on thread
+`6b9a2ae5`, deploy thread `e05b6f2e`): our §2c ask REDELIVERED after completion;
+m4m verified end state instead of replaying.** Our webapp relay (msg `6b9a2ae5`)
+reached m4m a second time at 16:16 UTC, ~12 min after the swap had landed
+(16:04 UTC, home-network `d78bfe9`, recorded against relay id `01484672`) —
+byte-identical ask, same assertions. m4m did not re-run the recipe; it answered
+"is the end state already true?": entry chunk `archive-CYB_PMQN.js` 200 with the
+marker ×2 over the wire, old chunk `archive-DCMJMiIB.js` **and** old CSS
+`archive-BBzvspm0.css` both 404 (a swap, not a cache), healthz trio 200,
+on-disk marker ×2, rollback point `webapp-preswap-20260726-180402-cchv-v0.16.0`
+intact, asset diff exactly the announced set. Those probes ran *from m4m* —
+local, as infra itself flagged; our ac-mbm5 leg (above) remains the independent
+one, and no further probe is owed.
+
+- **Both records now agree the v0.17.0 analytics eyeball is OURS and open.**
+  home-network `af17400` corrected their `d78bfe9` ("nothing is owed here"),
+  which had contradicted our hold-open instruction — pre-release screenshots
+  part-serve the look, they do not close the item. Two eyeball items stand: the
+  v0.17.0 analytics look (**ours** — the close travels by name over the relay
+  once a person has actually looked) and the standing v0.12.0 degraded-hint
+  (thread `3dc909f8`). Also dual-homed in this project's file memory
+  (`open-eyeball-items`), per the single-homing lesson above.
+- A replay would have been *safe* but not *clean*: the recipe's `LIVE_VER`
+  guard prints "already cchv-v0.17.0 — redeploying (idempotent)" and prunes
+  nothing, but mv-then-cp would still have minted
+  `webapp-preswap-<stamp>-cchv-v0.17.0` — a decoy rollback point whose name
+  says "preswap" while its contents are the version already live, sitting
+  ahead of the real v0.16.0 one on a `staging/` already at 101 entries and
+  flagged for a prune. End-state check first, recipe idempotency second; the
+  sender-side consequence (end-state-shaped assertions) is now a §2c relay
+  rule above.
+- Thread `e05b6f2e` is complete at 2 of 2. The joined integration check
+  (project-scoped `model_distribution` rendering real data) was already done
+  in `d78bfe9`. One pending cchv item remains on m4m, unrelated to v0.17.0:
+  the staged, unrun sync-daemon swap (`staging/cchv-sync-daemon-aa16b77`) —
+  to be sequenced by its own relay, not off the back of this thread.
 
 ## 3. Sync daemon (on each machine)
 
