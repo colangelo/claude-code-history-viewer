@@ -303,7 +303,14 @@ semantic leg fell back to keyword.
 > workflow, that red IS a deploy stopper — re-derive the scoping whenever the
 > CI layout changes instead of caching the conclusion. (Infra flag on the
 > v0.17.0 thread `e05b6f2e`, msg `910ee098`; recorded on their side in
-> `hosts/m4m.md` with the failure's named owner.)
+> `hosts/m4m.md` with the failure's named owner.) The re-derive clause got its
+> worked counterexample the same day: the very commit that fixed the red
+> (`258345fa`) also moved cargo audit off the push gate into
+> `security-audit.yml`, so any workflow set these records name is one reshuffle
+> stale — at swap time, read the tag's checks fresh
+> (`gh run list -R "$FORK" --commit <tag-sha>`) instead of trusting a cached
+> list. (Infra ack `3c7909c9`, same thread; their `hosts/m4m.md` entry says the
+> same out loud.)
 >
 > **The digest proves what was installed, never which rev it is.** A macos-14
 > runner build and a local Mac build of the same rev are differently
@@ -1256,6 +1263,39 @@ close by name, and nothing else is owed either way. What their reply adds:
 - Our chmod 755 catch and the 55 MB size correction are banked in their
   deployment record; both our refs (`1edf1820`, `ba830470`) resolve on their
   side.
+
+**2026-07-26, Rust Tests loop closed both ways (m4m ack `3c7909c9`, thread
+`e05b6f2e`): the fix independently verified, the m4m record moved to FIXED,
+and the reshuffle rule gains its worked counterexample.** Infra took no action
+beyond the record move we invited, and verified both our statements from their
+side rather than filing them on report — `gh run view 30210223600` returns
+conclusion=success on head `258345fa`, branch `main`, 2026-07-26 16:21Z, and
+`31d25324` shows the §2b paragraph. What their ack lands:
+
+- **`hosts/m4m.md` (home-network `9c7e15b`, pushed) now reads "was RED,
+  cchv-owned, now FIXED and GREEN"**, carrying the fix content
+  (behaviour-preserving `manual_filter`, 12/15 advisories cleared by `cargo
+  update`, the 3 ignored with reasons in `.cargo/audit.toml`) with the run id
+  as the citation. The pre-swap reasoning stays in place unedited — the deploy
+  stood on `server-release.yml` being green, and that history is what makes
+  the rule legible later.
+- **The workflow-set reshuffle earned its own bullet there because the same
+  commit demonstrates it**: `258345fa` moved cargo audit into
+  `security-audit.yml`, so the workflow set their entry names is not the set
+  the next swap should check — re-read the tag's checks at swap time. A rule
+  and its worked counterexample landing in one commit is the cheapest
+  teaching case; the §2b provenance paragraph above now carries the same
+  clarifier.
+- **The portable half is banked**: `CONTEXT/PATTERNS/ci-release.md` § "A red
+  badge blocks a deploy only if it owns the asset" (CONTEXT `3866fed`) —
+  provenance-not-seniority, the re-derive-on-reshuffle clause, the
+  "time-dependent check gates dependency changes, not every push" shaping,
+  and the pinned-toolchain skew corollary. It points at `hosts/m4m.md` for
+  the detail and notes our §2b carries the same rule; nothing restated in
+  either direction, per the pattern/repo split.
+- Unchanged both sides: the two eyeball items stay open and the v0.17.0
+  caveat stays UNVERIFIED. Their ack is not a close and neither is this
+  record — the close travels by name, from us, after a human has looked.
 
 ## 3. Sync daemon (on each machine)
 
