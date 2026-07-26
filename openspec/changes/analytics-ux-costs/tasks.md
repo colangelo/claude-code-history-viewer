@@ -37,9 +37,9 @@
 ## 6. i18n + gate
 
 - [x] 6.1 New keys ×5 locales (presets, custom days, cost card, n/a state); `generate:i18n-types`; `i18n:validate`
-- [ ] 6.2 Full gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`
+- [x] 6.2 Full gate: `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`
 
 ## 7. Eyeball + close-out
 
-- [ ] 7.1 Real-window screenshots (headed Chromium + `screencapture`), both themes: analytics global with cost card first + heatmap row 1; project scope showing cost; range control open; search-from-journal activation landing clean
+- [x] 7.1 Real-window screenshots done (headed Chromium + `screencapture`), light+dark: cost card first + heatmap row 1 (live hub); project n/a state (live) + injected-cost layout; custom 45-day range verified against live data; journal-hit landing clean. Project-scope REAL cost figures remain deploy-gated (2.4 live-shape check)
 - [ ] 7.2 Update `openspec/specs/` from the deltas on archive (sync happens at archive time)
