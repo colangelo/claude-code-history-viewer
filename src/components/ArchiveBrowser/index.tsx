@@ -18,24 +18,18 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  AlertTriangle,
-  ChevronLeft,
-  GitBranch,
-  Link2,
-  Loader2,
-  X,
-} from "lucide-react";
+import { ChevronLeft, GitBranch, Link2, Loader2 } from "lucide-react";
 import { ExpandKeyProvider } from "@/contexts/CaptureExpandContext";
 import { MessageContentDisplay } from "@/components/messageRenderer";
 import { ClaudeContentArrayRenderer } from "@/components/contentRenderer";
 import { cn } from "@/lib/utils";
 import { formatCount, humanizeTimestamp } from "@/utils/journalFormat";
-import { renderSnippet } from "@/utils/searchSnippet";
 import { getProviderLabel } from "@/utils/providers";
 import { ArchiveRenderContext } from "@/contexts/ArchiveRenderContext";
 import { JournalView } from "./JournalView";
 import { AnalyticsView } from "./AnalyticsView";
+import { SearchBar } from "./SearchBar";
+import { SearchResults } from "./SearchResults";
 import {
   aliasKeyByPath,
   groupProjects,
@@ -837,139 +831,23 @@ export function ArchiveBrowser({
           state survives the round-trip because only rendering is gated. */}
       {view !== "analytics" && (
         <>
-        <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 shrink-0">
-          <input
-            ref={searchInputRef}
-            data-testid="archive-search-input"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t("settings.archiveHub.browser.searchPlaceholder")}
-            aria-label={t("settings.archiveHub.browser.searchPlaceholder")}
-            className="flex-1 h-9 rounded-md border border-border bg-background px-2.5 text-px14"
+          <SearchBar
+            inputRef={searchInputRef}
+            query={searchQuery}
+            onQueryChange={setSearchQuery}
+            onSubmit={handleSearchSubmit}
           />
-          {/* The one primary verb in the archive: solid accent, so it is never
-              mistaken for the neutral utilities sharing the toolbar. */}
-          <button
-            type="submit"
-            className="h-9 shrink-0 rounded-md bg-accent px-3 text-px14 font-medium text-accent-foreground transition-colors hover:bg-accent/90"
-          >
-            {t("settings.archiveHub.browser.searchButton")}
-          </button>
-        </form>
-
-        {/* Search results (global, above both views) */}
-        {isSearching && (
-          <p className="text-px13 text-muted-foreground shrink-0 flex items-center gap-1.5">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-            {t("settings.archiveHub.browser.search.loading")}
-          </p>
-        )}
-        {searchError && (
-          <p className="text-px13 text-destructive shrink-0">{searchError}</p>
-        )}
-        {!isSearching && (searchHits != null || journalHits.length > 0) && (
-          <div className="flex items-center justify-between shrink-0">
-            <p className="text-px12 text-muted-foreground" data-testid="search-result-count">
-              {t("settings.archiveHub.browser.search.count", {
-                count: (searchHits?.length ?? 0) + journalHits.length,
-              })}
-            </p>
-            <button
-              type="button"
-              data-testid="search-clear"
-              onClick={handleClearSearch}
-              aria-label={t("settings.archiveHub.browser.search.clear")}
-              title={t("settings.archiveHub.browser.search.clear")}
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted"
-            >
-              <X className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          </div>
-        )}
-        {journalHits.length > 0 && (
-          <section
-            data-testid="journal-search-section"
-            className="shrink-0 space-y-1 border border-info/40 bg-info/5 rounded-md p-1"
-          >
-            <p className="px-1 text-px12 font-medium text-info uppercase tracking-wide">
-              {t("settings.archiveHub.journal.searchSection")}
-            </p>
-            {/* Its own row, not a tail on the eyebrow: inline, the sentence
-                orphan-wraps under the label on narrow viewports. `warning` (amber)
-                rather than `muted-foreground` because the neutral gray was
-                pixel-identical to each hit's date/path line — a status styled like
-                a timestamp reads as a timestamp. Amber, not `destructive`: search
-                still returned results, it just ranked them by keyword. */}
-            {journalDegraded && (
-              <p
-                data-testid="journal-search-degraded"
-                className="flex items-start gap-1.5 px-1 text-px12 text-warning"
-              >
-                <AlertTriangle
-                  className="w-3.5 h-3.5 shrink-0 mt-px"
-                  aria-hidden="true"
-                />
-                <span>{t("settings.archiveHub.journal.searchDegraded")}</span>
-              </p>
-            )}
-            {/* Same cap as the message-hits list below: 100 journal hits once
-                rendered as a ~3000px wall burying the active view. */}
-            <ul className="space-y-1 max-h-72 overflow-y-auto">
-              {journalHits.map((hit, index) => (
-                <li key={`${hit.entry_date}-${hit.project_path}-${index}`}>
-                  <button
-                    type="button"
-                    data-testid="journal-search-hit"
-                    onClick={() => handleActivateJournalHit(hit)}
-                    className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
-                  >
-                    <p className="text-px14 font-medium truncate">
-                      {hit.headline ?? hit.project_path}
-                    </p>
-                    <p className="text-px12 text-muted-foreground truncate">
-                      <span>{hit.entry_date}</span>
-                      {" · "}
-                      <span>{hit.project_path}</span>
-                    </p>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {searchHits && searchHits.length === 0 && journalHits.length === 0 && !isSearching && (
-          <p className="text-px13 text-muted-foreground shrink-0">
-            {t("settings.archiveHub.browser.search.empty")}
-          </p>
-        )}
-        {searchHits && searchHits.length > 0 && (
-          <ul className="shrink-0 space-y-1 max-h-72 overflow-y-auto border border-border/50 rounded-md p-1">
-            {searchHits.map((hit, index) => (
-              <li key={`${hit.session_id}-${index}`}>
-                <button
-                  type="button"
-                  onClick={() => handleActivateHit(hit)}
-                  className="w-full text-left rounded px-2 py-1.5 hover:bg-muted"
-                >
-                  <p className="text-px14 truncate">{renderSnippet(hit.snippet)}</p>
-                  <p className="text-px12 text-muted-foreground truncate">
-                    <span>{hit.project_name ?? hit.project_path}</span>
-                    {" · "}
-                    <span>{hit.machine_hostname}</span>
-                    {hit.timestamp && (
-                      <>
-                        {" · "}
-                        <span title={hit.timestamp}>
-                          {humanizeTimestamp(hit.timestamp)}
-                        </span>
-                      </>
-                    )}
-                  </p>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+          {/* Search results (global, above both views) */}
+          <SearchResults
+            isSearching={isSearching}
+            error={searchError}
+            hits={searchHits}
+            journalHits={journalHits}
+            journalDegraded={journalDegraded}
+            onClear={handleClearSearch}
+            onActivateHit={handleActivateHit}
+            onActivateJournalHit={handleActivateJournalHit}
+          />
         </>
       )}
 
