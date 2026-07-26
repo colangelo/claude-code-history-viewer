@@ -1512,8 +1512,18 @@ that outlive the green:
   published v0.18.0 bundle is `9453cec9…bc04bc05` — the same value recorded
   for v0.17.0/v0.17.1 above, re-hashed here on the release artifact — so the
   byte-identity conclusion stands and their `2dceb959` figure is some other
-  digest form (flagged back on the thread). Byte-identity was *reported, not
-  relied on*: this release visibly restyles both analytics card families with
+  digest form (flagged back on the thread). **Resolved 2026-07-27 (infra
+  reply, home-network `741947a`):** `2dceb959…` is the deploy recipe's own
+  `css_sha()` — bare `shasum` (SHA-1) over the *concatenation* of every
+  `assets/*.css` in the tree (`archive-DetcOCbl.css` +
+  `scrollbar-vendor-nZ78VgrP.css`) — a set-level same-or-different
+  comparator, not a per-asset digest, which is why it reproduced on both the
+  live tree and the preswap backup yet matched no single file. Infra fixed
+  both misquoting spots on their side and annotated `css_sha()` in the code;
+  the portable rule — a digest in a handoff must name its **algorithm and
+  extent**, or the receiver cannot reproduce it — is CONTEXT
+  `PATTERNS/ci-release.md` corollary 3 (`854e419`). Byte-identity was
+  *reported, not relied on*: this release visibly restyles both analytics card families with
   an unchanged stylesheet — the second consecutive counterexample to the
   struck §2c inference, this time with the corrected rule used as intended.
 - **Eyeball bookkeeping: no third *close*, one new named sub-item.** Infra
@@ -1526,7 +1536,7 @@ that outlive the green:
   rendered check above is a functional join proof, not an aesthetic sign-off;
   the v0.12.0 degraded-hint stands unchanged.
 - Still pending on m4m, fenced, not queued: the staged, unrun sync-daemon
-  swap (`staging/cchv-sync-daemon-aa16b77`) — third consecutive thread to
+  swap (`staging/cchv-sync-daemon-aa16b77`) — fourth consecutive thread to
   pass over it without moving it, awaiting its own relay from us.
 
 ## 3. Sync daemon (on each machine)
