@@ -407,7 +407,7 @@ claude-code-history-viewer --session=1265cd74
 5. 推送到分支 (`git push origin feat/my-feature`)
 6. 创建 Pull Request
 
-查看 [开发命令](CLAUDE.md#development-commands) 了解完整的可用命令列表。
+查看 [开发命令](AGENTS.md#development-commands) 了解完整的可用命令列表。
 
 ## 许可证
 

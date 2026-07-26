@@ -407,7 +407,7 @@ claude-code-history-viewer --session=1265cd74
 5. ブランチにプッシュ (`git push origin feat/my-feature`)
 6. プルリクエストを開く
 
-利用可能なコマンドの完全なリストは[開発コマンド](CLAUDE.md#development-commands)を参照。
+利用可能なコマンドの完全なリストは[開発コマンド](AGENTS.md#development-commands)を参照。
 
 ## ライセンス
 

@@ -14,9 +14,13 @@ If any of these files don't exist, **proceed silently**. Don't flag their absenc
 
 `.gitignore` excludes `**/*/CLAUDE.md` — the only tracked `CLAUDE.md` is the one at the repo root. Some contributors run [claude-mem](https://github.com/jhlee0409/claude-mem) which **auto-generates untracked `CLAUDE.md` files inside subdirectories** containing `<claude-mem-context>` activity logs.
 
+Since 2026-07-26 the root `CLAUDE.md` is a **symlink to `AGENTS.md`**, which is the
+single merged guidance file (agent conventions + project/code guidance). Either path
+reads the same content; write to `AGENTS.md`.
+
 Skills must:
 
-- Treat **only the root `CLAUDE.md`** as project-level guidance.
+- Treat **only the root `CLAUDE.md` / `AGENTS.md`** as project-level guidance.
 - Treat **only `CONTEXT.md` / `CONTEXT-MAP.md` / `docs/adr/`** as domain documentation.
 - If you encounter any nested `CLAUDE.md` (e.g. `src/CLAUDE.md`, `src-tauri/src/commands/CLAUDE.md`), **ignore it**. These are local activity snapshots — not authoritative — and may reference unrelated projects (claude-mem cross-pollination).
 

@@ -407,7 +407,7 @@ claude-code-history-viewer --session=1265cd74
 5. 브랜치에 푸시 (`git push origin feat/my-feature`)
 6. Pull Request 생성
 
-전체 사용 가능한 명령어 목록은 [개발 명령어](CLAUDE.md#development-commands)를 참조하세요.
+전체 사용 가능한 명령어 목록은 [개발 명령어](AGENTS.md#development-commands)를 참조하세요.
 
 ## 라이선스
 

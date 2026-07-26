@@ -474,7 +474,7 @@ Contributions are welcome! Here's how to get started:
 5. Push to the branch (`git push origin feat/my-feature`)
 6. Open a Pull Request
 
-See [Development Commands](CLAUDE.md#development-commands) for the full list of available commands.
+See [Development Commands](AGENTS.md#development-commands) for the full list of available commands.
 
 ## License
 
