@@ -710,11 +710,20 @@ static bump.
 >   deploy, not a half-landed one (infra flagged the misread risk on the
 >   v0.16.0 swap, thread `1d2b8f90`).
 > - CSS byte-identity against the tree being replaced — **reported, never
->   fatal.** It answers "does this deploy touch the tokens", which is headless;
->   it cannot answer "has anyone looked yet", which is not. Identical bytes ⇒ a
->   pending eyeball item carries forward unchanged; changed ⇒ it re-opens and a
->   new look is owed. It hashes *content*, so an asset-hash bump over identical
->   bytes still reads as unchanged.
+>   fatal, and it narrows in ONE direction only.** Changed bytes ⇒ the eyeball
+>   item re-opens and a new look is owed. **Identical bytes settle nothing
+>   about rendering**: they prove no colour/spacing *token* moved, but the
+>   utility classes a view *applies* live in the JS chunk, so a JS-only deploy
+>   can restyle a view with classes the stylesheet already carried. Measured
+>   counterexample, `cchv-v0.17.1`: same stylesheet by content hash AND asset
+>   name (`archive-DetcOCbl.css`), yet the chart-card re-size (`3093718f`)
+>   landed via an `items-start` utility already in the bundle from use
+>   elsewhere. The prior form of this bullet — identical bytes ⇒ the pending
+>   eyeball item "carries forward unchanged" — is struck; infra struck its
+>   mirror-image standing rule in `hosts/m4m.md` the same day (home-network
+>   `4880890`, 2026-07-26). It hashes *content*, so an asset-hash bump over
+>   identical bytes still reads as unchanged — and either way it cannot answer
+>   "has anyone looked yet", which is not headless.
 > - **When a release splits into §2b + §2c halves, the webapp relay must
 >   additionally NAME the joined integration check** — the rendered view that
 >   proves the two halves actually join (for v0.17.0: a *project-scoped*
@@ -795,9 +804,11 @@ Post-swap verification (no restart involved, so all of it is client-visible):
 
 Visual/layout changes cannot be verified this way; a rendering claim needs a
 human at a real window. Say so explicitly instead of marking it green. The
-recipe's CSS byte-identity report narrows *what is owed*, never discharges it:
-unchanged CSS means the outstanding eyeball item is still the same one, changed
-CSS means a fresh look is owed.
+recipe's CSS byte-identity report narrows *what is owed*, never discharges it —
+and since `cchv-v0.17.1` (see the handoff-shape bullet above) only the changed
+direction narrows at all: changed CSS means a fresh look is owed; unchanged CSS
+means only that no token moved, and says nothing about whether the JS chunk
+restyled a view with classes the stylesheet already carried.
 
 **Discharged 2026-07-19 (relay `8451d81a`): the three items that close named.**
 The user looked at the live hub themselves, in a real window, through
@@ -1296,6 +1307,51 @@ conclusion=success on head `258345fa`, branch `main`, 2026-07-26 16:21Z, and
 - Unchanged both sides: the two eyeball items stay open and the v0.17.0
   caveat stays UNVERIFIED. Their ack is not a close and neither is this
   record — the close travels by name, from us, after a human has looked.
+
+**2026-07-26, webapp `v0.17.0` → `v0.17.1` swap (thread `b55e5bb1`, infra
+report `96749ab9`, home-network `4880890`): the first deliberately
+split-version state — and the deploy that broke the byte-identical-CSS
+inference.** Landed 21:34:45 local / 19:34Z, run on m4m (local execution
+path, no ssh). All assertions green: entry chunk `archive-CYB_PMQN.js` →
+`archive-DngmKaZQ.js`, the predicted chunk matching pre-swap and served
+post-swap; marker `cchv-v0.17.1` ×2 in the release bundle and in the served
+chunk; healthz trio 200. Nothing was staged beforehand, so the recipe staged
+straight from the release artifact and the staged-vs-released diff was the
+announced no-op — the release was the sole source of truth. Rollback point:
+`staging/webapp-preswap-20260726-213445-cchv-v0.17.0` (two `mv`s, no
+restart). Notes that outlive the green:
+
+- **The binary was NOT swapped, and infra verified that rather than merely
+  not doing it**: pid 77531 unchanged, uptime 3h37m spanning the deploy,
+  `~/.local/bin/cchv-hub` mtime still 17:57 (the v0.17.0 swap). No codesign,
+  no bootout/bootstrap, no non-200 window at any point. First time the hub
+  (v0.17.0) and webapp (v0.17.1) sit at different tags on purpose, and it
+  reads clean. The test infra banked for whether a release needs a §2b half
+  at all needs BOTH checks, because either alone reaches the wrong answer:
+  an empty `git diff -- crates/` still leaves a version surface to disagree,
+  and no served version string still leaves behaviour to diverge.
+- **The CSS check's measured counterexample.** The stylesheet is
+  byte-identical AND same-named across this swap (`archive-DetcOCbl.css`),
+  yet the release re-sizes the Analytics chart cards (`3093718f`) via an
+  `items-start` utility already emitted in that stylesheet from use
+  elsewhere — the change in *which classes are applied* rode the JS chunk.
+  The recipe printed exactly the reassurance that inference produces, i.e. a
+  passing check asserting something it cannot know. Both sides corrected the
+  same day: infra's `tools/cchv-webapp-deploy` report text now states the
+  narrow fact (no token moved) and says outright it does not settle whether
+  a look is owed, and the `hosts/m4m.md` standing rule ("a byte-identical
+  stylesheet cannot have changed how anything renders") is struck with this
+  counterexample (home-network `4880890`); our handoff-shape bullet and the
+  narrowing rule above are edited to match in the same commit as this entry.
+- **Eyeball backlog unchanged at two items, both ours to close by name**:
+  the v0.17.0 analytics look (analytics-ux-costs 7.1 residue) and the
+  v0.12.0 degraded-hint (thread `3dc909f8`). v0.17.1 adds no third item and
+  discharges neither — the chart-card re-size is part of the v0.17.0-line
+  analytics look, which is still open, so it lands inside an existing open
+  item rather than minting a new one.
+- Still pending on m4m, untouched by this deploy and fenced, not queued:
+  the staged, unrun sync-daemon swap (`staging/cchv-sync-daemon-aa16b77`),
+  waiting on its own relay from us.
 
 ## 3. Sync daemon (on each machine)
 
