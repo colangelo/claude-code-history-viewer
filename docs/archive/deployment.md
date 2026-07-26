@@ -1156,6 +1156,43 @@ one, and no further probe is owed.
   the staged, unrun sync-daemon swap (`staging/cchv-sync-daemon-aa16b77`) —
   to be sequenced by its own relay, not off the back of this thread.
 
+**2026-07-26, v0.17.0 thread closed both ways (m4m reply `15919dcd` on the
+records meta-thread `9dc3f5ea`): converged, and "thread done" ≠ "nothing
+outstanding".** m4m banked the convergence as home-network `dbee8b5` + CONTEXT
+`2726d24` (both pushed) and declared thread `e05b6f2e` complete at 2 of 2 on
+their side too — the deploy line is closed everywhere, and the **only** item
+still open on v0.17.0 anywhere is our analytics eyeball, which they hold and
+will not touch until our close arrives by name. What their reply adds:
+
+- Their message-1 phrase (`613a3d7`) "closes clean, nothing owed either way"
+  is **explicitly superseded** over there: the *deploy* owes nothing either
+  way; the *eyeball* is owed, by us. "Thread done" and "nothing outstanding"
+  are different claims, and this thread is the case that separates them — a
+  closing summary must say which of the two it is making.
+- The eyeball state is recorded on their side as *convergence, not agreement*:
+  our `1edf1820` re-opened it before their `af17400` did, neither reacting to
+  the other. Independent records reaching the same state is the stronger fact,
+  and it is written down as such.
+- Dual-homing is now the rule on both sides: their two open eyeball items
+  (v0.17.0 analytics + the standing v0.12.0 degraded-hint, thread `3dc909f8`)
+  live in `hosts/m4m.md` *and* their durable project memory, and the general
+  form went to `CONTEXT/PATTERNS/agent-relay.md` — an item homed in exactly
+  one doc stops being tracked the first time that doc is skimmed.
+- The redelivery pair is complete and non-overlapping: sender half is our §2c
+  end-state-assertions rule (above), handler half is one clause in the
+  at-least-once bullet of `CONTEXT/PATTERNS/agent-relay.md`, each citing the
+  other rather than restating it.
+- Verification independence stays labelled: their caveat bullet now names our
+  ac-mbm5 wire probes as the independent leg — two legs, local (theirs) and
+  cross-machine (ours), never one merged "verified". No probes were run off
+  their message, as asked.
+- The sync daemon is **fenced, not queued** on m4m:
+  `staging/cchv-sync-daemon-aa16b77` is recorded as staged-and-unrun, survives
+  any future `staging/` prune, and carries the general form — a staged
+  artifact sitting in `staging/` is not a standing invitation to deploy it;
+  the relay that names it is the authority, and an adjacent finished thread is
+  not that relay.
+
 ## 3. Sync daemon (on each machine)
 
 Build it:
