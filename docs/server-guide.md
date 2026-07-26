@@ -305,13 +305,13 @@ just setup
 just serve-build
 ```
 
-The binary is at `src-tauri/target/release/claude-code-history-viewer`.
+The binary is at `target/release/claude-code-history-viewer`.
 
 ### Deploy to VPS
 
 ```bash
 # Copy binary to VPS
-scp src-tauri/target/release/claude-code-history-viewer root@203.0.113.50:/usr/local/bin/cchv-server
+scp target/release/claude-code-history-viewer root@203.0.113.50:/usr/local/bin/cchv-server
 
 # SSH in and start
 ssh root@203.0.113.50

@@ -217,16 +217,69 @@ gh release view cchv-v0.13.0 -R "$FORK"   # expect 3 assets: hub bin + .sha256 +
 | Duplicate release | manual `gh release create` + workflow auto-create | let `server-release.yml` own it |
 | Modules not found after `pnpm install` | lockfile ↔ node_modules drift | `rm -rf node_modules && pnpm install` |
 
-### Desktop app (retired)
+### Desktop app (retired as a *distribution*, not as a dependency)
 
-The Tauri desktop distribution and its auto-updater are **retired** — the fork
-ships only the web viewer, so `src-tauri` now builds solely as the WebUI server
-(`--features webui-server`). The desktop release workflows were removed
-(`updater-release.yml`, `updater-release-retry.yml`). The updater code still
-exists but is **dormant / vestigial** (safe to remove in a future cleanup):
-`src-tauri/src/commands/update.rs`, `src/hooks/useGitHubUpdater.ts`,
-`src/hooks/useSmartUpdater.ts`, and the tauri updater plugin in
-`src-tauri/tauri.conf.json`.
+The Tauri desktop **distribution** and its auto-updater are retired: we build no
+`.dmg`/`.app`, and the desktop release workflows are gone (`updater-release.yml`,
+`updater-release-retry.yml`).
+
+**What "retired" does NOT mean — verify before you repeat it.** An earlier
+version of this section claimed `src-tauri` "now builds solely as the WebUI
+server (`--features webui-server`)". That is false, and believing it leads to
+wrong conclusions about CI. The facts, checked 2026-07-26:
+
+- `src-tauri/Cargo.toml` has `default = []`, but `tauri` **and 10
+  `tauri-plugin-*` crates are unconditional dependencies** — not optional, not
+  feature-gated. `webui-server` only *adds* axum/tower/rust-embed; it subtracts
+  nothing.
+- Consequently every compile of `src-tauri`, including `--features
+  webui-server`, drags in the full webview stack — 38 unambiguously
+  desktop-only entries in `Cargo.lock` (`tauri*`, `wry`, `tao`, `webkit2gtk*`,
+  `gtk*`, `gdk*`, `atk*`, `javascriptcore*`, `soup*`). **This is why
+  `rust-tests.yml` installs `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` on every
+  Ubuntu job** — it is forced by the dependency graph, not an oversight.
+- The desktop GUI still runs. `src-tauri/src/lib.rs::run()` dispatches
+  `--export` (line ~95) then `--serve` (line ~106), and otherwise falls through
+  to `tauri::Builder::default()` (line ~152).
+
+Making that sentence true is the job of the **web-only-cut** work (memory's
+"Deliverable 2"; no `openspec/changes/web-only-cut/` exists yet) — make `tauri`
+optional, or split the CLI + WebUI server out of `src-tauri` into its own crate.
+Until then, do not trim the GTK/webkit steps out of CI expecting it to work.
+
+The updater code is **dormant / vestigial** (safe to remove in a future
+cleanup): `src-tauri/src/commands/update.rs`, `src/hooks/useGitHubUpdater.ts`,
+`src/hooks/useSmartUpdater.ts`, the tauri updater plugin in
+`src-tauri/tauri.conf.json`, and the whole `update-flow-tests.yml` workflow,
+which guards only retired updater UI.
+
+### What CI builds, and who consumes it
+
+Checked 2026-07-26. Useful when deciding whether a red check is worth fixing.
+
+| Artifact | Built by | Consumer |
+|---|---|---|
+| `cchv-webapp.tar.gz` | `server-release.yml`, every `cchv-v*` tag | **Us** — infra swaps it into m4m's `static_dir`; the live archive browser |
+| `cchv-hub-<v>-aarch64-apple-darwin` + `.sha256` | `server-release.yml`, every tag (macos-14) | **Us** — becomes `/usr/local/bin/cchv-hub` on m4m (`docs/archive/deployment.md` §2b) |
+| 4× WebUI server binaries (`src-tauri --features webui-server`) | `server-release.yml`, **dispatch-only** | **Nobody today.** Free unless dispatched |
+| Desktop bundles | — | Not built at all |
+
+`src-tauri` therefore ships to no one — but it is **not dead code**. It is the
+local CLI the `cchv-find` skill §3 drives, built from source on demand:
+`--export <id|path> --format html` and `--serve` both verified working
+2026-07-26. So `rust-tests.yml` guards a real local tool, just not a shipped
+artifact — weigh it accordingly.
+
+Test workflows by what they guard: `archive-tests.yml` → the crates we actually
+ship (history-core, protocol, hub, sync-daemon). `frontend-tests.yml` → the
+webapp we ship. `rust-tests.yml` → the local-only CLI. `update-flow-tests.yml`
+→ a retired feature.
+
+Known dead weight in `rust-tests.yml`: the **Benchmarks** job uploads nothing —
+`cargo bench --no-run` never produces criterion output, and its
+`src-tauri/target/criterion` path went stale when the crates extraction moved
+`target/` to the repo root (the run annotation reads *"No files were found with
+the provided path"*). It only proves benches compile.
 
 ## Architecture
 

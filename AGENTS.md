@@ -62,6 +62,24 @@ than Claude Code's ~30-day local retention from Time Machine backups (any
 machine, incl. retired ones via their TM disk): `docs/archive/timemachine-backfill.md`
 (`just tm-backfill --list` to see what's recoverable).
 
+## "Retired" means retired as a *distribution* — check before you repeat it
+
+The desktop app is retired, and it is easy to over-read that. It means we ship
+no `.dmg`/`.app` and run no desktop release workflow. It does **not** mean the
+Tauri dependency is gone: `tauri` + 10 `tauri-plugin-*` crates are still
+unconditional deps of `src-tauri`, the webview stack is still in `Cargo.lock`,
+and `tauri::Builder` still runs when the binary is launched with no flags. Prose
+in `CLAUDE.md` said otherwise until 2026-07-26 and was simply wrong.
+
+So: **before acting on a claim that some subsystem is gone, check the
+dependency graph and the entrypoint, not the prose.** A doc sentence is a
+hypothesis; `Cargo.toml`, `Cargo.lock`, and `lib.rs::run()` are the evidence.
+The same goes for CI — know what a workflow guards before spending effort
+turning it green. CLAUDE.md → *What CI builds, and who consumes it* has the
+current artifact/consumer table and which workflows guard shipped code
+(`archive-tests.yml`, `frontend-tests.yml`) versus local-only or retired
+surfaces (`rust-tests.yml`, `update-flow-tests.yml`).
+
 ## Agent relay
 
 This repo is a **`nats`-variant relay participant** (since 2026-07-12): messages

@@ -295,13 +295,13 @@ just setup
 just serve-build
 ```
 
-바이너리 위치: `src-tauri/target/release/claude-code-history-viewer`
+바이너리 위치: `target/release/claude-code-history-viewer`
 
 ### VPS에 배포
 
 ```bash
 # 바이너리를 VPS로 복사
-scp src-tauri/target/release/claude-code-history-viewer root@203.0.113.50:/usr/local/bin/cchv-server
+scp target/release/claude-code-history-viewer root@203.0.113.50:/usr/local/bin/cchv-server
 
 # VPS에서 실행
 ssh root@203.0.113.50
