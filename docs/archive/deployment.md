@@ -814,7 +814,10 @@ restyled a view with classes the stylesheet already carried.
 The user looked at the live hub themselves, in a real window, through
 `cchv-v0.11.1` and confirmed all three at once: the v0.11.0 Locations block, the
 v0.11.1 toolbar hierarchy, and the long-pending `cchv-v0.10.6` rose topic chips.
-The backlog reopens on the next CSS-changing deploy.
+The backlog reopens on the next CSS-changing deploy. *(2026-07-26: read that as
+sufficiency only — a CSS-changing deploy reopens it. The converse this sentence
+invites, no CSS change ⇒ no re-open, is the inference `cchv-v0.17.1` falsified;
+see the corrected paragraph above and the v0.17.1 entry below.)*
 
 **Discharged 2026-07-25 (relay `74263172`): the two older claims, closed by
 name** — the `cchv-v0.10.4` ultrawide rail/feed centering (`4a0fc78`) and the
@@ -877,6 +880,11 @@ and on the v0.12.0 preswap backup; re-verified by infra, home-network
 `e1bd473`). Only the JS entry chunk flipped (`archive-BAfYulLt.js` →
 `archive-Dc0q_4px.js`, for the embedded version string), so the
 v0.10.4/v0.10.5 backlog above carries forward untouched — no new eyeball item.
+*(2026-07-26: the "byte-identical CSS ⇒ carries forward untouched" step in that
+sentence is the inference `cchv-v0.17.1` later falsified — a JS-only deploy can
+restyle a view with classes the stylesheet already carries (§2c handoff-shape
+bullet; v0.17.1 entry below). The conclusion stands on narrower ground: this
+JS delta was the embedded version string alone.)*
 
 > **Gotcha: a "CSS DIFFERS" report line with blank hashes is an extraction
 > failure, not a diff.** Our swap report for this deploy printed
@@ -892,7 +900,11 @@ by infra** — the live `index.html` references the new entry chunk
 `archive-0BmPzvZw.js`, backup `webapp-preswap-20260724-123924-cchv-v0.13.0`
 in place. The change was JS-only (`hubApi.ts` fetch `cache:'no-store'` +
 `JournalView` refocus refetch, `aa22bda7`), so no new eyeball item; the
-v0.10.4/v0.10.5 backlog above carries forward untouched.
+v0.10.4/v0.10.5 backlog above carries forward untouched. *(2026-07-26:
+"JS-only ⇒ no new eyeball item" is exactly the inference `cchv-v0.17.1`
+falsified — its chart-card re-size rode the JS chunk. This conclusion stands
+because the two named commits are non-visual on inspection, not because they
+were JS-only.)*
 
 **2026-07-25, webapp `v0.14.0` → `v0.15.0` swap (thread `a43b9428`): 2 of 2 of
 the v0.15.0 deploy (hub binary swap in §2b), landed 18:02 local.**
@@ -906,7 +918,10 @@ over — a worthwhile refinement of the v0.11.1 count-marker rule (derive the
 expected count from what is *live*, not from reading the source). CSS is
 byte-identical to v0.14.0 (`archive-BBzvspm0.css`), report-only — since the
 v0.14.0 swap the deploy tool rejects a CSS `--expect-entry` outright — so the
-degraded-hint eyeball item above carries forward unchanged. Health:
+degraded-hint eyeball item above carries forward unchanged. *(2026-07-26: that
+"so … carries forward unchanged" step is the inference struck by
+`cchv-v0.17.1` — see the entry below. It held here because `src/` was
+unchanged between the releases, which is the premise doing the real work.)* Health:
 `/v1/healthz`, `/v1/healthz/ingest?exclude=ac-mbp`, and the `:8788` tailnet
 front all 200. The version chip is client-rendered from exactly the literal
 asserted in the served chunk, so it reads v0.15.0 for any browser — *served,
@@ -934,7 +949,10 @@ prediction **pre-swap**, so the live tree was never touched to find out); old
 the release bundle and in the served chunk; healthz trio 200. CSS
 `archive-BBzvspm0.css` byte-identical on the live and preswap trees (sha256
 `5ac5d2de786c…`, hashed on both), so the `cchv-v0.12.0` degraded-hint item
-above stays the only open eyeball item. Rollback point:
+above stays the only open eyeball item. *(2026-07-26: "byte-identical ⇒ stays
+the only open item" is the inference struck by `cchv-v0.17.1` — see the entry
+below; the sound premise is the one this entry states elsewhere, that the
+bundle delta was the version string alone.)* Rollback point:
 `staging/webapp-preswap-20260726-020755-cchv-v0.15.0`. Infra then closed the
 gap the standing "served, never seen" caveat names — since the chip *being
 seen* was the whole point of this deploy, proving the bundle would have
