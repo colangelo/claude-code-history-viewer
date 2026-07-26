@@ -24,6 +24,8 @@ import { JournalView } from "./JournalView";
 import { AnalyticsView } from "./AnalyticsView";
 import { SearchBar } from "./SearchBar";
 import { SearchResults } from "./SearchResults";
+import { useArchiveSearch } from "./useArchiveSearch";
+import { useArchiveSessions } from "./useArchiveSessions";
 import { ProjectsPane } from "./ProjectsPane";
 import { SessionsPane } from "./SessionsPane";
 import { MessagesPane, type OpenSession } from "./MessagesPane";
@@ -43,13 +45,11 @@ import {
 } from "./archiveRoute";
 import {
   hubApi,
-  identityProjectFilter,
   type HubConfig,
   type HubIdentity,
   type HubMessage,
   type HubProject,
   type HubSearchHit,
-  type HubSession,
   type JournalSearchHit,
 } from "../../services/hubApi";
 
@@ -138,9 +138,13 @@ export function ArchiveBrowser({
   const activeGroup =
     projectGroups.find((g) => g.key === selectedGroup?.key) ?? selectedGroup;
 
-  const [sessions, setSessions] = useState<HubSession[]>([]);
-  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
-  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const {
+    sessions,
+    isLoading: isLoadingSessions,
+    error: sessionsError,
+    fetchSessionsFor,
+    reset: resetSessions,
+  } = useArchiveSessions(config);
 
   const [openSession, setOpenSession] = useState<OpenSession | null>(null);
   const [messages, setMessages] = useState<HubMessage[]>([]);
@@ -158,23 +162,28 @@ export function ArchiveBrowser({
   const abortLoadAllRef = useRef(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
 
-  const [searchQuery, setSearchQuery] = useState(
+  const {
+    query: searchQuery,
+    setQuery: setSearchQuery,
+    hits: searchHits,
+    journalHits,
+    journalDegraded,
+    isSearching,
+    error: searchError,
+    runSearch,
+    clearSearch: handleClearSearch,
+  } = useArchiveSearch(
+    config,
     initialRouteRef.current?.kind === "search"
       ? initialRouteRef.current.query
       : ""
   );
-  const [searchHits, setSearchHits] = useState<HubSearchHit[] | null>(null);
-  const [journalHits, setJournalHits] = useState<JournalSearchHit[]>([]);
-  const [journalDegraded, setJournalDegraded] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
 
-  // Monotonic request generations so a slow, stale response from a
-  // superseded project/session/search selection can never clobber the state
-  // of whatever the user has since selected.
-  const sessionsGenerationRef = useRef(0);
+  // Monotonic request generation so a slow, stale response from a superseded
+  // session selection can never clobber the messages of whatever the user has
+  // since opened. The sessions and search counters live in their own hooks,
+  // each beside the fetch it guards.
   const messagesGenerationRef = useRef(0);
-  const searchGenerationRef = useRef(0);
 
   // Hash writes we initiated — the hashchange listener must ignore them or
   // every state-driven write would bounce back as a route application.
@@ -222,39 +231,6 @@ export function ArchiveBrowser({
   useEffect(() => {
     refreshIdentities();
   }, [refreshIdentities]);
-
-  const fetchSessionsFor = useCallback(
-    (group: ProjectGroup, showWt: boolean) => {
-      const generation = ++sessionsGenerationRef.current;
-      setSessions([]);
-      setSessionsError(null);
-      setIsLoadingSessions(true);
-      // Identity groups query the hub's identity scope (server-side expansion
-      // to member + aliased paths); path groups keep the byte-exact path
-      // filter. Neither pins machine/provider — a group spans them.
-      hubApi
-        .listSessions(config, {
-          project: group.identityKey
-            ? identityProjectFilter(group.identityKey)
-            : group.paths[0] ?? "",
-          include_worktrees:
-            group.identityKey && !showWt ? false : undefined,
-        })
-        .then((list) => {
-          if (sessionsGenerationRef.current !== generation) return;
-          setSessions(list);
-        })
-        .catch((err) => {
-          if (sessionsGenerationRef.current !== generation) return;
-          setSessionsError(String(err));
-        })
-        .finally(() => {
-          if (sessionsGenerationRef.current !== generation) return;
-          setIsLoadingSessions(false);
-        });
-    },
-    [config]
-  );
 
   // Select a group WITHOUT clearing the open session — pane sync for a
   // session opened from Journal or a search hit.
@@ -516,46 +492,6 @@ export function ArchiveBrowser({
     });
   }, [messages]);
 
-  const runSearch = useCallback(
-    (query: string) => {
-      if (!query) return;
-      const generation = ++searchGenerationRef.current;
-      setIsSearching(true);
-      setSearchError(null);
-      setJournalHits([]);
-      setJournalDegraded(false);
-      hubApi
-        .search(config, query)
-        .then((hits) => {
-          if (searchGenerationRef.current !== generation) return;
-          setSearchHits(hits);
-        })
-        .catch((err) => {
-          if (searchGenerationRef.current !== generation) return;
-          setSearchError(String(err));
-        })
-        .finally(() => {
-          if (searchGenerationRef.current !== generation) return;
-          setIsSearching(false);
-        });
-      // Journal hits are additive and best-effort: a hub without the journal
-      // block (or an unreachable one) simply yields no journal section.
-      hubApi
-        .journalSearch(config, query)
-        .then((result) => {
-          if (searchGenerationRef.current !== generation) return;
-          setJournalHits(result.hits);
-          setJournalDegraded(result.degraded);
-        })
-        .catch(() => {
-          if (searchGenerationRef.current !== generation) return;
-          setJournalHits([]);
-          setJournalDegraded(false);
-        });
-    },
-    [config]
-  );
-
   const handleSearchSubmit = useCallback(
     (e: FormEvent) => {
       e.preventDefault();
@@ -566,18 +502,6 @@ export function ArchiveBrowser({
     },
     [searchQuery, runSearch, writeHash]
   );
-
-  // Dismiss the current results without clearing the query input. Hoisted
-  // above the hit activators, which dismiss on activation: the user asked to
-  // go somewhere, so land them there — not under the results overlay.
-  const handleClearSearch = useCallback(() => {
-    ++searchGenerationRef.current;
-    setSearchHits(null);
-    setJournalHits([]);
-    setJournalDegraded(false);
-    setSearchError(null);
-    setIsSearching(false);
-  }, []);
 
   const handleActivateHit = useCallback(
     (hit: HubSearchHit) => {
@@ -674,18 +598,16 @@ export function ArchiveBrowser({
 
   // Mobile drill-up: the stacked (<md) Browse shows one level at a time.
   const handleBackToProjects = useCallback(() => {
-    ++sessionsGenerationRef.current;
     ++messagesGenerationRef.current;
+    resetSessions();
     setSelectedGroup(null);
-    setSessions([]);
-    setSessionsError(null);
     setOpenSession(null);
     setMessages([]);
     setTotalCount(null);
     setWindowStart(0);
     setHighlightMessageId(null);
     setMessagesError(null);
-  }, []);
+  }, [resetSessions]);
 
   const handleBackFromMessages = useCallback(() => {
     ++messagesGenerationRef.current;
