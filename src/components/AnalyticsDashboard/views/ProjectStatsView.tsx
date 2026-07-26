@@ -144,7 +144,7 @@ export const ProjectStatsView: React.FC<ProjectStatsViewProps> = ({
       )}
 
       {/* Charts Row 1 — heatmap and per-model costs lead (analytics-ux-costs) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-5">
         <SectionCard title={t("analytics.activityHeatmapTitle")} icon={Layers} colorVariant="green">
           {projectSummary.daily_stats.length > 0 ? (
             <ActivityHeatmapComponent data={projectSummary.daily_stats} />
@@ -164,7 +164,7 @@ export const ProjectStatsView: React.FC<ProjectStatsViewProps> = ({
       </div>
 
       {/* Tool / Skill / Subagent usage (#321) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-5">
         <SectionCard title={t("analytics.mostUsedToolsTitle")} icon={Cpu} colorVariant="purple">
           <ToolUsageChart tools={projectSummary.most_used_tools} />
         </SectionCard>

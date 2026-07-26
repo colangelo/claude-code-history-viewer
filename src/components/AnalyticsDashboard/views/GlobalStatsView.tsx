@@ -165,7 +165,7 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
 
       {/* Section order (analytics-ux-costs): the heatmap and per-model costs
           lead — they are what gets read; tool charts follow. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-5">
         <SectionCard title={t("analytics.activityHeatmapTitle")} icon={Layers} colorVariant="green">
           {globalSummary.daily_stats.length > 0 ? (
             <ActivityHeatmapComponent data={globalSummary.daily_stats} />
@@ -185,7 +185,7 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
       </div>
 
       {/* Provider split & Top Projects */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-5">
         {globalSummary.provider_distribution.length > 0 && (
           <SectionCard
             title={t("analytics.providerDistribution", "Provider Distribution")}
@@ -260,7 +260,7 @@ export const GlobalStatsView: React.FC<GlobalStatsViewProps> = ({
 
       {/* Tool / Skill / Subagent usage (#321) — demoted below the charts that
           answer "what did this cost and when was I active". */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 items-start gap-5">
         <SectionCard
           title={t("analytics.mostUsedToolsTitle")}
           icon={Wrench}
