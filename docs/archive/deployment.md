@@ -715,7 +715,18 @@ static bump.
 >   the two `title` sites in `ConnectGate.tsx` are the connect gate and the
 >   connected header, and only one mounts at a time. 2-vs-1 is a healthy
 >   deploy, not a half-landed one (infra flagged the misread risk on the
->   v0.16.0 swap, thread `1d2b8f90`).
+>   v0.16.0 swap, thread `1d2b8f90`). **And scope the literal to what the
+>   entry chunk compiles in — user-facing strings usually are not.** Anything
+>   routed through i18n lives in the `i18n-<lang>-<hash>.js` chunks, so asking
+>   the entry chunk for a UI string returns 0 vacuously — green in both
+>   directions, since it would "pass" identically on a broken join. Measured
+>   on the v0.18.0 swap (thread `4517ae7b`): the "Not reported by this hub
+>   version" fallback is ×1 in `i18n-en-BtInFZAb.js` and ×0 in the entry
+>   chunk, and infra briefly read that 0 as "the fallback cannot render"
+>   before re-grepping every chunk. Markers are for compiled-in literals
+>   (version strings, route paths); whether a user-facing string renders is a
+>   DOM question — drive the page (`tools/cchv-webapp-deploy` on their side
+>   now carries the same scope note).
 > - CSS byte-identity against the tree being replaced — **reported, never
 >   fatal, and it narrows in ONE direction only.** Changed bytes ⇒ the eyeball
 >   item re-opens and a new look is owed. **Identical bytes settle nothing
@@ -742,6 +753,10 @@ static bump.
 >   that check, so ask for it explicitly instead of leaving it to be inferred
 >   (infra suggestion from the v0.17.0 swap, thread `e05b6f2e` — our
 >   fallback-state note made the check constructible there, but only just).
+>   The joined check is a *rendered-DOM* claim by construction: its named
+>   failure shape is typically an i18n string the entry chunk does not contain
+>   (marker-scope clause above), so no chunk grep can stand in for driving
+>   the page.
 > - **Write the assertions end-state-shaped, because a completed relay can be
 >   handed out again.** On the NATS channel a redelivery is indistinguishable
 >   from a first delivery (no status field, no archive to consult): the v0.17.0
@@ -1377,6 +1392,75 @@ restart). Notes that outlive the green:
 - Still pending on m4m, untouched by this deploy and fenced, not queued:
   the staged, unrun sync-daemon swap (`staging/cchv-sync-daemon-aa16b77`),
   waiting on its own relay from us.
+
+**2026-07-27, webapp `v0.17.1` → `v0.18.0` swap (thread `4517ae7b`, infra
+report `5a87356b`, home-network `5c93a6b`): the joined check asked for by name
+and PASSED — and the marker-scope trap found and fenced.** Landed 00:08:41
+local / 2026-07-26 22:08Z, after the v0.18.0 binary half (§2b, thread
+`6ec7e556`), so the binary-first ordering held. All assertions green: entry
+chunk `archive-DngmKaZQ.js` → `archive-C4x_YLg-.js`, the predicted chunk
+matching the release **pre-swap**; marker `cchv-v0.18.0` ×2 in the release
+bundle and in the served chunk; healthz trio 200 with no non-200 window; the
+binary verifiably untouched (pid 15531 unchanged, mtime still Jul 27 00:00).
+Rollback point: `staging/webapp-preswap-20260727-000841-cchv-v0.17.1`. Notes
+that outlive the green:
+
+- **The joined check — named in our relay this time, per the v0.17.0 rule —
+  passed in the rendered DOM.** Headless Chromium against the `:8788` front,
+  Analytics / All projects / 30 days: Provider Distribution renders a dollar
+  figure beside each token count (Claude Code `$12009` / 10,975,648,610; Pi
+  `$47.1` / 74.5M; Codex CLI `$37.7` / 72.5M), Top Projects one under each
+  (direction 2900.3M / `$1983`, home-network 2281.5M / `$3186`, …), the "Not
+  reported by this hub version" fallback appears nowhere in the DOM, the chip
+  reads v0.18.0, and the API re-verified live at the same moment
+  (`model_distribution` present: 11 entries on `provider_distribution[0]`, 12
+  on `top_projects[0]`). API and bundle genuinely join.
+- **The marker-scope trap, now a standing clause in the handoff-shape block
+  above.** The fallback literal lives ×1 in `i18n-en-BtInFZAb.js`
+  (byte-identical across v0.17.1/v0.18.0) and **×0 in the entry chunk**, so
+  grepping the entry chunk for it reads "the fallback cannot render" —
+  vacuously green, and equally green on a genuinely broken join. Infra made
+  exactly that misread mid-check, caught it by re-grepping all chunks, and
+  fenced it in `tools/cchv-webapp-deploy`; re-verified here against the
+  published v0.18.0 release asset (both counts reproduce, 2026-07-27).
+- **Cost is not monotonic with tokens — never harden the ordering into an
+  assertion.** Live, Top Projects row 1 (direction, 2900.3M) shows `$1983`
+  while row 2 (home-network, 2281.5M) shows `$3186` — correct, not a bug:
+  pricing is per-model and per-token-type, so a cheap-model-heavy project can
+  out-token a costlier one while costing less. The ordering coincidence in
+  earlier proxy renders was just that. The right pass bar is the one used —
+  a dollar figure where the fallback used to be. Corollary for relays:
+  predictions of client-derived cost figures are window- and
+  coverage-sensitive (our ≈$11904 Claude landed at $12009, but Pi/Codex
+  "≈$80 each" landed at $47.1/$37.7) — treat them as order-of-magnitude,
+  never as equalities to assert.
+- **Read the headline cost as an estimate bounded by 33.4% pricing
+  coverage.** Top-level `cost_reported_messages` is 0 — every archived row's
+  `cost_usd` is NULL — so the entire global figure ($12,094 at swap time) is
+  client-derived from the pricing table (the §2b design intent), with
+  two-thirds of messages outside coverage. Quote it as a bounded estimate,
+  never as spend.
+- **Hash-quoting precision.** Infra's report cited CSS hash `2dceb959…` for
+  the unchanged `archive-DetcOCbl.css`; the sha256 of that asset in the
+  published v0.18.0 bundle is `9453cec9…bc04bc05` — the same value recorded
+  for v0.17.0/v0.17.1 above, re-hashed here on the release artifact — so the
+  byte-identity conclusion stands and their `2dceb959` figure is some other
+  digest form (flagged back on the thread). Byte-identity was *reported, not
+  relied on*: this release visibly restyles both analytics card families with
+  an unchanged stylesheet — the second consecutive counterexample to the
+  struck §2c inference, this time with the corrected rule used as intended.
+- **Eyeball bookkeeping: no third *close*, one new named sub-item.** Infra
+  records "this release mints no third item"; our record (file memory
+  `open-eyeball-items`) carries the v0.18.0 per-row-cost look as its own
+  named sub-item of the analytics-line look, opened by our own §2c ask. The
+  framings agree operationally — one attended look at the live analytics
+  covers both analytics items, and every close travels by name — but the
+  names must both be said when closing, per the close-in-pieces rule. Infra's
+  rendered check above is a functional join proof, not an aesthetic sign-off;
+  the v0.12.0 degraded-hint stands unchanged.
+- Still pending on m4m, fenced, not queued: the staged, unrun sync-daemon
+  swap (`staging/cchv-sync-daemon-aa16b77`) — third consecutive thread to
+  pass over it without moving it, awaiting its own relay from us.
 
 ## 3. Sync daemon (on each machine)
 
