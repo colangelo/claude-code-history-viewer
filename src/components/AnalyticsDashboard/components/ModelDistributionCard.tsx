@@ -19,16 +19,31 @@ interface ModelDistributionCardProps {
   totalTokens: number;
 }
 
+/** Claude Code's own sentinel for messages it generated itself rather than
+ * getting from a model — injected errors ("API Error", "Prompt is too long")
+ * and similar. It arrives as a literal `model` value and the archive stores it
+ * faithfully, but it is not a model: it carries zero tokens, so it renders as
+ * a 0% row with an empty bar and only dilutes the breakdown. Filtered here
+ * rather than in the hub's rollup so the API stays a truthful record of what
+ * was stored, and so the fix reaches the desktop dashboard too — both scopes
+ * share this card. */
+const NON_MODEL_SENTINEL = "<synthetic>";
+
 export const ModelDistributionCard: React.FC<ModelDistributionCardProps> = ({
   models,
   totalTokens,
 }) => {
   const { t } = useTranslation();
 
+  const realModels = models.filter((m) => m.model_name !== NON_MODEL_SENTINEL);
+  // Callers gate on the UNFILTERED length, so a scope whose only entry was the
+  // sentinel would otherwise render an empty card.
+  if (realModels.length === 0) return null;
+
   return (
     <SectionCard title={t("analytics.modelDistribution")} icon={Cpu} colorVariant="blue">
       <div className="space-y-3">
-        {models.map((model) => {
+        {realModels.map((model) => {
           const { percentage, formattedPrice, formattedTokens } = calculateModelMetrics(
             model.model_name,
             model.token_count,
