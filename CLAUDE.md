@@ -127,6 +127,15 @@ SemVer: bug fix → patch, new feature → minor, breaking → major.
 
 ### Release Process
 
+> **Invoke the `cchv-deploy` skill** (`~/_sync/dev/CONTEXT/SKILLS/cchv-deploy/`,
+> linked on every Mac) before cutting a release or relaying a deploy. It carries
+> the order of operations, what a relay must contain, and the traps — including
+> the two this section does not: `Cargo.lock` needs a `cargo` invocation because
+> `just sync-version` does not touch it, and **the webapp ships with every
+> release** because the bundle embeds the version the header chip renders. The
+> ceremony itself stays in `docs/archive/deployment.md` §2b/§2c, which infra
+> co-owns.
+
 #### Phase 1: 품질 검증 (Quality Gate)
 
 릴리즈 전 **모든 검증을 통과**해야 한다. 하나라도 실패하면 수정 후 재검증.
