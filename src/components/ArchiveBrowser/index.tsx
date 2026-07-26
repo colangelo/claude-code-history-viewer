@@ -776,27 +776,35 @@ export function ArchiveBrowser({
             {t("settings.archiveHub.journal.tab.analytics")}
           </button>
         </div>
-        <button
-          type="button"
-          role="switch"
-          data-testid="worktree-toggle"
-          aria-checked={showWorktrees}
-          aria-label={t("settings.archiveHub.identity.showWorktrees")}
-          title={t("settings.archiveHub.identity.showWorktrees")}
-          onClick={handleToggleWorktrees}
-          className={cn(
-            "ml-auto flex items-center gap-1 rounded-md border px-2 py-1 text-px12 transition-colors",
-            // On/off used to differ only by a strikethrough. The accent tint
-            // makes the live state legible at a glance, in the same language
-            // the tabs and the Link buttons already speak.
-            showWorktrees
-              ? "border-accent/30 bg-accent/10 text-accent font-medium"
-              : "border-border/50 text-muted-foreground line-through hover:bg-muted"
-          )}
-        >
-          <GitBranch className="w-3 h-3" aria-hidden="true" />
-          {t("settings.archiveHub.identity.showWorktrees")}
-        </button>
+        {/* Same containment rule as the search surface above: Analytics scopes
+            by identity, and worktree visibility reaches only the project
+            grouping and the session list — neither of which Analytics renders.
+            Shown there it was not merely inert, it still fired a sessions fetch
+            for a pane that isn't mounted. State survives the round-trip because
+            only rendering is gated. */}
+        {view !== "analytics" && (
+          <button
+            type="button"
+            role="switch"
+            data-testid="worktree-toggle"
+            aria-checked={showWorktrees}
+            aria-label={t("settings.archiveHub.identity.showWorktrees")}
+            title={t("settings.archiveHub.identity.showWorktrees")}
+            onClick={handleToggleWorktrees}
+            className={cn(
+              "ml-auto flex items-center gap-1 rounded-md border px-2 py-1 text-px12 transition-colors",
+              // On/off used to differ only by a strikethrough. The accent tint
+              // makes the live state legible at a glance, in the same language
+              // the tabs and the Link buttons already speak.
+              showWorktrees
+                ? "border-accent/30 bg-accent/10 text-accent font-medium"
+                : "border-border/50 text-muted-foreground line-through hover:bg-muted"
+            )}
+          >
+            <GitBranch className="w-3 h-3" aria-hidden="true" />
+            {t("settings.archiveHub.identity.showWorktrees")}
+          </button>
+        )}
       </div>
 
       {view === "journal" ? (
