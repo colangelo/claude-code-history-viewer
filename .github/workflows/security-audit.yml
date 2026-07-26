@@ -1,0 +1,50 @@
+name: Security Audit
+
+# `cargo audit` is time-dependent: an advisory published against a dependency
+# turns this red with no change on our side. Gating every push on it made every
+# release commit fail, so it runs on the things that can actually act on it —
+# a dependency change, a weekly sweep, or on demand — rather than as a blanket
+# push gate in rust-tests.yml.
+#
+# Advisories we cannot act on are ignored, with reasons, in .cargo/audit.toml.
+
+on:
+  schedule:
+    # Mondays 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+    paths:
+      - "Cargo.lock"
+      - ".cargo/audit.toml"
+      - ".github/workflows/security-audit.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "Cargo.lock"
+      - ".cargo/audit.toml"
+      - ".github/workflows/security-audit.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      # Prebuilt binary — `cargo install cargo-audit --locked` spent ~2 minutes
+      # compiling it on every run.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run security audit
+        # Lockfile lives at the workspace root since the crates extraction
+        # (was src-tauri/Cargo.lock). Run audit from the root.
+        run: cargo audit

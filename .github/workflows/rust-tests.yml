@@ -217,24 +217,9 @@ jobs:
           path: src-tauri/target/criterion
           retention-days: 30
 
-  # Security audit - main branch only (weekly via schedule recommended)
-  security:
-    name: Security Audit
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
-      - name: Run security audit
-        # Lockfile lives at the workspace root since the crates extraction
-        # (was src-tauri/Cargo.lock). Run audit from the root.
-        run: cargo audit
+  # Security audit lives in security-audit.yml — it is time-dependent (a new
+  # advisory turns it red with no change on our side), so it does not gate
+  # every push here.
 
   # Documentation check - main branch only
   docs:

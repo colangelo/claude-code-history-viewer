@@ -1,0 +1,31 @@
+# cargo-audit configuration.
+#
+# `cargo audit` scans Cargo.lock, not the resolved feature graph, so it reports
+# crates that are locked but never compiled. Everything ignored here is either
+# unreachable in our build or has no fixed version to move to. Each entry needs
+# a reason and a way out — an ignore with neither is just a silenced advisory.
+#
+# Re-check on any Tauri or sqlx bump: `cargo audit` with this file removed shows
+# whether an entry has become actionable.
+
+[advisories]
+ignore = [
+    # rsa 0.9.10 — Marvin Attack timing sidechannel. No fixed version exists
+    # upstream. Reached only through sqlx-mysql, and every sqlx dependency here
+    # (hub, sync-daemon, loop-evals) sets default-features = false with the
+    # "postgres" feature only, so sqlx-mysql is a lockfile entry that is never
+    # compiled. `cargo tree -i rsa --target all` prints nothing, confirming it
+    # is outside the build graph.
+    # Way out: drops off the list when sqlx stops locking mysql, or when a fixed
+    # rsa ships.
+    "RUSTSEC-2023-0071",
+
+    # quick-xml 0.37.5 — quadratic attribute-duplicate check (RUSTSEC-2026-0194)
+    # and unbounded namespace allocation in NsReader (RUSTSEC-2026-0195). The
+    # fix is 0.41.0, a semver-major bump we do not control: the path is
+    # plist -> {tauri, os_info}, i.e. Tauri parsing its own Info.plist, not
+    # attacker-supplied XML.
+    # Way out: a Tauri release that bumps plist past quick-xml 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
