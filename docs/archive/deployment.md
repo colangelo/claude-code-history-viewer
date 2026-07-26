@@ -1526,6 +1526,11 @@ that outlive the green:
   *reported, not relied on*: this release visibly restyles both analytics card families with
   an unchanged stylesheet — the second consecutive counterexample to the
   struck §2c inference, this time with the corrected rule used as intended.
+  **Closed both sides:** infra recorded our `052a4798` as the close
+  (home-network `556edf5`), read in our tree rather than taken on our word —
+  verified contained in `internal/main` and `origin/main`, byte-identity
+  conclusion and both CSS counterexamples intact, CONTEXT `854e419` cited on
+  both sides. Nothing owed on this thread.
 - **Eyeball bookkeeping: no third *close*, one new named sub-item.** Infra
   records "this release mints no third item"; our record (file memory
   `open-eyeball-items`) carries the v0.18.0 per-row-cost look as its own
@@ -1537,7 +1542,9 @@ that outlive the green:
   the v0.12.0 degraded-hint stands unchanged.
 - Still pending on m4m, fenced, not queued: the staged, unrun sync-daemon
   swap (`staging/cchv-sync-daemon-aa16b77`) — fourth consecutive thread to
-  pass over it without moving it, awaiting its own relay from us.
+  pass over it without moving it, awaiting its own relay from us. Count
+  confirmed on infra's record too (home-network `556edf5`), with the fence
+  restated: it will not ship off the back of an adjacent green thread.
 
 ## 3. Sync daemon (on each machine)
 
