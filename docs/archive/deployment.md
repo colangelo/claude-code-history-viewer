@@ -347,6 +347,42 @@ semantic leg fell back to keyword.
 > differently-linker-signed binary trips the kernel's signature check and the
 > process is killed on every spawn with `OS_REASON_CODESIGNING`. A hung
 > `launchctl kickstart -k` then wedges the job in `spawn scheduled`.
+>
+> **Relay sizing: the 900 s split is RETIRED (2026-07-27, home-network
+> `1396e9e`, closing their #34).** A full deploy — binary swap + a multi-minute
+> backfill + webapp swap + verify — now fits in **one** message: the
+> supervisor's `CLAUDE_TIMEOUT` is **3600 s**, not 900 s (home-network
+> `6c67445`, 2026-07-25; per-host override `RELAY_SUPERVISOR_TIMEOUT`), and a
+> timeout no longer NAKs like a transient failure — `rc=124` gets its own branch
+> with a budget of **2** deliveries instead of 4, then `term()` plus a
+> priority-5 ntfy. So split a deploy only when splitting *buys* something (the
+> §2b/§2c split still chooses the dependency-ordered divergence direction and
+> keeps each blast radius small), never to fit a ceiling.
+>
+> **What replaces the split: publish a checkpoint after every irreversible
+> step.** `tools/relay-outcome --msg-id <id> --checkpoint "<what irreversibly
+> landed>"` after the binary swap, after the backfill, after the webapp swap —
+> that is how a replayed handler learns what a killed predecessor already did
+> instead of inferring it (mandatory for mutating asks under agent-relay spec
+> v2.14). Read a thread's whole `RELAY_AUDIT` trail with `tools/relay-history
+> --msg-id <id>` (exit 3 = no events found). **The replay window is not zero**:
+> one retry is still permitted, but delivery 2+ now gets a warning block
+> prepended to its prompt with the probe ladder inline, instead of the
+> byte-identical prompt that gave the v0.14.0 handlers no way to know. Write
+> §2b/§2c asks end-state-shaped regardless — the §2c rule below is unchanged by
+> any of this.
+>
+> **A checkpoint's absence does not prove nothing landed** — a handler killed
+> mid-step publishes nothing at all. Probing live state remains the check that
+> settles it, and here that means probing by **content** (symbol probe, route
+> flip, response header), never by hash: step 5's ad-hoc re-sign guarantees the
+> installed file cannot hash to the published asset (the paragraph above).
+> Detail: home-network `docs/2026-07-27-relay-timeout-replay-safety-design.md`
+> and `debug-logs/2026-07-19-ac-mbm5-relay-supervisor-timeout-redelivers-completed-work.md`.
+> Spec-copy caveat as announced: the runtime behaviour above is live on both
+> Macs (supervisors restarted 2026-07-27 21:33/21:34 CEST) while `relay-sync`
+> has not run, so a conformance record reading **2.13** against spec **v2.14**
+> is expected and reconciles on the next fleet sync — do not chase it.
 
 Working sequence (validated on m4m 2026-07-13, thread 7938448b):
 
@@ -469,20 +505,22 @@ that made this deploy unlike the others:
 
 Two lessons from how the deploy *ran*, for the next multi-step handoff:
 
-- **A multi-step deploy does not fit in the relay handler's 900 s ceiling.**
+- **A multi-step deploy did not fit the relay handler's then-900 s ceiling.**
   This ask was delivered three times: deliveries 1 and 2 were killed at the
   relay-supervisor timeout (`rc=124`) *after* landing side effects, so
   delivery 3 found the binary and webapp already swapped and the backfill
   running orphaned at `PPID 1`. Nothing was lost — only because infra's
   2026-07-19 rule (probe live state before re-running a mutating ask) stopped
   a blind re-swap, which would have captured the *already-swapped* binary as
-  the "pre-swap" backup and destroyed the rollback point. Until the
-  supervisor-side fix lands (home-network Gitea issue #34 — rc=124 timeout
-  NAKs like a transient failure, so redelivery can replay a completed
-  mutation; infra will notify on this relay when it lands), **split a
-  multi-step deploy into separately-completable relays** — e.g. binary swap + rev probe
-  in one message, catch-up backfill + webapp swap in a second — so each
-  handler run finishes inside the ceiling.
+  the "pre-swap" backup and destroyed the rollback point.
+  **The prescription this produced — "split a multi-step deploy into
+  separately-completable relays so each run finishes inside the ceiling" — is
+  struck as of 2026-07-27**, when the supervisor fix landed (home-network
+  `1396e9e`, closing their #34): see the relay-sizing block at the top of §2b
+  for what holds now. What is *not* struck is the half that saved the rollback
+  point — replay is still possible (one retry), so probing live state before
+  re-running a mutating ask remains the rule, and each irreversible step now
+  owes a `relay-outcome --checkpoint`.
 - **`/v1/stats/sessions/{id}` takes the numeric `sessions.id` row id**
   (`Path<i64>`), so db-side row ids quoted in a relay are directly probeable
   through the live API — that is how the backfill was cross-verified here
@@ -782,8 +820,13 @@ static bump.
 >   webapp ask redelivered ~12 min after the swap had landed, and m4m answered
 >   "is the end state already true?" instead of re-running — possible only
 >   because `--expect-entry`/`--assert-count` describe the *end state*, not the
->   procedure. The 900 s relay split bounds slow handlers; it does nothing about
->   redelivery. Recipe idempotency is only the second line of defence — a replay
+>   procedure. The relay split never bounded redelivery — and since 2026-07-27 it
+>   no longer bounds slow handlers either (ceiling 3600 s; §2b relay-sizing
+>   block), so end-state-shaped assertions are now the whole of the sender-side
+>   defence. The supervisor does more than it did: `rc=124` gets 2 deliveries
+>   rather than 4, and delivery 2+ is *told* it is a replay — but one retry is
+>   still permitted, so this rule does not relax. Recipe idempotency is only the
+>   second line of defence — a replay
 >   here would have been safe but not clean (see the dated entry below).
 >   Recipient-side half distilled to `CONTEXT/PATTERNS/agent-relay.md`
 >   (`7cc8bae`).
@@ -1165,8 +1208,11 @@ staged-tree diff become a silent no-op (the v0.10.4 lesson). Assertions sent as
 the published tarball, not a local build. From our minute-resolution poller: the
 binary field flipped between 17:57:27 and 17:58:28, the entry chunk between
 18:03:39 and 18:04:39 — so the chip read `v0.16.0` against a `v0.17.0` API for
-~6 min. That is what splitting the relays costs, and it is the right trade
-against the 900 s handler ceiling.
+~6 min. That is what splitting the relays costs, and it was the right trade
+against the then-900 s handler ceiling. *(2026-07-27: the ceiling is gone —
+3600 s, §2b relay-sizing block — so a split now has to justify itself on
+divergence **direction** and blast radius, not on fitting a timeout. The
+measurement stands as the price of splitting.)*
 
 Post-swap verification (ours), all against the **deployed** build:
 
