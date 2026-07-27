@@ -4,79 +4,158 @@
 
 # Claude Code History Viewer
 
-**The unified history viewer for AI coding assistants.**
+**A self-hosted, cross-machine archive of your AI coding-agent history.**
 
-Browse, search, and analyze conversations from **Claude Code**, **Gemini CLI**, **Antigravity**, **Codex CLI**, **Cline**, **Cursor**, **Aider**, **OpenCode**, **ForgeCode**, and **CodeBuddy Code** — as a desktop app or headless server. 100% offline.
+A per-machine sync daemon pushes **Claude Code**, **Codex CLI**, **Copilot**, **Pi**, **OpenCode**, **Gemini CLI** and 20 more into a central Rust/Postgres hub with a search API and a web UI. Your history survives each tool's local retention window, and it's searchable from anywhere on your tailnet.
 
-[![Version](https://img.shields.io/github/v/release/jhlee0409/claude-code-history-viewer?label=Version&color=blue)](https://github.com/jhlee0409/claude-code-history-viewer/releases)
-[![Stars](https://img.shields.io/github/stars/jhlee0409/claude-code-history-viewer?style=flat&color=yellow)](https://github.com/jhlee0409/claude-code-history-viewer/stargazers)
-[![License](https://img.shields.io/github/license/jhlee0409/claude-code-history-viewer)](LICENSE)
-[![Rust Tests](https://img.shields.io/github/actions/workflow/status/jhlee0409/claude-code-history-viewer/rust-tests.yml?label=Rust%20Tests)](https://github.com/jhlee0409/claude-code-history-viewer/actions/workflows/rust-tests.yml)
-[![Last Commit](https://img.shields.io/github/last-commit/jhlee0409/claude-code-history-viewer)](https://github.com/jhlee0409/claude-code-history-viewer/commits/main)
-![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
+[![Release](https://img.shields.io/github/v/release/colangelo/claude-code-history-viewer?label=Release&color=blue)](https://github.com/colangelo/claude-code-history-viewer/releases)
+[![License](https://img.shields.io/github/license/colangelo/claude-code-history-viewer)](LICENSE)
+[![Archive Tests](https://img.shields.io/github/actions/workflow/status/colangelo/claude-code-history-viewer/archive-tests.yml?branch=main&label=Archive%20Tests)](https://github.com/colangelo/claude-code-history-viewer/actions/workflows/archive-tests.yml)
+[![Frontend Tests](https://img.shields.io/github/actions/workflow/status/colangelo/claude-code-history-viewer/frontend-tests.yml?branch=main&label=Frontend%20Tests)](https://github.com/colangelo/claude-code-history-viewer/actions/workflows/frontend-tests.yml)
+[![Last Commit](https://img.shields.io/github/last-commit/colangelo/claude-code-history-viewer)](https://github.com/colangelo/claude-code-history-viewer/commits/main)
 
-[Website](https://jhlee0409.github.io/claude-code-history-viewer/) · [Download](https://github.com/jhlee0409/claude-code-history-viewer/releases) · [Report Bug](https://github.com/jhlee0409/claude-code-history-viewer/issues)
-
-**Languages**: [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文 (简体)](README.zh-CN.md) | [中文 (繁體)](README.zh-TW.md)
+[Deployment guide](docs/archive/deployment.md) · [Releases](https://github.com/colangelo/claude-code-history-viewer/releases) · [Upstream project](https://github.com/jhlee0409/claude-code-history-viewer)
 
 </div>
 
 ---
 
-<p align="center">
-  <img width="49%" alt="Conversation History" src="https://github.com/user-attachments/assets/9a18304d-3f08-4563-a0e6-dd6e6dfd227e" />
-  <img width="49%" alt="Analytics Dashboard" src="https://github.com/user-attachments/assets/0f869344-4a7c-4f1f-9de3-701af10fc255" />
-</p>
-<p align="center">
-  <img width="49%" alt="Token Statistics" src="https://github.com/user-attachments/assets/d30f3709-1afb-4f76-8f06-1033a3cb7f4a" />
-  <img width="49%" alt="Recent Edits" src="https://github.com/user-attachments/assets/8c9fbff3-55dd-4cfc-a135-ddeb719f3057" />
-</p>
+> **This is a hard fork, and it is server-first.**
+> [`jhlee0409/claude-code-history-viewer`](https://github.com/jhlee0409/claude-code-history-viewer)
+> is an excellent cross-provider **desktop** viewer. This fork keeps its parsers and
+> its UI, but re-points the product at a different problem: a durable, *central*,
+> multi-machine archive. **We ship no desktop app** — no `.dmg`, no `.exe`, no
+> `.AppImage`, no auto-updater, no Homebrew cask. What we ship is the archive stack
+> and a static web UI. See [Relationship to upstream](#relationship-to-upstream).
 
-## Quick Start
+## Why
 
-**Desktop app** — download and run:
+AI coding agents delete local history on a fixed window — Claude Code keeps roughly
+30 days — and every tool keeps its own history in its own format, on whichever
+machine you happened to be sitting at. So the conversation where you worked out
+*why* the migration had to run in two passes is gone, or it's on the other laptop.
 
-| Platform | Download |
-|----------|----------|
-| macOS (Universal) | [`.dmg`](https://github.com/jhlee0409/claude-code-history-viewer/releases/latest) |
-| Windows (x64) | [`.exe`](https://github.com/jhlee0409/claude-code-history-viewer/releases/latest) / [`.zip` (portable)](https://github.com/jhlee0409/claude-code-history-viewer/releases/latest) |
-| Linux (x64) | [`.AppImage`](https://github.com/jhlee0409/claude-code-history-viewer/releases/latest) |
+This fork fixes that with three properties:
 
-**Homebrew** (macOS):
+- **Cumulative.** The daemon only ever ingests. Deleting a local file never deletes
+  anything from the hub. Once a message lands, it stays.
+- **Cross-machine.** Every machine pushes to one hub. One search covers all of them.
+- **Cross-provider.** 26 agents, one normalized schema, one search box.
 
-```bash
-brew install --cask jhlee0409/tap/claude-code-history-viewer
+## Architecture
+
+```
+each machine:  sync-daemon ──(HTTPS over Tailscale, bearer token)──▶  hub ──▶ Postgres
+                  │                                                    │
+                  └─ reads ~/.claude, ~/.codex, ~/.pi, …               └─ /v1/ingest /v1/search
+                     via the shared history-core parser                   /v1/projects /v1/journal …
+                                                                          (the ONLY component
+                                                                           with DB credentials)
+                                                                                 │
+                                                       static archive webapp ────┘
+                                                       (served by the hub at /)
 ```
 
-**Headless server** — access from any browser:
+| Crate | Role |
+|-------|------|
+| [`crates/history-core`](crates/history-core) | Tauri-free extraction and normalization of every provider's history. The shared parser — the daemon, the hub and the local viewer all use it. |
+| [`crates/sync-daemon`](crates/sync-daemon) | Per-machine daemon. Backfills, then incrementally pushes local history to the hub. Crash-safe checkpoints; holds only a hub URL + token. |
+| [`crates/hub`](crates/hub) | axum + sqlx service. The only component with DB credentials. Bearer-authed `/v1/ingest`, plus the read API: full-text + semantic search, browse, journal, analytics. |
+| [`crates/protocol`](crates/protocol) | The wire types shared by daemon and hub. |
+| `dist-archive/` | The static archive webapp (`just archive-web-build`) — backend-free, served by the hub itself or any static host. |
+
+Transport security is Tailscale (WireGuard); a bearer token gates the data
+endpoints. Read access can additionally be gated on Tailscale identity
+(`trust_tailscale_identity`).
+
+## Quick Start (self-hosting)
+
+Full instructions — including systemd/launchd units, TLS, secrets, and the
+homelab-specific bits — are in **[`docs/archive/deployment.md`](docs/archive/deployment.md)**.
+The short version:
+
+**1. Postgres.** 12 or newer (the schema uses generated stored columns). The hub
+applies its own migrations on startup, so there is no manual migration step, and
+no extensions are required.
 
 ```bash
-brew install jhlee0409/tap/cchv-server   # or: curl -fsSL https://...install-server.sh | sh
-cchv-server --serve                       # → http://localhost:3727
+createdb cchv_archive
+psql -d cchv_archive -c "CREATE ROLE cchv LOGIN PASSWORD 'CHANGE_ME';"
+psql -d cchv_archive -c "GRANT ALL ON DATABASE cchv_archive TO cchv;"
 ```
 
-See [Server Mode](#server-mode-webui) for Docker, VPS, and systemd setup.
+**2. Hub**, on your always-on node. Either build it (`cargo build --release -p hub`)
+or grab `cchv-hub-<version>-aarch64-apple-darwin` from
+[Releases](https://github.com/colangelo/claude-code-history-viewer/releases).
 
----
+```toml
+# /etc/cchv/hub.toml — one [[tokens]] entry per machine
+database_url = "postgres://cchv:CHANGE_ME@localhost/cchv_archive"
+bind_addr    = "0.0.0.0:8787"          # reachable over the tailnet
+static_dir   = "/path/to/dist-archive" # optional: serve the web UI at /
 
-## Why This Exists
+[[tokens]]
+token      = "GENERATE_A_LONG_RANDOM_SECRET"
+machine_id = "11111111-1111-1111-1111-111111111111"
+label      = "laptop"
+```
 
-AI coding assistants generate thousands of conversation messages, but none of them provide a way to look back at your history across tools. CCHV solves this.
+```bash
+HUB_CONFIG=/etc/cchv/hub.toml ./target/release/hub
+curl http://<host>:8787/v1/healthz     # {"status":"ok","db":"up"}
+```
 
-**Twenty-five assistants. One viewer.** Switch between Claude Code, GitHub Copilot, Gemini CLI, Antigravity, Codex CLI, Cline (incl. Roo Code & Kilo Code), Cursor, Cursor Agent, Aider, OpenCode, ForgeCode, CodeBuddy Code, Kimi, Kiro, Amazon Q CLI, Continue.dev, PearAI, Goose, Crush, llm, Open Interpreter, Qwen Code, Zed, OpenHands, and Trae sessions seamlessly — compare token usage, search across providers, and analyze your workflow in a single interface.
+**3. Sync daemon**, on every machine you code from
+(`cargo build --release -p sync-daemon`):
+
+```toml
+# ~/.config/cchv/daemon.toml
+hub_url            = "http://<tailnet-host>:8787"
+hub_token          = "GENERATE_A_LONG_RANDOM_SECRET"   # this machine's token
+scan_interval_secs = 3600
+```
+
+The daemon persists a stable machine id at `~/.claude-history-sync/machine_id` on
+first run and prints it — put that id in the hub's `hub.toml` alongside this
+machine's token.
+
+**4. Web UI.** `just archive-web-build` produces `dist-archive/`. Point the hub's
+`static_dir` (or `HUB_STATIC_DIR`) at it and the hub serves the UI and the API from
+one origin — no CORS, no mixed content. `/v1/*` always wins over static files;
+static assets are served without auth, the bearer token still gates all data.
+
+The webapp is also published as `cchv-webapp.tar.gz` on every release, if you'd
+rather not build it.
+
+## What the archive gives you
+
+| Capability | What it does |
+|---|---|
+| **Journal** | Day-grouped distilled summaries of what each session was actually about, so you can skim weeks at a glance instead of scrolling transcripts. Deep-linkable. |
+| **Search** | Postgres full-text with prefix matching, **plus** hub-local semantic embeddings — `mode=hybrid` fuses both and degrades to keyword if the embedder is unavailable. Results land you on the exact message, in context. |
+| **Browse** | Projects → sessions → messages, with provider badges, role/timestamp gutters, and worktree/clone grouping. |
+| **Project identity** | Moved, cloned and worktree copies of the same repo are grouped by git fingerprint rather than by path, so a `~/dev/foo` → `~/work/foo` move doesn't fork your history. |
+| **Analytics** | Token and cost breakdowns across every machine and provider, not just the one you're sitting at. |
+| **Time Machine backfill** | `just tm-backfill` recovers history older than the local retention window from Time Machine backups — including from retired machines, via their backup disk. See [`docs/archive/timemachine-backfill.md`](docs/archive/timemachine-backfill.md). |
+
+## Supported providers
+
+**Twenty-six assistants, one archive.** Every provider below is parsed by
+`history-core`, so it is browsable locally *and* ingested into the hub.
 
 | Provider | Data Location | What You Get |
 |----------|--------------|--------------|
 | **Claude Code** | `~/.claude/projects/` | Full conversation history, tool use, thinking, costs |
 | **GitHub Copilot** | `~/.copilot/session-state/` (CLI & Desktop), VS Code `workspaceStorage/.../chatSessions/` | Copilot CLI, Copilot Desktop, and VS Code Copilot Chat history (read-only, WSL-aware) |
+| **Codex CLI** | `~/.codex/sessions/` | Session rollouts with agent responses |
+| **Pi** | `~/.pi/agent/sessions/` | badlogic's `pi` / Pi SDK agent — JSONL transcripts per working directory |
+| **OpenCode** | `~/.local/share/opencode/` | Conversation sessions and tool results |
 | **Gemini CLI** | `~/.gemini/history/` | Conversation history with tool calls |
 | **Antigravity** | `~/.gemini/antigravity/` | Conversation state under `brain/` plus token monitor data under `.token-monitor/rpc-cache/v1/` |
-| **Codex CLI** | `~/.codex/sessions/` | Session rollouts with agent responses |
 | **Cline** (incl. Roo Code, Kilo Code) | VS Code `globalStorage/<ext>/tasks/` | Task-based history across the Cline family |
 | **Cursor** | `~/.cursor/` | Composer and chat conversations |
 | **Cursor Agent** | `~/.cursor/projects/.../agent-transcripts/` | Agent transcripts, distinct from the Cursor IDE source |
 | **Aider** | Project directories | Chat history and edit logs |
-| **OpenCode** | `~/.local/share/opencode/` | Conversation sessions and tool results |
 | **ForgeCode** | `~/.forge/.forge.db` | Conversation history from SQLite database |
 | **CodeBuddy Code** | `~/.codebuddy/projects/` | Conversation history with tool calls (Claude Code fork format) |
 | **Kimi** | `~/.kimi/` | Session history with `kimi -r` resume |
@@ -93,399 +172,124 @@ AI coding assistants generate thousands of conversation messages, but none of th
 | **OpenHands** | `~/.openhands/sessions/` | Classic event-store conversations |
 | **Trae** | `…/Trae/User/workspaceStorage/.../state.vscdb` | Per-workspace chat (icube store; experimental, reverse-engineered) |
 
-No vendor lock-in. No cloud dependency. Your local conversation files, beautifully rendered.
+Adding a provider means adding one module under
+[`crates/history-core/src/providers/`](crates/history-core/src/providers) and
+registering it in `mod.rs` — the daemon, hub and viewer pick it up for free.
 
-Antigravity note: the viewer resolves the Antigravity root as `~/.gemini/antigravity` and then reads session state from `brain/` plus usage/cache artifacts from `.token-monitor/rpc-cache/v1/`; this matches the current runtime layout and root resolver in `src-tauri/src/commands/antigravity.rs`.
+## Local viewer and CLI
 
-## Table of Contents
+`src-tauri` is no longer a shipped artifact, but it is not dead code: it's the
+local tool you build from source when you want to read *this* machine's history
+without a hub, or export a session.
 
-- [Features](#features)
-- [Installation](#installation)
-- [Build from Source](#build-from-source)
-- [Server Mode (WebUI)](#server-mode-webui)
-- [Usage](#usage)
-- [Accessibility](#accessibility)
-- [Tech Stack](#tech-stack)
-- [Data Privacy](#data-privacy)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
-
-## Features
-
-### Core
-
-| Feature | Description |
-|---------|-------------|
-| **Multi-Provider Support** | Unified viewer for **25 AI coding assistants** — Claude Code, GitHub Copilot, Gemini CLI, Codex CLI, Cursor / Cursor Agent, Cline (incl. Roo Code & Kilo Code), Aider, OpenCode, ForgeCode, CodeBuddy Code, Kimi, Kiro, Antigravity, Amazon Q CLI, Continue.dev, PearAI, Goose, Crush, llm, Open Interpreter, Qwen Code, Zed, OpenHands, and Trae — filter by provider, compare across tools |
-| **Conversation Browser** | Navigate conversations by project/session with worktree grouping |
-| **Global Search** | Search across all conversations from all providers instantly |
-| **Analytics Dashboard** | Dual-mode token stats (billing vs conversation), cost breakdown, and provider distribution charts |
-| **Session Board** | Multi-session visual analysis with pixel view, attribute brushing, and activity timeline |
-| **Settings Manager** | Scope-aware Claude Code settings editor with MCP server management |
-| **Message Navigator** | Right-side collapsible TOC for quick conversation navigation |
-| **Real-time Monitoring** | Live session file watching for instant updates |
-
-### Provider Notes
-
-| Provider | Notes |
-|---------|-------|
-| **Antigravity** | Loaded through the standard provider pipeline. Sessions come from the token monitor cache and participate in project/session views, token stats, analytics, and global search without a separate UI mode. |
-
-### New in v1.18.0
-
-| Feature | Description |
-|---------|-------------|
-| **Faster startup** | Provider scanners now run concurrently instead of sequentially, so a locked SQLite database from a tool running alongside the viewer no longer stalls the whole scan — eliminating multi-second "Initializing app…" hangs |
-| **Search result context** | Global search results now show which conversation each match belongs to, so matches that share the same text across sessions are easy to tell apart |
-| **Collapsible provider filter** | The sidebar provider-filter panel can collapse to reclaim vertical space for the session list; the collapsed header still surfaces the active filter summary and count |
-| **Verifiable project names** | Project identity prefers the on-disk folder name over a stale `cwd` recorded in old transcripts, so moved or subagent-recorded projects group correctly (one-time transparent re-scan) |
-| **Fixes** | Exporting a subagent session now includes its messages instead of producing an empty file; OpenCode global sessions split by directory (and empty-directory sessions load correctly); the OpenCode session cache is bounded to prevent unbounded memory growth |
-
-### New in v1.17.0
-
-| Feature | Description |
-|---------|-------------|
-| **Eleven new providers** | Browse history from **Continue.dev** & **PearAI** (`~/.continue` / `~/.pearai` session JSON), **Goose** (SQLite), **Crush** (per-project SQLite), **llm** (Simon Willison's CLI), **Amazon Q CLI**, **Open Interpreter** (Codex-format rollouts), **Qwen Code**, **Zed** (Agent Panel threads — SQLite + Zstd), **OpenHands**, and **Trae** — plus **Kilo Code** via the Cline-family reader. Coverage grows from 14 to 25 assistants. |
-| **Kiro Windows path fix** | Kiro CLI database now resolves via `data_local_dir()` (`%LOCALAPPDATA%`) on Windows instead of the incorrect `AppData\Roaming` |
-
-### New in v1.16.0
-
-| Feature | Description |
-|---------|-------------|
-| **GitHub Copilot Provider** | Read-only history from **Copilot CLI** (`~/.copilot/session-state`), **Copilot Desktop**, and **VS Code Copilot Chat** (`workspaceStorage/.../chatSessions`) — WSL-aware, with global search |
-| **Headless Session Export** | New `--export <session-id\|/abs/path.jsonl> [--format html\|json] [--output <file>]` flag renders an HTML or JSON report and exits without launching the GUI — for SSH/CI use |
-| **One-Click Full Backup** | An Archive Manager "Full Backup" card copies every session from all Claude Code projects into archives in one action, so history survives Claude Code's automatic cleanup |
-| **Skill & Subagent Analytics** | New "Most Used Skills" / "Most Used Subagents" sections break Claude `Skill` and `Agent` calls out by name, at project and global scope |
-| **Fixes** | The font-size setting now applies to the whole app (message viewer, analytics, session board, settings), not just the left panel; session delete falls back to permanent deletion when the system trash is unavailable (e.g. Windows Recycle Bin disabled) |
-
-### New in v1.15.0
-
-| Feature | Description |
-|---------|-------------|
-| **Three New Providers** | Browse history from **Cursor Agent** (agent-transcripts, distinct from the Cursor IDE source), **Kimi** (`~/.kimi`, with `kimi -r` resume), and **Kiro** (SQLite-backed `kiro-cli`) |
-| **Codex Native Rename & Delete** | Rename Codex sessions — the title is written to `state_5.sqlite` and shows in the `codex` resume picker, while the rollout transcript stays immutable — and delete sessions through a new in-app confirmation dialog; honors `CODEX_HOME` (sessions + archived) |
-| **Faster Scans & Search** | Codex project lists scan only the session-meta line (mmap + memchr) and each provider scans independently, so a slow provider no longer blocks fast ones; in-session search indexing moved to a Web Worker so large sessions no longer freeze the UI |
-| **Accurate Claude Project Paths** | Project name and the `claude --resume` working directory are now resolved from session metadata instead of the lossy folder encoding (one-time transparent re-scan on first launch) |
-| **Fixes** | Removed blank gaps in the virtualized message history; fixed Kimi auto-refresh on macOS; fixed a Cursor scan crash on multibyte workspace-folder names |
-
-### v1.14.0
-
-| Feature | Description |
-|---------|-------------|
-| **CodeBuddy Code Provider** | Added CodeBuddy Code — browse its conversation history alongside your other AI coding assistants |
-| **WebUI Account Login** | `--serve` mode gains optional account authentication (Argon2id + server-side sessions + CSRF), a read-only mode, and base-path support for reverse-proxy hosting |
-| **Persistent Message Filters** | Role and content-type filters now persist across session switches and app restarts |
-| **Subagent Session Stability** | Fixed multi-subagent click mapping and an occasional crash when opening large subagent sessions |
-| **Linux IME Input** | Fixed ibus/fcitx input (Korean, Chinese, Japanese) in the search box on Linux |
-
-### v1.13.0
-
-| Feature | Description |
-|---------|-------------|
-| **macOS Custom Title Bar** | Draggable overlay header replaces the legacy macOS title bar for consistent screen-space use; Linux/Windows unaffected |
-| **Session Source Filter** | Filter sessions by where they were created — CLI, VS Code, or Desktop — using Claude Code's `entrypoint` field |
-| **Codex Resume Support** | Right-click "Copy Resume Command" now works for Codex sessions and prefixes `cd '<cwd>' && ` so paste-and-run lands in the original directory |
-| **Pricing Accuracy** | Fixed `claude-opus-4-7` 3× overcharge; added `gpt-5.4` / `gpt-5.5` pricing with Codex cached-token handling |
-| **macOS Updater Reliability** | Native OS-level relaunch fallback for the Tauri v2 macOS relaunch bug — no more "please quit and reopen" |
-
-> Older releases: see [CHANGELOG.md](./CHANGELOG.md) for v1.12.0 and earlier.
-
-### More
-
-| Feature | Description |
-|---------|-------------|
-| **Session Context Menu** | Copy session ID, resume command, file path; delete session, show JSONL file; native rename with search integration |
-| **ANSI Color Rendering** | Terminal output displayed with original ANSI colors |
-| **Multi-language** | English, Korean, Japanese, Chinese (Simplified & Traditional) |
-| **Recent Edits** | View file modification history and restore |
-| **Auto-update** | Built-in updater with skip/postpone options |
-
-## Installation
-
-### Homebrew (macOS)
+<p align="center">
+  <img width="49%" alt="Conversation History" src="https://github.com/user-attachments/assets/9a18304d-3f08-4563-a0e6-dd6e6dfd227e" />
+  <img width="49%" alt="Analytics Dashboard" src="https://github.com/user-attachments/assets/0f869344-4a7c-4f1f-9de3-701af10fc255" />
+</p>
 
 ```bash
-brew tap jhlee0409/tap
-brew install --cask claude-code-history-viewer
+# Headless HTTP server — browse this machine's local history in a browser
+just serve-build-run                  # → http://localhost:3727 (token printed to stderr)
+
+# Headless export — no GUI, no webview; writes and exits
+cargo run -p claude-code-history-viewer -- \
+  --export <session-id|/abs/path.jsonl> --format html --output report.html
 ```
 
-Or install directly with the full cask path:
+| Flag | Description |
+|------|-------------|
+| `--serve` | Start the HTTP server instead of the GUI. Takes `--port`, `--host`, `--dist`, `--token`, `--no-auth`. Requires a `--features webui-server` build. |
+| `--export <id\|path>` | Render one session to HTML or JSON (`--format`, `--output`) and exit. Session ids resolve under `~/.claude/projects`; an unambiguous prefix is accepted. |
+| `--session <uuid\|prefix>` | Launch the GUI pre-focused on a session. |
+
+Server-mode details (Docker, systemd, reverse proxies, auth) are in the
+[Server Mode Guide](docs/server-guide.md) ([한국어](docs/server-guide.ko.md)).
+
+## Build from source
 
 ```bash
-brew install --cask jhlee0409/tap/claude-code-history-viewer
-```
-
-If you see `No Cask with this name exists`, run the full cask path command above.
-
-To upgrade:
-
-```bash
-brew upgrade --cask claude-code-history-viewer
-```
-
-To uninstall:
-
-```bash
-brew uninstall --cask claude-code-history-viewer
-```
-
-> **Migrating from manual (.dmg) installation?**
-> Remove the existing app before installing via Homebrew to avoid conflicts.
-> Choose **one** installation method — do not mix manual and Homebrew installs.
-> ```bash
-> # Remove the manually installed app first
-> rm -rf "/Applications/Claude Code History Viewer.app"
-> # Then install via Homebrew
-> brew tap jhlee0409/tap
-> brew install --cask claude-code-history-viewer
-> ```
-
-## Build from Source
-
-```bash
-git clone https://github.com/jhlee0409/claude-code-history-viewer.git
+git clone https://github.com/colangelo/claude-code-history-viewer.git
 cd claude-code-history-viewer
 
-# Option 1: Using just (recommended)
-brew install just    # or: cargo install just
-just setup
-just dev             # Development
-just tauri-build     # Production build
-
-# Option 2: Using pnpm directly
-pnpm install
-pnpm tauri:dev       # Development
-pnpm tauri:build     # Production build
+just setup                # install deps, configure the build environment
+just archive-web-build    # static archive webapp → dist-archive/
+cargo build --release -p hub -p sync-daemon
 ```
 
-**Requirements**: Node.js 18+, pnpm, Rust toolchain
+**Requirements:** Node.js 18+, pnpm, Rust 1.80+ (the hub's embedder dependency
+graph sets the floor; the other crates are fine at 1.77.2). Building `src-tauri`
+additionally needs the platform webview toolchain — on Debian/Ubuntu,
+`libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
 
-## Server Mode (WebUI)
+Common recipes (`just --list` for the rest):
 
-Run the viewer as a headless HTTP server — no desktop environment required. Ideal for VPS, remote servers, or Docker. The server binary embeds the frontend — **a single file is all you need**.
+| Recipe | What it does |
+|--------|--------------|
+| `just archive-web-build` | Static archive webapp → `dist-archive/` |
+| `just serve-build-run` | Build + run the local WebUI server |
+| `just rust-check-all` | `fmt --check` + clippy + tests |
+| `just test-run` | Frontend tests, once, verbose |
+| `just lint` | ESLint |
+| `just sync-version` | Propagate `package.json` version → Cargo workspace + Tauri config |
+| `just tm-backfill` | Recover old history from Time Machine backups |
 
-> **New to server deployment?** See the full [Server Mode Guide](docs/server-guide.md) ([한국어](docs/server-guide.ko.md)) for step-by-step instructions covering local testing, VPS setup, Docker, and more.
+Tests run single-threaded on the Rust side (`cargo test -- --test-threads=1`) —
+the settings tests set `HOME` process-globally.
 
-### Quick Install
+## Data privacy
 
-```bash
-# Homebrew (macOS / Linux)
-brew install jhlee0409/tap/cchv-server
+**Self-hosted, no third parties.** Nothing leaves the infrastructure you run. The
+daemon talks only to the hub you configured; the hub talks only to your Postgres.
+No analytics, no tracking, no telemetry, no cloud service.
 
-# Or one-line script
-curl -fsSL https://raw.githubusercontent.com/jhlee0409/claude-code-history-viewer/main/install-server.sh | sh
-```
+The archive is, by design, a *durable* copy of conversations that would otherwise
+expire — treat the hub and its database as sensitive, and put them behind a
+private network.
 
-Both methods install `cchv-server` to your PATH.
+## Relationship to upstream
 
-### Start the Server
+Upstream is this fork's **parser supply chain**. Each sync ports
+[`jhlee0409`](https://github.com/jhlee0409/claude-code-history-viewer)'s provider
+fixes and new providers into `crates/history-core`, and fixes that belong upstream
+go back as PRs against its `develop` branch.
 
-```bash
-cchv-server --serve
-```
+The two projects have diverged in product, not in parsing:
 
-Output:
+| | Upstream (`jhlee0409`) | This fork |
+|---|---|---|
+| **Shape** | Desktop app (macOS/Windows/Linux) + optional headless server | Archive stack: daemon → hub → Postgres → static web UI |
+| **Scope** | One machine's local files | Every machine, centrally, cumulatively |
+| **Distribution** | `.dmg` / `.exe` / `.AppImage`, Homebrew cask, auto-updater | Hub binary + `cchv-webapp.tar.gz` on each release; build the rest from source |
+| **Versions** | `v1.x` | `cchv-vX.Y.Z` (`0.x` — pre-stable, dogfood tier) |
 
-```
-🔑 Auth token: b77f41d4-ec24-4102-8f7a-8a942d6dd4a0
-   Open in browser: http://192.168.1.10:3727?token=b77f41d4-ec24-4102-8f7a-8a942d6dd4a0
-👁 File watcher active: /home/user/.claude/projects
-🚀 WebUI server running at http://0.0.0.0:3727
-```
+Upstream's `v1.x` tags are fetched for the parser supply chain but are not ours;
+[`CHANGELOG.md`](./CHANGELOG.md) is upstream's release history. For this fork's
+history, see `git tag -n 'cchv-v*'` and the
+[Releases](https://github.com/colangelo/claude-code-history-viewer/releases) page.
 
-Open the URL in your browser — the token is saved automatically.
-
-### Pre-built Binaries
-
-| Platform | Asset |
-|----------|-------|
-| Linux x64 | `cchv-server-linux-x64.tar.gz` |
-| Linux ARM64 | `cchv-server-linux-arm64.tar.gz` |
-| macOS ARM | `cchv-server-macos-arm64.tar.gz` |
-| macOS x64 | `cchv-server-macos-x64.tar.gz` |
-
-Download from [Releases](https://github.com/jhlee0409/claude-code-history-viewer/releases).
-
-**CLI options:**
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--serve` | — | **Required.** Starts the HTTP server instead of the desktop app |
-| `--port <number>` | `3727` | Server port |
-| `--host <address>` | `0.0.0.0` | Bind address (`127.0.0.1` for local only) |
-| `--token <value>` | auto (uuid v4) | Custom authentication token |
-| `--no-auth` | — | Disable authentication (not recommended for public networks) |
-| `--dist <path>` | embedded | Override built-in frontend with external `dist/` directory |
-
-### Authentication
-
-All `/api/*` endpoints are protected by Bearer token authentication. The token is auto-generated on each server start and printed to stderr.
-
-- **Browser access**: Use the `?token=...` URL printed at startup. The token is saved to `localStorage` automatically.
-- **API access**: Include `Authorization: Bearer <token>` header.
-- **Custom token**: `--token my-secret-token` to set your own.
-- **Environment variable**: `CCHV_TOKEN=your-token cchv-server --serve` (useful for systemd/Docker).
-- **Disable**: `--no-auth` to skip authentication entirely (only use on trusted networks).
-
-### Real-time Updates
-
-The server watches `~/.claude/projects/` for file changes and pushes updates to the browser via Server-Sent Events (SSE). When you use Claude Code in another terminal, the viewer updates automatically — no manual refresh needed.
-
-### Docker
-
-```bash
-docker compose up -d
-```
-
-Check the token after startup:
-
-```bash
-docker compose logs webui
-# 🔑 Auth token: ... ← paste this URL in your browser
-```
-
-The `docker-compose.yml` mounts `~/.claude`, `~/.codex`, and `~/.local/share/opencode` as read-only volumes.
-
-### systemd Service
-
-For persistent server on Linux, use the provided systemd template:
-
-```bash
-sudo cp contrib/cchv.service /etc/systemd/system/
-sudo systemctl edit --full cchv.service   # Set User= to your username
-sudo systemctl enable --now cchv.service
-```
-
-### Build from Source (Server Only)
-
-```bash
-just serve-build           # Build frontend + embed into server binary
-just serve-build-run       # Build and run (embedded assets)
-
-# Or run in development (external dist/):
-just serve-dev             # Build frontend + run server with --dist
-```
-
-### Health Check
-
-```
-GET /health
-→ { "status": "ok" }
-```
-
-## Cross-Machine History Archive (experimental)
-
-The viewer browses one machine's history. The **archive** (a Cargo workspace
-alongside the desktop app) extracts *every* machine's history into a central,
-searchable Postgres database — so your history survives Claude Code's 30-day
-deletion and is searchable from anywhere on your network.
-
-```
-each machine:  sync-daemon ──(bearer token over Tailscale)──▶  hub ──▶ Postgres
-                  reads ~/.claude, ~/.codex, …                  /v1/ingest /v1/search …
-```
-
-- `crates/hub` — axum + sqlx service; bearer-authed ingest + full-text search/browse API (the only component with DB credentials).
-- `crates/sync-daemon` — per-machine push daemon; backfill + incremental sync, crash-safe checkpoints, cumulative (never-delete) semantics.
-- `crates/history-core` — the shared, tauri-free parser library both the desktop app and the daemon use.
-
-Setup is in **[`docs/archive/deployment.md`](docs/archive/deployment.md)**.
-pgvector semantic search and an MCP context server for agents are planned next.
-
-## Usage
-
-1. Launch the app
-2. It automatically scans for conversation data from all 25 supported providers (Claude Code, Codex CLI, Gemini CLI, Cursor, Cline, Continue.dev, Goose, Zed, Qwen Code, Amazon Q CLI, and more — see the provider table above)
-3. Browse projects in the left sidebar — filter by provider using the tab bar
-4. Click a session to view messages
-5. Use tabs to switch between Messages, Analytics, Token Stats, Recent Edits, and Session Board
-
-### Command-line flags
-
-Launch the app pre-focused on a specific session by passing a `--session` flag:
-
-```bash
-# Full UUID
-claude-code-history-viewer --session 1265cd74-caa9-472e-b343-c4f44b5cf12c
-
-# UUID prefix (8+ hex-or-dash chars, up to 36) — first match wins
-claude-code-history-viewer --session 1265cd74
-
-# Equals form also works
-claude-code-history-viewer --session=1265cd74
-```
-
-The viewer scans every known project, navigates to the matching session, and falls back to normal startup if no session matches. Values that are neither hex-or-dash of length 8..36 nor an absolute path are silently ignored.
-
-## Accessibility
-
-The app includes accessibility features for keyboard-only, low-vision, and screen-reader users.
-
-- Keyboard-first navigation:
-  - Skip links for Project Explorer, Main Content, Message Navigator, and Settings
-  - Project tree navigation with `ArrowUp/ArrowDown/Home/End`, type-ahead search, and `*` to expand sibling groups
-  - Message navigator navigation with `ArrowUp/ArrowDown/Home/End` and `Enter` to open the focused message
-- Visual accessibility:
-  - Persistent global font size scaling (`90%`, `100%`, `110%`, `120%`, `130%`)
-  - High contrast mode toggle in settings
-- Screen reader support:
-  - Landmark and tree/list semantics (`navigation`, `tree`, `treeitem`, `group`, `listbox`, `option`)
-  - Live announcements for status/loading and project tree navigation/selection changes
-  - Inline keyboard-help descriptions via `aria-describedby`
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| **Backend** | ![Rust](https://img.shields.io/badge/Rust-000?logo=rust&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri_v2-24C8D8?logo=tauri&logoColor=white) |
-| **Frontend** | ![React](https://img.shields.io/badge/React_19-61DAFB?logo=react&logoColor=black) ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white) ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-06B6D4?logo=tailwindcss&logoColor=white) |
-| **State** | ![Zustand](https://img.shields.io/badge/Zustand-433E38?logo=react&logoColor=white) |
-| **Build** | ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white) |
-| **i18n** | ![i18next](https://img.shields.io/badge/i18next-26A69A?logo=i18next&logoColor=white) 5 languages |
-
-## Data Privacy
-
-**100% offline.** No conversation data is sent to any server. No analytics, no tracking, no telemetry.
-
-Your data stays on your machine.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| "No Claude data found" | Make sure `~/.claude` exists with conversation history |
-| Performance issues | Large histories may be slow initially — the app uses virtual scrolling |
-| Update problems | If auto-updater fails, download manually from [Releases](https://github.com/jhlee0409/claude-code-history-viewer/releases) |
+The desktop *distribution* is retired here; the desktop *dependency* is not.
+`src-tauri` still compiles the full webview stack and its GUI path still runs —
+see `AGENTS.md` for exactly what that does and does not mean before you act on it.
 
 ## Contributing
 
-Contributions are welcome! Here's how to get started:
+This fork is primarily a personal, dogfooded archive, so the useful contribution
+paths are:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Run checks before committing:
-   ```bash
-   pnpm tsc --build .        # TypeScript
-   pnpm vitest run            # Tests
-   pnpm lint                  # Lint
-   ```
-4. Commit your changes (`git commit -m 'feat: add my feature'`)
-5. Push to the branch (`git push origin feat/my-feature`)
-6. Open a Pull Request
+- **Provider parsers and parser fixes → upstream.** They benefit everyone, and
+  they flow back here on the next sync.
+- **Archive stack (hub, daemon, protocol, webapp) → here.** Non-trivial changes
+  are specced through OpenSpec first (`openspec/changes/<name>/`) — see
+  `AGENTS.md`.
 
-See [Development Commands](AGENTS.md#development-commands) for the full list of available commands.
+Before committing:
+
+```bash
+pnpm tsc --build . && pnpm vitest run && pnpm lint && pnpm run i18n:validate
+just rust-check-all
+```
 
 ## License
 
-[MIT](LICENSE) — free for personal and commercial use.
-
----
-
-<div align="center">
-
-If this project helps you, consider giving it a star!
-
-[![Star History Chart](https://api.star-history.com/svg?repos=jhlee0409/claude-code-history-viewer&type=Date)](https://star-history.com/#jhlee0409/claude-code-history-viewer&Date)
-
-</div>
+[MIT](LICENSE) — free for personal and commercial use. Copyright for the original
+work remains with JaeHyeok Lee; fork changes are MIT under the same terms.
