@@ -62,13 +62,33 @@ return_self_not_must_use = "allow"
 opt-level = 0
 debug = true
 
-# Optimize dependencies in dev mode (simd-json, rayon need optimization)
+# Optimize dependencies in dev mode (simd-json, rayon need optimization), and
+# strip their debug info.
+#
+# `debug` is NOT inherited from a sibling key — `[profile.dev] debug = true`
+# applies to every dependency unless overridden here, and this block previously
+# set only `opt-level`. That cost real disk: `libduckdb-sys` bundles the whole
+# DuckDB C source, so each build produced a **1.4 GB** rlib and a 1.4 GB
+# `libduckdb.a`, almost entirely DWARF nobody reads — cargo never GCs stale
+# build dirs, and seven feature-set permutations in two days had grown
+# `target/` to **125 GB** (58 G deps + 35 G incremental + 23 G build).
+#
+# `false` here, not in `[profile.dev]`: OUR crates keep full debug info, which
+# is where anyone actually steps. Third-party debug info is what we do not use.
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.test]
 opt-level = 1 # Faster test execution
 debug = true
+
+# `profile.test` inherits `profile.dev`, but package overrides do NOT carry
+# across profiles — without this, `cargo test` rebuilds every dependency with
+# full debug info again and the 125 GB comes straight back.
+[profile.test.package."*"]
+opt-level = 2
+debug = false
 
 # Profile for release builds with debug symbols (for coverage)
 [profile.coverage]
