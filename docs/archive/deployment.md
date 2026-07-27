@@ -364,7 +364,11 @@ semantic leg fell back to keyword.
 > landed>"` after the binary swap, after the backfill, after the webapp swap —
 > that is how a replayed handler learns what a killed predecessor already did
 > instead of inferring it (mandatory for mutating asks under agent-relay spec
-> v2.14). Read a thread's whole `RELAY_AUDIT` trail with `tools/relay-history
+> v2.15). **The test is replay-safety, not the tool** (v2.15, home-network
+> `527bbb4`): committing and pushing content edits needs no checkpoint — a
+> redelivery finds them present and writes nothing new — but a `cchv-v*` tag
+> push, a release publish, or a force-push is a mutating step in git clothing
+> and gets one. Read a thread's whole `RELAY_AUDIT` trail with `tools/relay-history
 > --msg-id <id>` (exit 3 = no events found). **The replay window is not zero**:
 > one retry is still permitted, but delivery 2+ now gets a warning block
 > prepended to its prompt with the probe ladder inline, instead of the
@@ -381,8 +385,11 @@ semantic leg fell back to keyword.
 > and `debug-logs/2026-07-19-ac-mbm5-relay-supervisor-timeout-redelivers-completed-work.md`.
 > Spec-copy caveat as announced: the runtime behaviour above is live on both
 > Macs (supervisors restarted 2026-07-27 21:33/21:34 CEST) while `relay-sync`
-> has not run, so a conformance record reading **2.13** against spec **v2.14**
-> is expected and reconciles on the next fleet sync — do not chase it.
+> has not run, so a conformance record reading **2.13** against spec **v2.15**
+> is expected and reconciles on the next fleet sync — do not chase it. The drift
+> is fleet-wide, not ours: infra's conformance doctor shows **all 10 participants
+> stamped 2.13**, so v2.14 never synced either and the next daily `relay-sync`
+> takes everyone to 2.15 in one step.
 
 Working sequence (validated on m4m 2026-07-13, thread 7938448b):
 
