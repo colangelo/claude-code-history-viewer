@@ -24,7 +24,7 @@
 ## 4. Clients
 
 - [x] 4.1 Webapp: `hubApi.journalSearch` sends `mode=hybrid` (+ optional `journal_degraded` surfaced as a subtle hint in the search section); vitest for the param + degraded flag parse
-- [ ] 4.2 cchv-find skill (`~/_sync/dev/CONTEXT/SKILLS/cchv-find/SKILL.md`): document `mode=` with guidance (hybrid default for recall questions; keyword for exact-term lookups) — post-deploy, after live verification
+- [x] 4.2 cchv-find skill (`~/_sync/dev/CONTEXT/SKILLS/cchv-find/SKILL.md`): document `mode=` with guidance (hybrid default for recall questions; keyword for exact-term lookups) — post-deploy, after live verification. **DONE 2026-08-02** (CONTEXT `212129d`), gated on the live verification it asked for, run against the m4m hub the same session: the paraphrase "how did we make the nightly summary job recover on its own" returns **0 journal hits under `mode=keyword`** and 5 (target first) under `semantic`/`hybrid` — the measured recall gap, still closed in prod; exact-term `pgvector` returns 3 under keyword, and hybrid's top hit scores `0.032522 = 1/61 + 1/62`, confirming RRF k=60 fusion arithmetically rather than by inspection; unknown mode → 400, no mode → keyword, `journal_degraded` absent throughout. The skill entry leads with the two traps a reader would otherwise hit — `rank` is three unrelated scales across the three modes (never threshold on it), and a dead embedder degrades to `200` + keyword-only results with an additive `journal_degraded` flag, so "semantic found nothing" is meaningless until that flag is checked.
 
 ## 5. Quality gate + acceptance + release prep
 
