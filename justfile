@@ -124,12 +124,14 @@ serve-build: frontend-build
     cd src-tauri && cargo build --release --features webui-server
 
 # Build and run server (full rebuild)
+# NB: workspace target dir is the repo root, NOT src-tauri/target — and no
+# leading `-`, or a missing binary exits 0 and looks like a clean run.
 serve-build-run: serve-build
-    -./src-tauri/target/release/claude-code-history-viewer --serve
+    ./target/release/claude-code-history-viewer --serve
 
 # Run the already-built server binary (no rebuild, instant start)
 serve *ARGS:
-    -./src-tauri/target/release/claude-code-history-viewer --serve {{ARGS}}
+    ./target/release/claude-code-history-viewer --serve {{ARGS}}
 
 # Run server in development mode (external dist/ for hot reload)
 serve-dev: frontend-build
