@@ -55,8 +55,40 @@ DEFAULT_HUB_URL = "http://127.0.0.1:8790"  # hub is loopback-bound on m4m
 DEFAULT_BACKEND = "aiproxy"  # aiproxy | claude
 DEFAULT_MODEL = "gpt-5.6-sol"  # aiproxy model id; for backend=claude use e.g. "haiku"
 DEFAULT_EFFORT = "low"  # reasoning_effort for aiproxy (none|minimal|low|medium|high|xhigh|max)
-DEFAULT_AIPROXY_URL = "https://aiproxy.internal"
-BAO_ADDR = os.environ.get("BAO_ADDR", "https://vault.internal")
+
+
+def _endpoints() -> dict[str, str]:
+    """Endpoints kept OUTSIDE the tree.
+
+    This repo's `origin` is a public GitHub fork, so an internal hostname
+    committed here would be published and stay in history (CONTEXT
+    PATTERNS/paths-in-tracked-files.md). These two values used to be literal
+    defaults on the lines below.
+
+    Same directory this script already reads its AppRole creds from. Provision
+    once per machine:
+        printf 'BAO_ADDR=https://<vault-host>\\n' >  ~/.config/cchv/endpoints.env
+        printf 'CCHV_AIPROXY_URL=https://<proxy>\\n' >> ~/.config/cchv/endpoints.env
+    """
+    out: dict[str, str] = {}
+    try:
+        raw = (Path.home() / ".config/cchv/endpoints.env").read_text()
+    except OSError:
+        return out
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out[key.strip()] = value.strip().strip("'\"")
+    return out
+
+
+_ENDPOINTS = _endpoints()
+# Environment wins over the file: the distiller runs under `zsh -lc`, which
+# sources ~/.zshenv, so an exported BAO_ADDR keeps working unchanged.
+DEFAULT_AIPROXY_URL = os.environ.get("CCHV_AIPROXY_URL") or _ENDPOINTS.get("CCHV_AIPROXY_URL", "")
+BAO_ADDR = os.environ.get("BAO_ADDR") or _ENDPOINTS.get("BAO_ADDR", "")
 APPROLE_FILE = Path.home() / ".config/cchv/bao-approle"
 PROMPT_BUDGET_CHARS = 120_000  # total transcript chars per LLM call
 CLAUDE_TIMEOUT_SECS = 300
@@ -78,6 +110,12 @@ def non_interactive() -> bool:
 
 def bao_login() -> str | None:
     """AppRole login → client token, or None (creds missing / tailnet DNS down)."""
+    # Loud, but returns None like every other failure here so the caller's
+    # existing fallback still applies — a missing endpoints.env degrades the
+    # run rather than crashing it with a confusing URL error.
+    if not BAO_ADDR:
+        log("BAO_ADDR unset — set it in the environment or ~/.config/cchv/endpoints.env")
+        return None
     if not APPROLE_FILE.is_file():
         log(f"no AppRole creds at {APPROLE_FILE}")
         return None

@@ -27,9 +27,26 @@
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
-BAO_ADDR="${BAO_ADDR:-https://vault.internal}"
-BAO_HOST="${BAO_ADDR#*://}"; BAO_HOST="${BAO_HOST%%[:/]*}"
 CFG_DIR="$HOME/.config/cchv"
+
+# Endpoints live OUTSIDE the tree. This repo's `origin` is a public GitHub fork,
+# so an internal hostname committed here would be published and stay in history
+# (CONTEXT PATTERNS/paths-in-tracked-files.md). The value used to be a literal
+# default on this line.
+#
+# Provision once per machine, alongside the AppRole creds this script already
+# expects in the same directory:
+#   printf 'BAO_ADDR=https://<vault-host>\n' > ~/.config/cchv/endpoints.env
+#
+# Env wins over the file, so launchd plists and `zsh -lc` (which sources
+# ~/.zshenv) keep working unchanged.
+ENDPOINTS_FILE="$CFG_DIR/endpoints.env"
+if [ -z "${BAO_ADDR:-}" ] && [ -r "$ENDPOINTS_FILE" ]; then
+  # shellcheck source=/dev/null
+  . "$ENDPOINTS_FILE"
+fi
+BAO_ADDR="${BAO_ADDR:-}"
+BAO_HOST="${BAO_ADDR#*://}"; BAO_HOST="${BAO_HOST%%[:/]*}"
 APPROLE_FILE="$CFG_DIR/bao-approle"
 HOST="$(hostname -s)"
 
@@ -61,6 +78,14 @@ tailnet_resolves() {
 }
 
 bao_login() {
+  # Loud, but NOT fatal: returning 1 drops through the existing
+  # bao → op → last-known-good chain, so a missing endpoints.env degrades the
+  # service instead of refusing to start it. The log line is what makes it
+  # diagnosable rather than a silent permanent fallback.
+  [ -n "$BAO_ADDR" ] || {
+    log "BAO_ADDR unset — set it in the environment or $ENDPOINTS_FILE; skipping bao"
+    return 1
+  }
   [ -r "$APPROLE_FILE" ] || { log "no AppRole creds at $APPROLE_FILE"; return 1; }
   tailnet_resolves || { log "tailnet DNS not resolving ($BAO_HOST) — skipping bao"; return 1; }
   local role_id secret_id

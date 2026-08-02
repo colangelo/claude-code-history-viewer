@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn preserves_path_case_and_port() {
         assert_eq!(
-            normalize_remote_url("https://Gitea.Host.TS.net:3000/AC/Repo.git").as_deref(),
+            normalize_remote_url("https://Gitea.Example:3000/AC/Repo.git").as_deref(),
             Some("gitea.example:3000/AC/Repo")
         );
     }

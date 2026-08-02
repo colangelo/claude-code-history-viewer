@@ -1,33 +1,111 @@
-# Issue tracker: GitHub
+---
+type: reference
+title: "Issue tracker: Gitea (ac/claude-code-history-viewer)"
+description: "Where issues live for this fork, why they are NOT on either GitHub remote, and this repo's deltas from the house-wide gitea-backlog conventions."
+tags: [agents, gitea, backlog, issues, fork]
+timestamp: 2026-08-02
+---
+# Issue tracker: Gitea
 
-Repo: **`jhlee0409/claude-code-history-viewer`**.
-Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues for this repo live in **Gitea Issues** at **`ac/claude-code-history-viewer`**
+(the `internal` remote).
 
-## Conventions
+**Not GitHub — and this is the trap this file previously fell into.** The repo has
+three remotes, two of them GitHub:
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue (human)**: `gh issue view <number> --comments` for plain-text reading.
-- **Read an issue (machine-parsable)**: `gh issue view <number> --json number,title,body,comments,labels --jq '{title, body, labels: [.labels[].name], comments: [.comments[].body]}'`.
-- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Comment on an issue**: `gh issue comment <number> --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+| remote | points at | role |
+|---|---|---|
+| `internal` | Gitea `ac/claude-code-history-viewer` | **the real backlog** |
+| `origin` | GitHub `colangelo/claude-code-history-viewer` | our **public** fork — a publishing surface, not a tracker |
+| `upstream` | GitHub `jhlee0409/claude-code-history-viewer` | **a third party's repo** |
 
-Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+Until 2026-08-02 this file declared the tracker to be `upstream`. Any skill reading
+it (`/triage`, `/to-tickets`, `/to-spec`) would have filed *our* backlog items as
+issues on **someone else's public repo**. The stock `gh` recipes made it worse: `gh`
+resolves against whichever GitHub remote it picks, so the target was not even
+deterministic between `origin` and `upstream`.
 
-## Branch policy for related PRs
+Upstream-facing work — changes we intend to send to `jhlee0409` — is tracked
+**here**, under `area/upstream`. Their issue list is theirs, not our backlog; we
+open a PR there when the work is ready.
 
-When a skill creates or proposes a PR linked to an issue, **the base branch MUST be `develop`, never `main`**. See `CLAUDE.md` → "Branch Strategy" — `main` is release-only and only receives merges from `develop` at release time. PRs targeted at `main` will fail review.
+> **`origin` is public.** Never write an internal hostname, a private IP, or a real
+> home path into a tracked file in this repo — it lands in a public tree and stays
+> in history. That is why this file names the Gitea *slug* but not the instance
+> host: the host lives in the skill below, which is internal-only. House rule:
+> CONTEXT `PATTERNS/paths-in-tracked-files.md`.
 
-## Comment language (repo convention)
+## The mechanics are house-wide — read them there, not here
 
-- **Default for `gh issue comment` / `gh pr comment` is English**, regardless of issue/PR body language. This keeps the public review record consistent across contributors.
-- **Exception for close-comments**: when explicitly closing an issue **as a courtesy to the reporter**, match the issue body's language (e.g. close a Chinese-body issue with a Chinese close-comment).
+Everything about *how* to drive this tracker is identical across the Gitea-backed
+repos and is documented once, canonically, in the **`gitea-backlog` skill**:
 
-## When a skill says "publish to the issue tracker"
+- `~/_sync/dev/CONTEXT/SKILLS/gitea-backlog/SKILL.md` — commands, auth, the
+  scoped-label model, derived views, the standing rules, the common mistakes
+- `~/_sync/dev/CONTEXT/SKILLS/gitea-backlog/general-schema.toml` — the cross-project
+  label vocabulary (`type/ status/ horizon/ needs/`, `reserved`)
 
-Create a GitHub issue.
+(Reachable as `~/.config/claude/skills/gitea-backlog/`, a symlink into CONTEXT.)
 
-## When a skill says "fetch the relevant ticket"
+Read that skill for the invocation, the flag-ordering trap (global flags go
+**before** the subcommand), the `--repo` default trap (it defaults to a different
+repo, so omitting it misfiles silently), `schema sync`, `doctor`, `roadmap`,
+`kanban`. **Don't re-inline it here** — duplicated copies across repos drift, which
+is the exact failure this repo already records for the Claude/Codex globals.
 
-Run `gh issue view <number> --comments`.
+Bound to this repo:
+
+```bash
+SK=~/.config/claude/skills/gitea-backlog/gitea_backlog.py
+GB="python3 $SK --repo ac/claude-code-history-viewer --project-dir ."
+```
+
+## This repo's deltas from the general schema
+
+Declared in [`backlog-schema.toml`](../../backlog-schema.toml) at the root:
+
+| | |
+|---|---|
+| `area/` values | `hub` · `daemon` · `providers` · `viewer` · `secondloop` · `upstream` · `ci` · `docs` · `meta` |
+| `priority/` | **disabled** — single-user repo, `horizon/` suffices |
+
+Everything else — `type/`, `status/`, `horizon/`, `needs/`, "never invent a label",
+"done = a closed issue" — comes from the general schema unchanged.
+
+Triage-role → label-string mapping: [`triage-labels.md`](./triage-labels.md).
+
+## Not the issue tracker: the agent relay
+
+Issues labelled **`agent-relay`** (plus `agent-working` / `agent-blocked` /
+`relay-interactive`) are the cross-repo message channel, not backlog. They are
+`reserved`, so they are excluded from every derived view. A backlog item is never
+`agent-relay`. This repo is a **`nats`-variant participant** with no committed relay
+surface — see `AGENTS.md` § Agent relay, and handle traffic with `/check-relay`.
+
+## Branch policy for PRs
+
+Two flows, and the previous version of this file stated only the second — as though
+it governed everything:
+
+- **Fork work (the default).** `main` is the integration *and* release line. Changes
+  land on `main` directly, or via short-lived `feature/*` worktree branches that
+  merge back into it. **There is no fork `develop` gate**, and a PR is not normally
+  involved at all.
+- **Contributing back to upstream.** Upstream uses `feature/* → develop → main`, so
+  an upstream PR branches from `upstream/develop` and targets it.
+
+So the old rule here — "the base branch MUST be `develop`, never `main`" — is true
+*only* for upstream-facing PRs and wrong for everything else. `AGENTS.md` §
+Branch Strategy is authoritative.
+
+## Comment language
+
+Applies to **upstream** PRs and to any issue opened on a public GitHub repo, where
+the audience is other contributors:
+
+- **Default is English**, regardless of the body's language, so the public review
+  record stays consistent.
+- **Exception for close-comments**: when closing an issue as a courtesy to its
+  reporter, match the issue body's language.
+
+Internal Gitea issues are single-user; write them in whatever is clearest.
