@@ -1,36 +1,47 @@
 # archive-analytics Specification
 
 ## Purpose
-TBD - created by archiving change hub-analytics. Update Purpose after archive.
+
+Archive-wide analytics served by the hub: aggregate statistics over every
+machine's ingested history, scoped globally, per project identity, or per
+session. Defines what the statistics endpoints return and the counting rules
+they must obey — chiefly that a provider message's usage is counted exactly
+once no matter how many rows store it.
+
 ## Requirements
+
 ### Requirement: Usage totals deduplicated per provider message
 
-Every token, cost, and message-count rollup SHALL count a provider message's
-`usage` block exactly once. A single assistant response recurs across multiple
-stored rows carrying the same `usage` values, so aggregates MUST deduplicate on
-`(session_id, message_id)` — falling back to `(session_id, uuid)` when
-`message_id` is absent, and counting the row unconditionally when both are
-absent — before summing. A plain `SUM` over `messages` is not a conforming
-implementation.
+Token and cost totals SHALL count each provider message once, even though one
+assistant response is stored across several rows sharing a provider message id
+and repeating an identical usage block. Deduplication SHALL identify a logical
+message by its provider message id where present, falling back to the record
+uuid and then the row id, and SHALL attribute usage to exactly one row of each
+logical message.
 
-This mirrors `dedup_token_totals` in the retired desktop implementation
-(`src-tauri/src/commands/stats.rs`), which is the verification oracle for this
-capability.
+Deduplication MUST NOT be applied to tool invocations: the rows sharing a usage
+block carry different content blocks, so their tool calls are distinct events.
 
-#### Scenario: Repeated usage block is counted once
+The usage-bearing row of a logical message SHALL be determined over the archive
+as a whole rather than recomputed per requested window. A logical message whose
+rows straddle a window boundary MAY therefore contribute its usage to neither
+side of that boundary; this is bounded and negligible, and is preferred to
+recomputing deduplication on every request.
 
-- **WHEN** a session contains multiple message rows sharing one `message_id` and an identical `usage` block
-- **THEN** the session's token totals include that block's tokens exactly once
+#### Scenario: Repeated usage blocks count once
 
-#### Scenario: Messages without a provider message id fall back to uuid
+- **WHEN** several stored rows share one provider message id and repeat its usage block
+- **THEN** the totals count that message's tokens exactly once
 
-- **WHEN** a session contains rows with no `message_id` but distinct `uuid` values
-- **THEN** each distinct `uuid` contributes its usage exactly once
+#### Scenario: Rows without a provider message id are not collapsed
 
-#### Scenario: Totals agree with the desktop oracle
+- **WHEN** stored rows carry distinct record uuids and no provider message id
+- **THEN** each contributes its own usage
 
-- **WHEN** global, project, and session statistics are computed over a corpus that the desktop implementation has also analyzed
-- **THEN** the token totals, message counts, and cost totals from the hub match the desktop results for the same scope and date window
+#### Scenario: Tool counts are not deduplicated
+
+- **WHEN** rows sharing a provider message id each carry distinct tool invocations
+- **THEN** every invocation is counted
 
 ### Requirement: Global statistics endpoint
 
@@ -39,6 +50,11 @@ statistics as a `GlobalStatsSummary`: totals across projects, sessions, and
 messages; token and cost totals; per-model and per-provider breakdowns; and
 daily activity. The endpoint MUST accept optional inclusive `from` and `to`
 date-window parameters, and MUST require a valid read token.
+
+Responses SHALL be computed from the derived statistics mirror. The endpoint
+SHALL be interactive: an unwindowed archive-wide request MUST complete in
+well under a second on a mirror of the current archive's scale, rather than
+scaling with the number of stored messages on every call.
 
 #### Scenario: Authenticated request returns archive-wide totals
 
@@ -50,6 +66,11 @@ date-window parameters, and MUST require a valid read token.
 - **WHEN** an authenticated client GETs `/v1/stats/global` with `from` and `to`
 - **THEN** only messages whose timestamp falls inside the inclusive window contribute to the response
 
+#### Scenario: The default view is interactive
+
+- **WHEN** an authenticated client requests the archive-wide statistics the webapp loads by default
+- **THEN** the response completes in well under a second
+
 #### Scenario: Unauthenticated request is rejected
 
 - **WHEN** a client GETs `/v1/stats/global` without a valid read token
@@ -59,10 +80,11 @@ date-window parameters, and MUST require a valid read token.
 
 The hub SHALL expose `GET /v1/stats/projects/{identity_key}` returning a
 `ProjectStatsSummary` for one project identity: session and message counts,
-token totals, average and total session duration, most active hour, and most
-used tools. Statistics MUST be folded across every path and machine belonging to
-that identity, so a repository that was moved, cloned, or checked out as a
-worktree reports as one project.
+token totals, average and total session duration, most active hour, most used
+tools, and a per-model usage distribution (`model_distribution`) with the same
+shape and dedup semantics as the global endpoint's. Statistics MUST be folded
+across every path and machine belonging to that identity, so a repository that
+was moved, cloned, or checked out as a worktree reports as one project.
 
 #### Scenario: Statistics fold across machines and paths
 
@@ -74,6 +96,11 @@ worktree reports as one project.
 - **WHEN** an authenticated client requests statistics for an identity key that does not exist
 - **THEN** the hub responds `404`
 
+#### Scenario: Per-model distribution at project scope
+
+- **WHEN** an authenticated client requests statistics for a known identity whose messages carry model names
+- **THEN** the response includes `model_distribution` entries with per-model message and token counts (input, output, cache-creation, cache-read) covering only that identity's messages, within any requested date window
+
 ### Requirement: Per-session statistics endpoint
 
 The hub SHALL expose `GET /v1/stats/sessions/{id}` returning a
@@ -81,14 +108,25 @@ The hub SHALL expose `GET /v1/stats/sessions/{id}` returning a
 tokens, total tokens, message count, first and last message time, the session
 summary when present, and its most used tools.
 
+The `{id}` segment SHALL accept either the session's archive row id or its
+provider session UUID, resolved by the same rule as
+`GET /v1/sessions/{id}/messages`. A caller MUST NOT have to know which of the two
+identifiers a given route expects: a UUID that identifies no session SHALL be
+reported as not found rather than as a malformed request.
+
 #### Scenario: Session statistics are returned for a known session
 
 - **WHEN** an authenticated client requests statistics for an existing session id
 - **THEN** the hub responds `200` with that session's token counts, message count, and time bounds
 
+#### Scenario: A session UUID resolves the same as a row id
+
+- **WHEN** an authenticated client requests statistics using a session's UUID
+- **THEN** the hub responds `200` with the same statistics as the equivalent row-id request
+
 #### Scenario: Unknown session returns not found
 
-- **WHEN** an authenticated client requests statistics for a session id that does not exist
+- **WHEN** an authenticated client requests statistics for a session id that does not exist, in either accepted form
 - **THEN** the hub responds `404`
 
 ### Requirement: Tool and skill usage statistics
@@ -142,4 +180,49 @@ computed in a caller-supplied timezone so local working hours are meaningful.
 
 - **WHEN** activity statistics are requested with a timezone
 - **THEN** each message contributes to the hour-of-day and day-of-week bucket corresponding to its timestamp in that timezone
+
+### Requirement: Cost is a first-class analytics metric
+
+The Analytics view SHALL present estimated cost as the first headline metric at
+both the whole-archive and single-project scopes, derived by pricing the
+scope's `model_distribution` with the client-side pricing table, and SHALL
+display the pricing-coverage percentage alongside it. Where a figure's grain
+has no per-model split (top projects, provider distribution, daily trend), the
+view MUST NOT display an invented cost for it.
+
+#### Scenario: Project scope shows cost
+
+- **WHEN** a user selects a single project identity in the Analytics scope control
+- **THEN** an estimated cost figure for that project is displayed, priced from the project's `model_distribution`
+
+#### Scenario: Unpriceable grains carry no cost
+
+- **WHEN** the view renders rows whose source data has no per-model split
+- **THEN** those rows show token totals without a cost figure
+
+### Requirement: Analytics range control offers presets and custom windows
+
+The Analytics view SHALL offer relative date-window presets of 7, 14, 30, 60,
+90, 180, and 365 days plus all time, and SHALL accept a custom "last N days"
+positive integer. The selected window MUST apply to both scopes.
+
+#### Scenario: Preset selection narrows the window
+
+- **WHEN** a user picks the 7-day preset
+- **THEN** the statistics request covers the last 7 days
+
+#### Scenario: Custom day count
+
+- **WHEN** a user enters 45 as a custom day count
+- **THEN** the statistics request covers the last 45 days
+
+### Requirement: Activity heatmap precedes tool usage
+
+In both the whole-archive and single-project analytics layouts, the activity
+heatmap SHALL appear in the first chart row, before tool-usage charts.
+
+#### Scenario: Heatmap in the first chart row
+
+- **WHEN** the Analytics view renders either scope with activity data present
+- **THEN** the activity heatmap is in the first row of chart sections and the most-used-tools chart appears after it
 

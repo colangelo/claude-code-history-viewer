@@ -42,4 +42,4 @@
 ## 7. Eyeball + close-out
 
 - [x] 7.1 Real-window screenshots done (headed Chromium + `screencapture`), light+dark: cost card first + heatmap row 1 (live hub); project n/a state (live) + injected-cost layout; custom 45-day range verified against live data; journal-hit landing clean. Project-scope REAL cost figures remain deploy-gated (2.4 live-shape check)
-- [ ] 7.2 Update `openspec/specs/` from the deltas on archive (sync happens at archive time)
+- [x] 7.2 Update `openspec/specs/` from the deltas on archive (sync happens at archive time) — synced 2026-08-02: `archive-analytics` gained `model_distribution` on the per-project endpoint plus the three UX requirements (cost-first metric, range presets, heatmap ordering); `static-archive-webapp` gained the three search-overlay requirements
