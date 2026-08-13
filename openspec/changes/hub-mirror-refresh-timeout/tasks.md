@@ -33,6 +33,6 @@
       no database; the neighbours need `TEST_DATABASE_URL`)
 - [x] 3.2 `cargo clippy --all-targets --all-features -- -D warnings` and
       `cargo fmt --all -- --check`
-- [ ] 3.3 Reply to infra (ac/infra#93) with the root cause, the fix, and the
+- [x] 3.3 Reply to infra (ac/infra#93) with the root cause, the fix, and the
       immediate mitigation (a hub restart clears the wedge; the durable fix
       ships in the next `cchv-v*` hub binary)
