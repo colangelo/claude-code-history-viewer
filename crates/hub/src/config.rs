@@ -62,6 +62,22 @@ pub struct MirrorConfig {
     /// Age past which `/v1/healthz/stats` reports the mirror stale.
     #[serde(default = "default_stale_after_secs")]
     pub stale_after_secs: u64,
+    /// Wall-clock ceiling on one *incremental* refresh attempt.
+    ///
+    /// Exists because "the refresh failed" and "the refresh never returned" are
+    /// different faults and only the first one degrades gracefully. A Postgres
+    /// socket that dies without an `RST` — a tailnet path flap relaying the
+    /// peer via DERP is enough — leaves the client blocked in `read()` with no
+    /// error to report, forever: `acquire_timeout` does not apply once the
+    /// connection is out of the pool, and no statement timeout is set.
+    #[serde(default = "default_refresh_timeout_secs")]
+    pub refresh_timeout_secs: u64,
+    /// The same ceiling for a *cold build*, which legitimately takes minutes
+    /// (the whole archive, not an increment) and must not be cancelled by the
+    /// incremental budget — a cold build killed on every tick would never
+    /// finish and `/v1/stats/*` would answer 503 permanently.
+    #[serde(default = "default_cold_build_timeout_secs")]
+    pub cold_build_timeout_secs: u64,
 }
 
 impl Default for MirrorConfig {
@@ -73,6 +89,8 @@ impl Default for MirrorConfig {
             memory_limit: default_memory_limit(),
             threads: default_threads(),
             stale_after_secs: default_stale_after_secs(),
+            refresh_timeout_secs: default_refresh_timeout_secs(),
+            cold_build_timeout_secs: default_cold_build_timeout_secs(),
         }
     }
 }
@@ -97,6 +115,21 @@ fn default_threads() -> u32 {
 
 fn default_stale_after_secs() -> u64 {
     3_600
+}
+
+/// Two orders of magnitude above a healthy incremental refresh (seconds), and
+/// still inside [`default_stale_after_secs`] so a wedged tick is cancelled and
+/// retried *before* the mirror is old enough to page anyone. Sized to survive a
+/// large legitimate catch-up over a DERP-relayed link, not to be a tight bound.
+fn default_refresh_timeout_secs() -> u64 {
+    900
+}
+
+/// A cold build of the real archive is millions of rows; the ceiling is a
+/// backstop against a wedge, not a performance budget, so it is deliberately
+/// far above the observed build time.
+fn default_cold_build_timeout_secs() -> u64 {
+    21_600
 }
 
 impl MirrorConfig {

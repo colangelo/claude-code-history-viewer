@@ -87,13 +87,18 @@ pub enum RefreshOutcome {
     /// Another refresh held the mirror. Ticks are **skipped, not queued**: a
     /// refresh that overruns its interval must not build a backlog of them.
     Skipped,
+    /// The refresh exceeded its wall-clock budget and was cancelled. Distinct
+    /// from an `Err`: nothing failed and nothing was reported — the attempt
+    /// simply never came back, which is the one shape that used to wedge the
+    /// refresher permanently. See [`Mirror::refresh_bounded`].
+    TimedOut,
 }
 
 impl RefreshOutcome {
     pub fn report(&self) -> Option<&RefreshReport> {
         match self {
             Self::Ran(r) => Some(r),
-            Self::Skipped => None,
+            Self::Skipped | Self::TimedOut => None,
         }
     }
 }
@@ -278,6 +283,37 @@ impl Mirror {
             return Ok(RefreshOutcome::Skipped);
         };
         Ok(RefreshOutcome::Ran(self.refresh_inner(pg).await?))
+    }
+
+    /// [`Mirror::refresh`] under a wall-clock ceiling, returning
+    /// [`RefreshOutcome::TimedOut`] instead of hanging.
+    ///
+    /// **The refresh path has no other time bound.** `acquire_timeout` bounds
+    /// only *getting* a pooled connection, and no statement timeout is set, so
+    /// once a query is in flight a Postgres socket that stops delivering
+    /// without closing leaves the future blocked in `read()` with no error to
+    /// surface — the failure mode that has no `Err` and therefore never reaches
+    /// the degrade path. Observed in production 2026-08-13: a tailnet path flap
+    /// left one connection `ESTABLISHED` on the client with no matching backend
+    /// on the server, the refresher blocked mid-refresh, and because the loop
+    /// only sleeps *after* a refresh returns it never ticked again. Statistics
+    /// kept being served — `ready`, so no 503 — from a mirror frozen 6.4 h
+    /// earlier and 417k rows behind, recoverable only by restarting the hub.
+    ///
+    /// Cancelling by dropping the future is what makes this safe to retry: the
+    /// single-flight latch is an [`InFlight`] guard, so it is released on drop
+    /// exactly as it is on an early `?`, and the abandoned connection is not
+    /// returned to the pool. Without that the timeout would free the loop but
+    /// leave every later tick answering [`RefreshOutcome::Skipped`] forever.
+    pub async fn refresh_bounded(
+        &self,
+        pg: &PgPool,
+        budget: std::time::Duration,
+    ) -> anyhow::Result<RefreshOutcome> {
+        match tokio::time::timeout(budget, self.refresh(pg)).await {
+            Ok(result) => result,
+            Err(_elapsed) => Ok(RefreshOutcome::TimedOut),
+        }
     }
 
     /// Claim the single-flight latch, or `None` if someone else holds it.
@@ -648,6 +684,10 @@ fn file_identity(path: &Path) -> Option<u64> {
 /// refresh can never restart the process. The log line says so explicitly,
 /// because "hub can't reach Postgres" is the shape operators reflexively read
 /// as a credential problem.
+///
+/// Every attempt is bounded ([`Mirror::refresh_bounded`]) because the loop
+/// sleeps only *after* a refresh returns: one attempt that never returns is
+/// not a slow tick, it is the last tick this process will ever run.
 pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::time::Duration) {
     loop {
         // Before anything else: a `hub mirror rebuild` may have swapped the
@@ -655,8 +695,26 @@ pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::tim
         if let Err(e) = mirror.adopt_replacement() {
             tracing::error!(error = %e, "stats mirror: could not adopt the rebuilt file");
         }
-        match mirror.refresh(&pool).await {
+        // A cold build pulls the whole archive and takes minutes, so it gets
+        // its own far larger ceiling; charging it the incremental budget would
+        // cancel it on every tick and it would never finish.
+        let budget = if mirror.is_empty() {
+            std::time::Duration::from_secs(mirror.cfg.cold_build_timeout_secs)
+        } else {
+            std::time::Duration::from_secs(mirror.cfg.refresh_timeout_secs)
+        };
+        match mirror.refresh_bounded(&pool, budget).await {
             Ok(RefreshOutcome::Ran(_) | RefreshOutcome::Skipped) => {}
+            Ok(RefreshOutcome::TimedOut) => {
+                tracing::warn!(
+                    budget_secs = budget.as_secs(),
+                    "stats mirror: refresh exceeded its time budget and was cancelled — \
+                     keeping the existing mirror and retrying on the next tick. A refresh \
+                     that stops returning (rather than failing) is usually a Postgres \
+                     connection that died without closing; the cancellation is what stops \
+                     it wedging the refresher until the process restarts."
+                );
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,

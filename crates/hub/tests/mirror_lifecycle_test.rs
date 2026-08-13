@@ -165,6 +165,98 @@ async fn repeated_refresh_failures_leave_the_mirror_serving() {
     assert_eq!(usage_tokens(&mirror, session), 100);
 }
 
+/// A socket that accepts and then never speaks: TCP connects, so nothing
+/// fails, but no byte of the Postgres handshake ever arrives. This is the
+/// production shape (a connection `ESTABLISHED` on the client with no live
+/// backend behind it) reduced to something deterministic and local — the
+/// distinction that matters is *silence*, not refusal, and a refused
+/// connection would exercise the already-covered `Err` path instead.
+async fn blackhole_pool() -> PgPool {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind blackhole");
+    let addr = listener.local_addr().expect("blackhole addr");
+    tokio::spawn(async move {
+        let mut accepted = Vec::new();
+        while let Ok((sock, _)) = listener.accept().await {
+            accepted.push(sock); // held open, never written to, never closed
+        }
+    });
+    PgPoolOptions::new()
+        .max_connections(1)
+        // Far above the test's refresh budget: the point is to prove the
+        // *refresh* ceiling fires, not sqlx's acquire ceiling.
+        .acquire_timeout(Duration::from_secs(60))
+        .connect_lazy(&format!("postgres://nobody@{addr}/nothing"))
+        .expect("lazy pool")
+}
+
+/// A refresh that stops returning must be cancelled and must free the
+/// single-flight latch — otherwise the *next* tick is skipped forever.
+///
+/// This is the regression test for the 2026-08-13 production wedge (infra
+/// ac/infra#93). Both halves are load-bearing and the second is the one that
+/// bites: a timeout that unblocked the loop but leaked the latch would leave
+/// every later tick returning `Skipped`, which looks healthy in the logs and
+/// leaves the mirror just as frozen. Needs no Postgres.
+#[tokio::test]
+async fn a_refresh_that_hangs_is_cancelled_and_does_not_wedge_later_ticks() {
+    let dark = blackhole_pool().await;
+    // The mirror is empty here, so `run_refresher` below charges this attempt
+    // the *cold build* ceiling — left at its 6 h default the loop would park on
+    // the first hang and the last assertion would pass for the wrong reason.
+    let mirror = Arc::new(
+        Mirror::open_or_create(&MirrorConfig {
+            refresh_timeout_secs: 1,
+            cold_build_timeout_secs: 1,
+            ..cfg("hang")
+        })
+        .expect("open"),
+    );
+
+    let budget = Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let first = mirror
+        .refresh_bounded(&dark, budget)
+        .await
+        .expect("a cancelled refresh is not an error");
+    assert!(
+        matches!(first, RefreshOutcome::TimedOut),
+        "a refresh against a silent socket must time out, got {first:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "refresh_bounded returned only after sqlx's own timeout — the budget did not fire"
+    );
+
+    // The latch must have been released by the cancellation. If it leaked,
+    // this second attempt returns `Skipped` and the refresher is wedged for
+    // the life of the process.
+    let second = mirror
+        .refresh_bounded(&dark, budget)
+        .await
+        .expect("second attempt is not an error");
+    assert!(
+        matches!(second, RefreshOutcome::TimedOut),
+        "the single-flight latch leaked on timeout — later ticks are wedged, got {second:?}"
+    );
+
+    // And the loop itself survives a hang rather than parking on it: with the
+    // 1 s ceiling configured above, this window covers more than one full
+    // cancel-and-retry cycle.
+    let refresher = tokio::spawn(mirror::run_refresher(
+        mirror.clone(),
+        dark.clone(),
+        Duration::from_millis(50),
+    ));
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert!(
+        !refresher.is_finished(),
+        "the refresher exited on a hung refresh — it must never take the process with it"
+    );
+    refresher.abort();
+}
+
 /// Task 2.5. A tick arriving while a refresh is in flight is dropped, not
 /// queued: queued ticks would only re-read rows the running one is already
 /// collecting, and on a cold build they would stack several deep.
