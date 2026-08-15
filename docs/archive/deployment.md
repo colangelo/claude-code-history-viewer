@@ -1889,6 +1889,21 @@ equivalently.
 - **Failure semantics**: schema-invalid LLM output is rejected locally and the
   group stays pending (retried next run); the hub validates independently.
   Exit code 1 when any group failed — visible in `/tmp/cchv-distiller.err`.
+- **`aiproxy 503: auth_unavailable` is NOT a cchv fault — relay it, don't debug
+  it here.** When the proxy loses its upstream OAuth *refresh* token, every tick
+  logs `0 ok, N failed` with that 503 and `cchv-journal` goes red. Nothing on our
+  side fixes it (a refresh token can only be renewed by a human login), so
+  restarting the distiller or the hub just burns ticks. Escalate to infra as an
+  **aiproxy** fault the first time you see it, then
+  `launchctl kickstart gui/$UID/dev.cchv.distiller` once they confirm the
+  re-auth — the catch-up drain is idempotent but slow (19 groups ≈ 33 min).
+  Two occurrences so far, running 9 and 11 days each, because the fault is
+  silent upstream: their liveness probe asserts the model list, which stays
+  **200 with a full catalogue while every completion 503s**. Verify a fix with
+  the exact request shape (model + `reasoning_effort`), never a model-list call.
+  Corollary worth remembering when triaging: **the alarm rings in our repo for
+  someone else's fault**, which is how a distiller outage once got filed as a
+  hub-release regression.
 - **Monitoring** (`distiller-self-healing`): `GET /v1/healthz/journal`
   (unauthenticated, Gatus-shaped like `/v1/healthz/ingest`) is **503** when a
   closed logical day *within the forward horizon* still has pending groups whose
