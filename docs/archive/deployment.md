@@ -774,7 +774,16 @@ backfill, no `hub.toml` change (no `[mirror]` section, both new knobs
   `22:20:38.232009Z` (+306.3 s), every sample 200/`ok`/`ready:true`, `lag_rows`
   cycling 0 → ~13 k → 0. Asking for two was the right call: one advance is what the
   *broken* binary also produces after a restart, so a single-advance check would
-  have been green on the bug it was written to detect.
+  have been green on the bug it was written to detect. **Infra extended the test
+  rather than restating it, and the extension is the more interesting half**: the
+  count was never the weak part, the *window* was — three advances is ~15 min,
+  only ~3× the interval, against a bug whose signature is "works once, then never
+  again". They sampled independently at the **9th** refresh,
+  `22:51:12.017336Z` → `22:56:17.792890Z` (+305.8 s), **46 min after the restart**,
+  with `lag_rows` cycling 0 → 22 k → 2.8 k → 14 k under live ingest — draining a
+  moving target, not idling on a quiet mirror. Generalize it: for a
+  works-once-then-wedges class, state the acceptance test as an *elapsed window*
+  (≥30 min, ≥N intervals) with a non-idle workload, not as a sample count.
 - **No 503 window** — third live confirmation of mirror persistence: `ready:true` at
   the first probe 8 s after restart, `lag_rows` 0, never `warming`.
 - 📏 **Size correction: compare assets to assets.** The relay read 0.18.1 as
