@@ -395,7 +395,7 @@ Working sequence (validated on m4m 2026-07-13, thread 7938448b):
 
 ```bash
 STAGED=~/.config/cchv/staging/cchv-hub-<sha>          # the new binary
-LIVE=/usr/local/bin/cchv-hub                          # whatever the plist ExecStart points at
+LIVE="$HOME/.local/bin/cchv-hub"                      # m4m's REAL target — see the note below
 STAMP=$(date +%Y%m%d-%H%M)
 
 # 1. Back up the currently-live binary (to staging, timestamped).
@@ -427,11 +427,36 @@ codesign --force --sign - "$LIVE"
 # 6. Eyeball the mode before restarting — must read -rwxr-xr-x.
 ls -l "$LIVE"
 
+# 6b. Probe the LIVE path by CONTENT, before restarting. This is what catches a
+#     swap that wrote to the wrong path (the $LIVE note below): a wrong-path swap
+#     passes steps 1-6 intact, because cp CREATES the file it was aimed at.
+#     By content, never by hash — step 5's ad-hoc re-sign guarantees the installed
+#     file cannot hash to the published asset.
+strings -a "$LIVE" | grep -c '<the rev marker from the handoff>'   # expect 1, was 0
+
 # 7. bootout + bootstrap — NOT `kickstart -k` (which can wedge in
 #    "spawn scheduled"). If a prior kickstart hung, kill it first.
 launchctl bootout  gui/$(id -u)/dev.cchv.hub 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.hub.plist
 ```
+
+**`LIVE` corrected 2026-08-16 (v0.18.1 swap, thread `8c5d5eb0`): it was
+`/usr/local/bin/cchv-hub`, a path that has never existed on m4m.** The inline
+comment ("whatever the plist ExecStart points at") was carrying the whole truth
+while the code carried a wrong concrete value — and a concrete value is what gets
+copy-pasted. Resolve it from the plist rather than from memory; on m4m the chain is
+`dev.cchv.hub` → `~/.local/bin/cchv-launch hub` → `exec "$HOME/.local/bin/cchv-hub"`
+(`scripts/cchv-launch.sh` line 229), so `$HOME/.local/bin/cchv-hub` is the target,
+and it is what every swap since v0.16.0 has actually written to (the `chmod` and
+exec-bit findings recorded above were all measured there).
+
+The failure this invites is quiet, not loud: `cp`ing to `/usr/local/bin/cchv-hub`
+**creates** that file, so every step of the recipe succeeds, `ls -l` shows
+`-rwxr-xr-x`, `codesign` reports success — and the running hub is untouched. Every
+check that looks at the *staged* copy passes; only a probe of the **live** path or
+the **running process** can tell you nothing happened. That is the same shape as
+this section's marker-trap family: a check that looks strict while answering a
+different question. Probe `$LIVE` itself after step 5, as the recipe now does.
 
 Step 4 was missing until the `v0.16.0` swap (2026-07-26, thread `1b97e64b`),
 where infra caught the live binary sitting `-rw-r--r--` *before* the restart
@@ -707,6 +732,41 @@ readings are ~0.3 s). Operational notes:
 - Binary only — this entry is 1 of 2. The webapp swap (§2c) follows as its own
   relay, closing the chip-vs-API divergence (chip v0.16.0 against a v0.17.0
   API) that the every-release-ships-the-webapp rule exists to prevent.
+
+**2026-08-16, hub `v0.18.0` → `v0.18.1` (thread `8c5d5eb0`, infra): the stats-mirror
+wedge fix lands, and the recipe's `LIVE` path turns out to have been wrong all
+along.** Swapped 00:10 local / 2026-08-15 22:10Z, pid 76237 → 73617, `runs = 1`,
+bootstrap first try; preswap backup `staging/cchv-hub-preswap-20260816-0010` (= the
+0.18.0 rollback point, 57,334,448 B). Asset
+`cchv-hub-0.18.1-aarch64-apple-darwin`, sha256 `ff04d0d6…81abf9` (57,646,400 B),
+agreed **four** ways before the copy — relay, `.sha256` sidecar, GitHub API digest,
+local re-hash — and the installed file was not re-hashed, per the v0.15.0 lesson.
+Binary + webapp both in **one** message and one handler run. No migration, no
+backfill, no `hub.toml` change (no `[mirror]` section, both new knobs
+`#[serde(default)]`). Notes:
+
+- **The `LIVE` path bug** — see the correction under the recipe above. Found by cchv
+  in the release relay, confirmed on-box by infra, fixed here. Its interest is the
+  failure shape: a wrong-path swap passes every step and every staged-copy check
+  while the running hub keeps the old binary. Recipe step 6b (probe `$LIVE` by
+  content) now closes it.
+- **Rev probe on three files, not two**: `refresh exceeded its time budget` counted
+  0 on the live 0.18.0 binary, 1 on the staged asset, and 1 **at `$LIVE` after the
+  copy**. That third reading is the one the path bug would have caught.
+- **The acceptance test was `refreshed_at` advancing across TWO consecutive 300 s
+  intervals**, and it passed: `22:10:25.319526Z` → `22:15:31.888793Z` (+306.6 s) →
+  `22:20:38.232009Z` (+306.3 s), every sample 200/`ok`/`ready:true`, `lag_rows`
+  cycling 0 → ~13 k → 0. Asking for two was the right call: one advance is what the
+  *broken* binary also produces after a restart, so a single-advance check would
+  have been green on the bug it was written to detect.
+- **No 503 window** — third live confirmation of mirror persistence: `ready:true` at
+  the first probe 8 s after restart, `lag_rows` 0, never `warming`.
+- 📏 **Size correction: compare assets to assets.** The relay read 0.18.1 as
+  +311,952 B and concluded the strip-debug-info change had not shrunk anything —
+  but that compared the published asset against the *installed, ad-hoc re-signed*
+  0.18.0 file, the same cross-class comparison this section already forbids for
+  hashes. Asset-to-asset, 0.18.1 is **5,088 B smaller** than 0.18.0; the same
+  0.18.1 asset lands at 57,329,392 B once re-signed at `$LIVE`.
 
 ## 2c. House deployment: swapping the m4m webapp (static-only)
 
