@@ -1900,10 +1900,22 @@ equivalently.
   Two occurrences so far, running 9 and 11 days each, because the fault is
   silent upstream: their liveness probe asserts the model list, which stays
   **200 with a full catalogue while every completion 503s**. Verify a fix with
-  the exact request shape (model + `reasoning_effort`), never a model-list call.
+  the exact request shape (model + `reasoning_effort`), never a model-list call
+  — that is how the 2026-08-15 re-auth was actually proven, one completion per
+  backend (infra, 22:49Z), rather than by auth-file timestamps.
   Corollary worth remembering when triaging: **the alarm rings in our repo for
   someone else's fault**, which is how a distiller outage once got filed as a
   hub-release regression.
+- **A repeat after a confirmed re-auth is a different, worse fault — escalate on
+  the first failing tick.** A human login primes the proxy's `last_refresh`
+  exactly the way a successful automatic refresh does, so a fresh re-auth proves
+  the *credential*, never the refresh **loop**; only a value that advances past
+  the ~8 h access-token lifetime does that. The 2026-08-15 re-auth is therefore
+  provisional: `auth_unavailable` reappearing after **2026-08-16 05:00Z** means
+  the loop is dead a second time, still not a cchv bug, and relaying it at tick
+  one is the whole point — the two occurrences so far ran 9 and 11 days each.
+  Note also that the distiller only ever calls the Codex model, so a drained
+  backlog proves *that* backend alone; nothing we run consumes the Claude one.
 - **Monitoring** (`distiller-self-healing`): `GET /v1/healthz/journal`
   (unauthenticated, Gatus-shaped like `/v1/healthz/ingest`) is **503** when a
   closed logical day *within the forward horizon* still has pending groups whose
