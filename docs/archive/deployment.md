@@ -468,6 +468,22 @@ away from a failed bootstrap. The local-build fallback path masks the gap
 Verify: `curl -s https://hub.internal:8788/v1/healthz` → `{"status":"ok",…}`
 and the process is running clean (fresh pid, no respawn churn).
 
+**Take the second vantage point from Gatus, not from another Mac** (infra,
+2026-08-15). Nearly every reading in the swap log below was taken **on m4m** — by
+the deploying handler, and by us too, because a cchv session usually runs on m4m
+as well. Both sides have been dutifully caveating that as same-host and then
+waiting for an attended Mac to confirm; neither of us needed to. The monitoring
+VM (`mon`) is a third tailnet machine and already polls all four `cchv-*` checks
+(`cchv-hub` 60 s; `cchv-ingest` / `cchv-journal` / `cchv-stats` 300 s), exposing
+every endpoint's recent samples — success, status, timestamp — as JSON at
+`GET /api/v1/endpoints/statuses`. No auth beyond tailnet reach, and crucially
+**no ssh to another Mac**, which is the hop that trips a 1Password biometric
+prompt and stops an unattended run. Cite a green Gatus streak spanning the swap
+window *alongside* the deploying machine's own probes: that is two vantage
+points, which is the bar a swap should meet. (The base URL is a tailnet name, so
+it stays out of this file — `origin` here is public; it is in infra
+`hosts/configs/proxmox1/mon.md`.)
+
 **2026-07-24, hub `v0.13.0` → `v0.13.1` swap (thread `497cf57c`): a new
 response header can be the swap-proof probe.** The release added
 `Cache-Control: no-store` to every `/v1/*` response (hub `28be09ca`), and
