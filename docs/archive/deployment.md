@@ -1941,6 +1941,22 @@ equivalently.
   one is the whole point — the two occurrences so far ran 9 and 11 days each.
   Note also that the distiller only ever calls the Codex model, so a drained
   backlog proves *that* backend alone; nothing we run consumes the Claude one.
+- **A fix for the upstream blind spot is scoped but not built — expect two checks,
+  not one** (ac/infra#94 Ask 2, open, blocked only on ac's interval/cost call;
+  #93 closed 2026-08-15 with the journal half marked a duplicate of it). Our
+  framing needed a correction worth carrying: we argued a credential-*freshness*
+  assertion was too weak, and for these two outages it was not — Claude's
+  `last_refresh` sat 11 days stale and Codex's 5, against an ~8 h token lifetime,
+  so a ">10 h stale" alarm fires on either on day one. Freshness reads a
+  credential, which is exactly the property a `/v1/models` liveness probe lacks.
+  What our objection *does* catch is a different failure: a refresh loop that
+  keeps succeeding and keeps stamping `last_refresh` while completions fail
+  (entitlement revoked, plan downgraded, model id deauthorized) — and #94 shows
+  that case is reachable, since Codex's final token was minted `iat=11:36:48Z,
+  exp=11:36:57Z`, a **9-second** lifetime from a refresh that returned rather than
+  errored. So: freshness as the always-on alarm, a per-provider-class **completion**
+  for demotion. Until the completion half exists, `cchv-journal` remains the only
+  thing in the fleet that exercises a real completion — on the Codex backend only.
 - **Monitoring** (`distiller-self-healing`): `GET /v1/healthz/journal`
   (unauthenticated, Gatus-shaped like `/v1/healthz/ingest`) is **503** when a
   closed logical day *within the forward horizon* still has pending groups whose
