@@ -1935,12 +1935,36 @@ equivalently.
   the first failing tick.** A human login primes the proxy's `last_refresh`
   exactly the way a successful automatic refresh does, so a fresh re-auth proves
   the *credential*, never the refresh **loop**; only a value that advances past
-  the ~8 h access-token lifetime does that. The 2026-08-15 re-auth is therefore
-  provisional: `auth_unavailable` reappearing after **2026-08-16 05:00Z** means
-  the loop is dead a second time, still not a cchv bug, and relaying it at tick
-  one is the whole point — the two occurrences so far ran 9 and 11 days each.
-  Note also that the distiller only ever calls the Codex model, so a drained
-  backlog proves *that* backend alone; nothing we run consumes the Claude one.
+  the access token's own expiry does that. **Whose expiry is the trap: token
+  lifetime is a property of the backend, not of aiproxy.** Measured by infra on
+  VM 100 (2026-08-15 ~23:2xZ) from the tokens the 20:1x re-auth minted, each
+  confirmed twice — the auth file's `expired` field and the `access_token` JWT's
+  own `exp`, agreeing exactly (the 1 h `id_token` is the easy misread):
+  **Claude** `last_refresh` 20:16:56Z → expires **2026-08-16T04:16:56Z (8 h)**;
+  **Codex** `last_refresh` 20:20:10Z → expires **2026-08-25T20:20:10Z (240 h)**.
+  The distiller only ever calls the Codex model, so a drained backlog proves
+  *that* backend alone; nothing we run consumes the Claude one — which means the
+  only refresh loop we can observe is Codex's, on a ten-day clock. So the date
+  that matters is **~2026-08-25T20:20Z**, not the 05:00Z this bullet armed until
+  2026-08-15 (that was Claude's 8 h expiry plus slack, i.e. a trigger calibrated
+  to a backend the trigger cannot see). Until then no Codex refresh is *due*:
+  silence proves the existing access token is still good, which we already knew,
+  and an `auth_unavailable` before that date is a **revocation-class** event
+  (revocation, entitlement change, the demotion case below) — relay it
+  immediately all the same, but **do not call it a dead refresh loop**, because
+  that diagnosis sends infra to the wrong evidence. After ~08-25, continued green
+  *is* evidence the Codex loop works. Unchanged and still the point: relay at
+  tick one, do not accumulate ticks, do not restart anything of ours — the two
+  occurrences so far ran 9 and 11 days each. Symmetrically, infra's 2026-08-16
+  05:00Z re-read tests the **Claude** loop only; finding Codex still stamped
+  20:20:10Z at that hour is the expected reading, not a second death.
+- **Pointing the distiller at the Claude backend was considered and declined**
+  (infra offered a `CCHV_DISTILL_MODEL` flip 2026-08-15 to close the Claude
+  coverage gap above; declined the same day, recorded infra-side in `aiproxy.md`
+  75fc790 + ac/infra#94). It moves the outage rather than adding a detector:
+  journal distillation survives a Claude death today, and after the flip it would
+  not — we would be buying Claude coverage by handing our fault to another repo.
+  Coverage is #94 Ask 2's job, not the distiller's.
 - **A fix for the upstream blind spot is scoped but not built — expect two checks,
   not one** (ac/infra#94 Ask 2, open, blocked only on ac's interval/cost call;
   #93 closed 2026-08-15 with the journal half marked a duplicate of it). Our
@@ -1949,14 +1973,34 @@ equivalently.
   `last_refresh` sat 11 days stale and Codex's 5, against an ~8 h token lifetime,
   so a ">10 h stale" alarm fires on either on day one. Freshness reads a
   credential, which is exactly the property a `/v1/models` liveness probe lacks.
+  **But the ">10 h" constant was itself a proxy for the property, and it is now
+  dropped** (infra re-read the auth files after the note above and measured the
+  lifetimes; see the previous bullet). 10 h is Claude's 8 h plus slack; against a
+  *healthy* Codex credential — 240 h, untouched for ten days by design — that
+  alarm goes red ~10 h after every login and stays red until the next one. We
+  would have shipped it and then muted it. #94 Ask 2 now asserts **each file's
+  own `expired` against now**, with a small grace for the refresh transient: it
+  self-calibrates per backend and still fires on both real deaths (Claude
+  2026-08-04 red by 13:33Z that afternoon; the 9-second Codex token below was
+  expired before the file finished being written — the case an age threshold
+  handles worst). Same shape as the bug this whole issue is about, one layer
+  down: an assertion that was a proxy for the property instead of the property,
+  which is also what "a liveness probe cannot see an auth demotion" was saying
+  about `/v1/models`.
   What our objection *does* catch is a different failure: a refresh loop that
   keeps succeeding and keeps stamping `last_refresh` while completions fail
   (entitlement revoked, plan downgraded, model id deauthorized) — and #94 shows
   that case is reachable, since Codex's final token was minted `iat=11:36:48Z,
   exp=11:36:57Z`, a **9-second** lifetime from a refresh that returned rather than
-  errored. So: freshness as the always-on alarm, a per-provider-class **completion**
-  for demotion. Until the completion half exists, `cchv-journal` remains the only
-  thing in the fleet that exercises a real completion — on the Codex backend only.
+  errored. So: per-file **expiry** as the always-on alarm, a per-provider-class
+  **completion** for demotion. Both must assert **per backend**, not "aiproxy is
+  up" — the 11-days-vs-5-days split between the two outages was never about when
+  each backend died, it was coverage: `cchv-journal` was pointed at one of the
+  two, and a fleet-level check misses Claude exactly the way everything else did.
+  Until the completion half exists, `cchv-journal` remains the only thing in the
+  fleet that exercises a real completion — on the Codex backend only, and on an
+  hourly tick, so any timestamp we relay is an **upper bound** on the death,
+  never a measurement of it.
 - **Monitoring** (`distiller-self-healing`): `GET /v1/healthz/journal`
   (unauthenticated, Gatus-shaped like `/v1/healthz/ingest`) is **503** when a
   closed logical day *within the forward horizon* still has pending groups whose
