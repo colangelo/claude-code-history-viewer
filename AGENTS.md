@@ -350,7 +350,7 @@ Checked 2026-07-26. Useful when deciding whether a red check is worth fixing.
 | Artifact | Built by | Consumer |
 |---|---|---|
 | `cchv-webapp.tar.gz` | `server-release.yml`, every `cchv-v*` tag | **Us** — infra swaps it into m4m's `static_dir`; the live archive browser |
-| `cchv-hub-<v>-aarch64-apple-darwin` + `.sha256` | `server-release.yml`, every tag (macos-14) | **Us** — becomes `/usr/local/bin/cchv-hub` on m4m (`docs/archive/deployment.md` §2b) |
+| `cchv-hub-<v>-aarch64-apple-darwin` + `.sha256` | `server-release.yml`, every tag (macos-14) | **Us** — becomes `~/.local/bin/cchv-hub` on m4m (`docs/archive/deployment.md` §2b) |
 | 4× WebUI server binaries (`src-tauri --features webui-server`) | `server-release.yml`, **dispatch-only** | **Nobody today.** Free unless dispatched |
 | Desktop bundles | — | Not built at all |
 
