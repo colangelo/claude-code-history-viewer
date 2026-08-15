@@ -1958,6 +1958,17 @@ equivalently.
   occurrences so far ran 9 and 11 days each. Symmetrically, infra's 2026-08-16
   05:00Z re-read tests the **Claude** loop only; finding Codex still stamped
   20:20:10Z at that hour is the expected reading, not a second death.
+- **Every timestamp quoted from those auth files is `+08:00`, not UTC — parse the
+  offset before you compare one to anything of ours.** The cliproxyapi container
+  runs +0800 while the VM host, this repo and every relay timestamp are UTC, and
+  on the 2026-08-15 Claude credential the raw field reads
+  `last_refresh= 2026-08-16T04:16:56+08:00` — a clock face identical to that same
+  token's UTC *expiry*. Read as UTC it turns a never-refreshed file into
+  "refreshed 43 minutes ago, loop alive" at the exact instant the token dies, so
+  the misread is worst precisely at the hour infra's re-read fires. Their triage
+  snippet parses the offset and prints a verdict rather than a string now (infra
+  `1a6b70b`, ac/infra#94 comment 5625); the UTC values in the bullet above are
+  already converted, so quote those, never a raw field.
 - **Pointing the distiller at the Claude backend was considered and declined**
   (infra offered a `CCHV_DISTILL_MODEL` flip 2026-08-15 to close the Claude
   coverage gap above; declined the same day, recorded infra-side in `aiproxy.md`
