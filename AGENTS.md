@@ -269,17 +269,28 @@ just sync-version                            # package.json → workspace + taur
 pnpm tsc --build . && pnpm vitest run        # re-check after sync
 
 # Census the WORKTREE before staging. A Syncthing conflict COPY OF A TRACKED FILE is a
-# different class from the conflict ref below, and it reaches the PUBLIC fork by this
-# recipe's ordinary `git add -A` — not by a stray `--all` on the push. We are better
-# off here than infra was, and it is worth knowing exactly why: cchv does NOT
-# `.gitignore` the pattern, so a copy shows up as `??` (measured 2026-08-16 on a
+# different class from the conflict ref below: it is an ordinary untracked file, and it
+# reaches the PUBLIC fork through the STAGING step — not through a stray `--all` on the
+# push. Two independent defences; keep both, because neither covers the other:
+#   1. Stage EXPLICIT PATHS (below) so the release commit cannot sweep one up at all.
+#      The cchv-deploy skill's Phase 2 has always said this; this block said `git add -A`,
+#      and the block is the half that gets copy-pasted, so the weaker rule won. Fixed
+#      2026-08-16 — the same reach failure infra recorded in CONTEXT `PATTERNS/docs-okf.md`
+#      § Every placement has a reach, here spanning two documents instead of one.
+#   2. Run the census anyway. Explicit staging makes a conflict copy harmless to THIS
+#      commit but silent — and its danger is precisely going unnoticed.
+# We are better off here than infra was, and it is worth knowing exactly why: cchv does
+# NOT `.gitignore` the pattern, so a copy shows up as `??` (measured 2026-08-16 on a
 # throwaway file: `check-ignore` exit 1, `git status` lists it, `add -A --dry-run`
-# stages it). The signal exists — this recipe just never consumed it. **Never add the
-# pattern to `.gitignore`**: that suppresses the only routine signal for a class whose
-# whole danger is going unnoticed. It is how infra sat on a live 146 KB copy for five
-# days with four checks reporting clean (infra 2d87f32).
+# stages it). **Never add the pattern to `.gitignore`**: that suppresses the only
+# routine signal for a class whose whole danger is going unnoticed. It is how infra sat
+# on a live 146 KB copy for five days with four checks reporting clean (infra 2d87f32).
 find . -path ./.git -prune -o -name "*.sync-conflict-*" -print   # expect: nothing
-git add -A && git commit -m "chore(release): cchv-v0.6.0"
+# Exactly what a version bump touches — verified against `chore(release): cchv-v0.18.1`
+# (b8f69d3a), which changed these four files and nothing else. Anything else that belongs
+# in the release gets committed deliberately BEFORE this point, never swept in here.
+git add package.json Cargo.toml Cargo.lock src-tauri/tauri.conf.json
+git commit -m "chore(release): cchv-v0.6.0"
 SHA=$(git rev-parse HEAD)   # capture NOW — the publication proof below asserts this
                             # value, not `HEAD`, and nothing may move the ref first.
 git tag -a cchv-v0.6.0 -m "cchv-v0.6.0"
@@ -314,6 +325,12 @@ git ls-remote --tags origin  cchv-v0.6.0     # empty ⇒ CI never fires; Phase 4
 # the release commit. Assert the branch separately, by the sha you MEANT:
 git fetch origin main -q && git merge-base --is-ancestor "${SHA}" origin/main \
   && echo "main published: ${SHA}"
+# Asserting `origin` ALONE is sufficient only because `origin` is pushed LAST: a swap
+# landing anywhere before that push leaves `origin/main` short of ${SHA}, so this check
+# fails. Reorder the two push lines and the coverage inverts silently — a swap landing
+# between them would put `internal/main` on the peer's commit while `origin` went green
+# and nothing asked about `internal`. The push order is load-bearing, not cosmetic: if
+# you reorder, assert the remote you push LAST, or assert both.
 ```
 
 **Assert `${SHA}`, never `HEAD`.** `HEAD` is a symref *through* `refs/heads/main` —
