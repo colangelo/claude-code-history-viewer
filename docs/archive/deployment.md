@@ -1942,6 +1942,19 @@ equivalently.
   own `exp`, agreeing exactly (the 1 h `id_token` is the easy misread):
   **Claude** `last_refresh` 20:16:56Z → expires **2026-08-16T04:16:56Z (8 h)**;
   **Codex** `last_refresh` 20:20:10Z → expires **2026-08-25T20:20:10Z (240 h)**.
+  Those readings are UTC; **the raw files are not, and on this credential the
+  digits collide exactly.** The `cliproxyapi` container runs `+0800` while VM
+  100's host, Gatus and every relay stamp are UTC, so Claude's raw field reads
+  `last_refresh 2026-08-16T04:16:56+08:00` — the same `04:16:56` as its UTC
+  *expiry*. Offset-blind, a file that has **never refreshed** reads as
+  "refreshed 43 minutes ago, loop alive" at precisely the moment the token
+  dies: the misread manufactures the exact positive the check exists to look
+  for. It inverts the other way too — a genuine refresh at ~04:16Z writes
+  `12:16:5x+08:00`, which reads as 7 h in the future, i.e. a clock bug. Parse
+  offset-aware (`%z`, or `fromisoformat` + `astimezone`); never string-compare
+  or slice. A `%z`-less `strptime` is off by 8 h in the direction that hides a
+  dead credential (infra, 2026-08-15 23:39Z; the same note sits on #94 Ask 2's
+  alarm spec).
   The distiller only ever calls the Codex model, so a drained backlog proves
   *that* backend alone; nothing we run consumes the Claude one — which means the
   only refresh loop we can observe is Codex's, on a ten-day clock. So the date
@@ -1958,24 +1971,28 @@ equivalently.
   occurrences so far ran 9 and 11 days each. Symmetrically, infra's 2026-08-16
   05:00Z re-read tests the **Claude** loop only; finding Codex still stamped
   20:20:10Z at that hour is the expected reading, not a second death.
-- **Every timestamp quoted from those auth files is `+08:00`, not UTC — parse the
-  offset before you compare one to anything of ours.** The cliproxyapi container
-  runs +0800 while the VM host, this repo and every relay timestamp are UTC, and
-  on the 2026-08-15 Claude credential the raw field reads
-  `last_refresh= 2026-08-16T04:16:56+08:00` — a clock face identical to that same
-  token's UTC *expiry*. Read as UTC it turns a never-refreshed file into
-  "refreshed 43 minutes ago, loop alive" at the exact instant the token dies, so
-  the misread is worst precisely at the hour infra's re-read fires. Their triage
-  snippet parses the offset and prints a verdict rather than a string now (infra
-  `1a6b70b`, ac/infra#94 comment 5625); the UTC values in the bullet above are
-  already converted, so quote those, never a raw field.
+  **And our own quiet is not a reading of any loop — it is silent by
+  construction.** An access token that has not expired keeps serving whether or
+  not anything is still refreshing it, and we exercise Codex alone on a 240 h
+  token, so a **completely dead refresh loop yields zero `auth_unavailable`
+  from this side until ~2026-08-25**. A quiet tick after 05:00Z means "the
+  Codex path served traffic", never "the Claude loop is alive": structurally
+  green, not informatively green. The *corrupt-refresh* shape (the 9-second
+  token below) can still redden us early — CPA's refresh cadence is unmeasured
+  and that path is not excluded — but for the *loop-stopped* shape there is
+  nothing here to go red. Infra does not read our silence as green either:
+  their 05:00Z re-read runs against the credential files regardless and is not
+  discharged by a quiet marker on ours (infra, 2026-08-15 23:39Z).
 - **Pointing the distiller at the Claude backend was considered and declined**
   (infra offered a `CCHV_DISTILL_MODEL` flip 2026-08-15 to close the Claude
   coverage gap above; declined the same day, recorded infra-side in `aiproxy.md`
   75fc790 + ac/infra#94). It moves the outage rather than adding a detector:
   journal distillation survives a Claude death today, and after the flip it would
   not — we would be buying Claude coverage by handing our fault to another repo.
-  Coverage is #94 Ask 2's job, not the distiller's.
+  Coverage is #94 Ask 2's job, not the distiller's. **Declined on both sides now**
+  and deliberately recorded as bilateral (infra `eafa578`, 2026-08-15 23:54Z), so
+  neither repo re-opens it as an unanswered offer. If ac overrules, it is one env
+  var and it arrives as a relay — nobody files an issue for it.
 - **A fix for the upstream blind spot is scoped but not built — expect two checks,
   not one** (ac/infra#94 Ask 2, open, blocked only on ac's interval/cost call;
   #93 closed 2026-08-15 with the journal half marked a duplicate of it). Our
@@ -1997,7 +2014,13 @@ equivalently.
   handles worst). Same shape as the bug this whole issue is about, one layer
   down: an assertion that was a proxy for the property instead of the property,
   which is also what "a liveness probe cannot see an auth demotion" was saying
-  about `/v1/models`.
+  about `/v1/models`. **Both repos carry the per-file `expired`-vs-now spec now,
+  and only our own re-read closed the gap** — retracting the 10 h constant here
+  had left a live copy of it sitting in infra's `aiproxy.md` as an endorsement,
+  which nothing on their side was going to surface (infra `eafa578`). An
+  implementation that reintroduces an age constant now contradicts two records
+  instead of one. Generalizes: **a correction is not finished at the repo where
+  the error was written** — chase it to wherever it was quoted.
   What our objection *does* catch is a different failure: a refresh loop that
   keeps succeeding and keeps stamping `last_refresh` while completions fail
   (entitlement revoked, plan downgraded, model id deauthorized) — and #94 shows
@@ -2012,6 +2035,17 @@ equivalently.
   fleet that exercises a real completion — on the Codex backend only, and on an
   hourly tick, so any timestamp we relay is an **upper bound** on the death,
   never a measurement of it.
+  **That Codex-only coverage is permanent, which makes it a constraint on Ask 2
+  rather than a footnote about the outage.** Nothing here is scheduled to consume
+  the Claude backend after 2026-08-25 either, so whatever Ask 2 ships is the only
+  Claude detector there will ever be. Infra wrote that up as a constraint on the
+  one open decision — ac's interval/cost call (infra `eafa578`, ac/infra#94
+  comment 5631) — having re-derived it from their own Consumers table rather than
+  on our word: every headless consumer is Codex-class by design, and the only
+  Claude traffic is ad-hoc human CLI use. So **if cost pressure lands Ask 2 on a
+  subset of backends, the subset must contain Claude**: dropping Claude restores
+  the 2026-08-04 blind spot exactly, while dropping Codex only removes a second
+  witness. The cheap-model instinct points at precisely the wrong one.
 - **Monitoring** (`distiller-self-healing`): `GET /v1/healthz/journal`
   (unauthenticated, Gatus-shaped like `/v1/healthz/ingest`) is **503** when a
   closed logical day *within the forward horizon* still has pending groups whose
