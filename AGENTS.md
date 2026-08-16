@@ -266,6 +266,12 @@ breaking → major.
 ```bash
 npm version <version> --no-git-tag-version   # e.g. 0.6.0 (no npm publish)
 just sync-version                            # package.json → workspace + tauri.conf
+cargo check -q -p hub                        # REFRESHES Cargo.lock. sync-version does NOT.
+                                             # The skill's Phase 2 has carried this line all
+                                             # along; the block did not, and the block is the
+                                             # copy-pasted half — the `af2c3128` divergence
+                                             # pointing the other way. Guard 2 below is the
+                                             # backstop for the day it is skipped anyway.
 pnpm tsc --build . && pnpm vitest run        # re-check after sync
 
 # Census the WORKTREE before staging. A Syncthing conflict COPY OF A TRACKED FILE is a
@@ -290,6 +296,42 @@ find . -path ./.git -prune -o -name "*.sync-conflict-*" -print   # expect: nothi
 # (b8f69d3a), which changed these four files and nothing else. Anything else that belongs
 # in the release gets committed deliberately BEFORE this point, never swept in here.
 git add package.json Cargo.toml Cargo.lock src-tauri/tauri.conf.json
+
+# Explicit staging fails closed in the WRONG direction the day `sync-version` grows a
+# fifth target: the list silently drops it, and the worktree census above says nothing —
+# it hunts UNTRACKED strays. Two guards close that, and they are complements, not
+# alternatives: Guard 1 catches a bump target that CHANGED and went unstaged, Guard 2 one
+# that was never TOUCHED. Both compose with explicit staging; neither reaches for `-A`.
+#
+# Guard 1 — infra's (measured by them, re-measured here 2026-08-16 in a throwaway repo:
+# 5 tracked targets / recipe stages 4 → rc=1 naming `fifth.json`; all 5 staged → rc=0; an
+# untracked `*.sync-conflict-*` copy → does NOT fire, `??` is invisible to `git diff`).
+# Placed BEFORE the commit, not after as infra ran it: detection is identical (measured
+# both), but here the fix is `git add <file>` rather than `git commit --amend`.
+# It also fires on any UNRELATED tracked edit sitting in the tree — a peer's in-flight
+# Syncthing edit arriving worktree-first. That is noise in the fail-closed direction:
+# stopping a release to look at a peer's edit in your tree is the correct answer anyway.
+git diff --quiet || { echo "unstaged tracked changes at release time:"; git diff --name-only; exit 1; }
+
+# Guard 2 — the stale `Cargo.lock`, which the skill calls the recurring miss. Skip the
+# `cargo` invocation above and the lock keeps the OLD version UNMODIFIED, so Guard 1 is
+# silent and the release ships a lock disagreeing with every other bump target.
+# Workspace crates are derived STRUCTURALLY (a Cargo.lock entry with no `source =` field),
+# never a hardcoded name list — a seventh crate is covered the day it lands, which is the
+# whole objection this guard answers. `END{emit()}` is load-bearing: Cargo.lock ends with
+# `]`, not a blank line, so a `/^$/`-only trigger drops the final package.
+# Do NOT swap in the one-liner `grep -c "^version = \"$V\"" Cargo.lock`: measured
+# 2026-08-16 it FALSE-PASSES — cookie, glib-sys, png and gio-sys all sit at 0.18.1 today,
+# so it reports coverage while every workspace crate is stale. A guard that false-passes
+# is worse than none: it reads as the control. (Same shape as infra's `git add <dir>`.)
+V=$(node -p "require('./package.json').version")
+stale=$(awk '
+  function emit(){ if (n != "" && s == 0) print n, v }
+  /^\[\[package\]\]/ { emit(); n=""; v=""; s=0; next }
+  /^name = / {n=$3} /^version = / {v=$3} /^source = / {s=1}
+  END { emit() }' Cargo.lock | grep -v "\"${V}\"$")
+[ -z "${stale}" ] || { echo "stale Cargo.lock — run the cargo invocation, then re-stage:"; echo "${stale}"; exit 1; }
+
 git commit -m "chore(release): cchv-v0.6.0"
 SHA=$(git rev-parse HEAD)   # capture NOW — the publication proof below asserts this
                             # value, not `HEAD`, and nothing may move the ref first.
