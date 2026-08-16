@@ -269,6 +269,15 @@ just sync-version                            # package.json → workspace + taur
 pnpm tsc --build . && pnpm vitest run        # re-check after sync
 git add -A && git commit -m "chore(release): cchv-v0.6.0"
 git tag -a cchv-v0.6.0 -m "cchv-v0.6.0"
+
+# Census the branch list before publishing anything. `.git` here is Syncthing-shared,
+# so a peer session's collision leaves a ref under `refs/heads/` — a LIVE branch named
+# `main.sync-conflict-…`, which a clean `git status` never reports and which `origin`
+# would carry to the PUBLIC fork. `for-each-ref` reads loose AND packed refs; `find`
+# only sees it until `gc --auto` packs it, and then reports clean while the branch is
+# still on the push list (measured in this repo 2026-08-16 — infra fd5ab18).
+# Quarantine a non-ancestor tip to `refs/backup/`, never delete it.
+git for-each-ref --format='%(refname)' | grep -i conflict   # expect: nothing under refs/heads/
 git push internal main && git push internal cchv-v0.6.0
 git push origin  main && git push origin  cchv-v0.6.0
 
