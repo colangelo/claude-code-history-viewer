@@ -268,6 +268,8 @@ npm version <version> --no-git-tag-version   # e.g. 0.6.0 (no npm publish)
 just sync-version                            # package.json → workspace + tauri.conf
 pnpm tsc --build . && pnpm vitest run        # re-check after sync
 git add -A && git commit -m "chore(release): cchv-v0.6.0"
+SHA=$(git rev-parse HEAD)   # capture NOW — the publication proof below asserts this
+                            # value, not `HEAD`, and nothing may move the ref first.
 git tag -a cchv-v0.6.0 -m "cchv-v0.6.0"
 
 # Census the branch list before publishing anything. `.git` here is Syncthing-shared,
@@ -288,8 +290,25 @@ git push origin  main && git push origin  cchv-v0.6.0
 # as publication. CONTEXT `PATTERNS/git.md` § the push-side twin of the reflog census.
 git ls-remote --tags internal cchv-v0.6.0    # empty ⇒ the tag never left this Mac
 git ls-remote --tags origin  cchv-v0.6.0     # empty ⇒ CI never fires; Phase 4 will look "stuck"
-git fetch origin main -q && git merge-base --is-ancestor HEAD origin/main && echo "main published"
+
+# The tag check above queries the hub BY NAME, so no local ref can answer for it —
+# but it says nothing about `main`. A swap landing mid-release still carries your
+# objects with the tag, so the tag verifies green while the hub's `main` is missing
+# the release commit. Assert the branch separately, by the sha you MEANT:
+git fetch origin main -q && git merge-base --is-ancestor "${SHA}" origin/main \
+  && echo "main published: ${SHA}"
 ```
+
+**Assert `${SHA}`, never `HEAD`.** `HEAD` is a symref *through* `refs/heads/main` —
+the exact file a peer's branch swap renames aside — so after a swap it resolves to
+the peer's commit, and `--is-ancestor HEAD origin/main` prints *"main published"*
+whenever the peer pushed, while your release commit sits unpublished on the conflict
+ref. It misfires precisely in the two-session burst that causes the swap. Derived
+by infra from the ref mechanics (`4a733b5`, CONTEXT `PATTERNS/git.md` §
+Syncthing-shared `.git`) and **measured here 2026-08-16** on a staged swap: the
+`HEAD` form printed *"main published"* while the release commit sat on the conflict
+ref, the `${SHA}` form correctly failed, and in the tag variant `ls-remote --tags`
+returned the tag while the hub's `main` lacked the release commit.
 
 #### Phase 4: CI + deploy
 
