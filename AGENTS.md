@@ -271,6 +271,15 @@ git add -A && git commit -m "chore(release): cchv-v0.6.0"
 git tag -a cchv-v0.6.0 -m "cchv-v0.6.0"
 git push internal main && git push internal cchv-v0.6.0
 git push origin  main && git push origin  cchv-v0.6.0
+
+# Positive proof the tag actually left this Mac. `.git` here is Syncthing-shared,
+# so a peer session can rewind your ref — and then `git push` prints "Everything
+# up-to-date", byte-identical to a genuine no-op, while `git log -1` agrees with it
+# (the ref and reflog are what got replaced). Never read the absence of a push error
+# as publication. CONTEXT `PATTERNS/git.md` § the push-side twin of the reflog census.
+git ls-remote --tags internal cchv-v0.6.0    # empty ⇒ the tag never left this Mac
+git ls-remote --tags origin  cchv-v0.6.0     # empty ⇒ CI never fires; Phase 4 will look "stuck"
+git fetch origin main -q && git merge-base --is-ancestor HEAD origin/main && echo "main published"
 ```
 
 #### Phase 4: CI + deploy
