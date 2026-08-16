@@ -1954,7 +1954,10 @@ equivalently.
   offset-aware (`%z`, or `fromisoformat` + `astimezone`); never string-compare
   or slice. A `%z`-less `strptime` is off by 8 h in the direction that hides a
   dead credential (infra, 2026-08-15 23:39Z; the same note sits on #94 Ask 2's
-  alarm spec).
+  alarm spec). Infra's own triage snippet parses the offset and prints a verdict
+  rather than a string now (infra `1a6b70b`, ac/infra#94 comment 5625). **The two
+  expiry readings above are already converted to UTC — quote those, never a raw
+  field**, and if we ever add a check of our own, convert at the parse boundary.
   The distiller only ever calls the Codex model, so a drained backlog proves
   *that* backend alone; nothing we run consumes the Claude one — which means the
   only refresh loop we can observe is Codex's, on a ten-day clock. So the date
