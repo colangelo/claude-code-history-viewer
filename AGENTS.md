@@ -109,6 +109,25 @@ arrive as Gitea issues labelled `agent-relay`. Canonical spec + registry:
 home-network `agent-relay/AGENTS.md` (portable: CONTEXT `PATTERNS/agent-relay.md`);
 send with home-network `tools/relay-send`.
 
+**Checkpoint by committing — an uncommitted fix is not partial progress, it is
+nothing.** A handler here works a tree whose `.git` *and* worktree are
+Syncthing-shared, so written-but-uncommitted work is not merely unsaved: it sits
+where the replicator can land the peer's older copy over it, and the displaced
+bytes survive only as a `*.sync-conflict-*` file nobody is looking for. Measured
+on one thread: **three** consecutive handlers of msg `95ed910c` were killed
+mid-flight having each already *written* the fix, and from the sender's side
+nothing had landed and nothing said so — the audit trail for that msg-id carried
+the `sent` event and literally nothing else (infra, 2026-08-16). We were bitten
+by the same shape one round earlier: `e610deb4` had to fold in exactly such an
+orphan from a prior session on the same thread. So **"unpushed is unpublished"
+has a shorter-fused sibling — uncommitted is unwritten**, and its fuse is a
+killed process rather than a missing push. Commit at each phase boundary, not at
+the end; the `RELAY-OUTCOME` line is the last thing that runs and is therefore
+the one thing that cannot serve as a checkpoint. And when a redelivery notice
+says to probe live state before redoing work, probe the **worktree** and the
+peer repo's worktree, not just the log — the honest answer is often "the work
+exists, and is one killed process from never having happened".
+
 ## Project Overview
 
 Claude Code History Viewer is a Tauri-based desktop application that allows users to browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
