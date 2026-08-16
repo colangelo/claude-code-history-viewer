@@ -267,17 +267,34 @@ breaking → major.
 npm version <version> --no-git-tag-version   # e.g. 0.6.0 (no npm publish)
 just sync-version                            # package.json → workspace + tauri.conf
 pnpm tsc --build . && pnpm vitest run        # re-check after sync
+
+# Census the WORKTREE before staging. A Syncthing conflict COPY OF A TRACKED FILE is a
+# different class from the conflict ref below, and it reaches the PUBLIC fork by this
+# recipe's ordinary `git add -A` — not by a stray `--all` on the push. We are better
+# off here than infra was, and it is worth knowing exactly why: cchv does NOT
+# `.gitignore` the pattern, so a copy shows up as `??` (measured 2026-08-16 on a
+# throwaway file: `check-ignore` exit 1, `git status` lists it, `add -A --dry-run`
+# stages it). The signal exists — this recipe just never consumed it. **Never add the
+# pattern to `.gitignore`**: that suppresses the only routine signal for a class whose
+# whole danger is going unnoticed. It is how infra sat on a live 146 KB copy for five
+# days with four checks reporting clean (infra 2d87f32).
+find . -path ./.git -prune -o -name "*.sync-conflict-*" -print   # expect: nothing
 git add -A && git commit -m "chore(release): cchv-v0.6.0"
 SHA=$(git rev-parse HEAD)   # capture NOW — the publication proof below asserts this
                             # value, not `HEAD`, and nothing may move the ref first.
 git tag -a cchv-v0.6.0 -m "cchv-v0.6.0"
 
-# Census the branch list before publishing anything. `.git` here is Syncthing-shared,
+# Now census the REF list, before publishing anything. `.git` here is Syncthing-shared,
 # so a peer session's collision leaves a ref under `refs/heads/` — a LIVE branch named
 # `main.sync-conflict-…`, which a clean `git status` never reports and which `origin`
-# would carry to the PUBLIC fork. `for-each-ref` reads loose AND packed refs; `find`
-# only sees it until `gc --auto` packs it, and then reports clean while the branch is
-# still on the push list (measured in this repo 2026-08-16 — infra fd5ab18).
+# would carry to the PUBLIC fork. `for-each-ref` reads loose AND packed refs; a `find`
+# scoped to `.git` sees the ref only until `gc --auto` packs it, and then reports clean
+# while the branch is still on the push list (measured here 2026-08-16 — infra fd5ab18).
+# That finding RE-SCOPES `find` — off `.git`, onto the worktree — it does not retire it.
+# Read one clause short, as "`find` is the wrong tool", and you delete the only census
+# that sees the file-shaped class above; infra's tree was cleared by exactly that
+# misreading three hours before they found the copy by hand. Two censuses, both
+# required, neither covering the other's class.
 # Quarantine a non-ancestor tip to `refs/backup/`, never delete it.
 git for-each-ref --format='%(refname)' | grep -i conflict   # expect: nothing under refs/heads/
 git push internal main && git push internal cchv-v0.6.0
