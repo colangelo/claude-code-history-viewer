@@ -128,6 +128,28 @@ says to probe live state before redoing work, probe the **worktree** and the
 peer repo's worktree, not just the log — the honest answer is often "the work
 exists, and is one killed process from never having happened".
 
+**To message another repo's agent, the channel is an ORDER, not a menu** (relay spec
+v2.33 § *TL;DR*):
+
+0. **A live peer session — Channel 0.** `ListAgents` lists reachable Claude Code
+   sessions; `SendMessage` talks to one and replies arrive push-style, with no queue and
+   no claim. Try it for **any** counterpart before any relay channel. A session is not a
+   role, so verify the addressee first: reply-to-whoever-contacted-you > session name
+   matches the task > **one-line probe before the payload** > give up and relay.
+   **Needing a durable record is not a reason to skip it** — the record goes on the
+   tracker either way (peer messages for velocity, issues for the record). A peer message
+   is never a permission decision.
+1. **A Gitea `agent-relay` issue in the recipient repo** when the ask must stay *visibly
+   outstanding* until someone handles it — the only channel where "not yet handled" is a
+   state the sender can see.
+2. **Otherwise the recipient's primary (leftmost) registry channel**:
+   `~/_sync/dev/infra/tools/relay-send --to <repo> …` for a `nats` row, a file in *their*
+   `agent-relay/inbox/` for a file-inbox row. **`relay-send` defaults to `--class auto`**
+   — a headless handler, and if it fails the message leaves the work queue with only
+   `RELAY_AUDIT` remembering it. Measured 2026-08-19: an onboarding ask died exactly that
+   way, invisible to both sides for hours, while the sender's record said delivered. Read
+   it back with `relay-history --msg-id <full-40-char-id>`, or send an issue instead.
+
 ## Project Overview
 
 Claude Code History Viewer is a Tauri-based desktop application that allows users to browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
