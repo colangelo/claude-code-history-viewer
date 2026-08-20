@@ -81,10 +81,7 @@ pub struct SearchResults {
 /// `pub(crate)` so the messages endpoint's `from`/`to` window parses identically
 /// — same accepted syntax, same 400 text — rather than growing a second dialect
 /// of "timestamp bound" for callers to discover the hard way.
-pub(crate) fn parse_bound(
-    s: Option<&str>,
-    which: &str,
-) -> Result<Option<DateTime<Utc>>, HubError> {
+pub(crate) fn parse_bound(s: Option<&str>, which: &str) -> Result<Option<DateTime<Utc>>, HubError> {
     match s {
         None => Ok(None),
         Some(v) => DateTime::parse_from_rfc3339(v)

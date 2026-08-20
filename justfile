@@ -144,6 +144,10 @@ serve-dev: frontend-build
 rust-test:
     cd src-tauri && cargo test -- --test-threads=1
 
+# Run the journal distiller's tests (offline; no hub, no LLM)
+distill-test:
+    uv run --with pytest --with requests pytest scripts/test_cchv_distill.py -q
+
 # Run Rust tests with nextest (faster, parallel)
 rust-nextest:
     cd src-tauri && cargo nextest run

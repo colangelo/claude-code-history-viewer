@@ -78,7 +78,10 @@ pub(crate) const SESSION_DAYS_CTE: &str = r#"
 /// The provenance check needs the window as values rather than as SQL so it can
 /// bind it into a per-session `EXISTS` probe, and it is the one piece of the fold
 /// that is worth unit-testing directly.
-pub(crate) fn day_bounds(entry_date: NaiveDate, day_start_hour: i32) -> (DateTime<Utc>, DateTime<Utc>) {
+pub(crate) fn day_bounds(
+    entry_date: NaiveDate,
+    day_start_hour: i32,
+) -> (DateTime<Utc>, DateTime<Utc>) {
     let shift = chrono::Duration::hours(i64::from(day_start_hour));
     let start = entry_date
         .and_hms_opt(0, 0, 0)

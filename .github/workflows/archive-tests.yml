@@ -74,6 +74,9 @@ jobs:
       - name: Create dist placeholder
         run: mkdir -p dist && touch dist/index.html
 
+      - name: Install uv (for the distiller tests)
+        uses: astral-sh/setup-uv@v5
+
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -88,3 +91,11 @@ jobs:
           cargo test
           -p history-core -p archive-protocol -p hub -p sync-daemon
           -- --test-threads=1
+
+      # The distiller is a script, not a crate, but it owns half of the journal
+      # day-window contract (the hub groups the sessions; the script decides
+      # which of their messages reach the prompt). One of these tests asserts
+      # its fold hour against the hub's constant — a drift that would otherwise
+      # summarize the wrong hours without failing anything.
+      - name: Test (journal distiller)
+        run: uv run --with pytest --with requests pytest scripts/test_cchv_distill.py -q
