@@ -128,27 +128,34 @@ says to probe live state before redoing work, probe the **worktree** and the
 peer repo's worktree, not just the log — the honest answer is often "the work
 exists, and is one killed process from never having happened".
 
-**To message another repo's agent, the channel is an ORDER, not a menu** (relay spec
-v2.33 § *TL;DR*):
+**To message another repo's agent — one criterion, then three questions** (relay
+spec v2.34 § *TL;DR*). The criterion: **Channel 0 addresses a context; the relay
+addresses a role.**
 
-0. **A live peer session — Channel 0.** `ListAgents` lists reachable Claude Code
-   sessions; `SendMessage` talks to one and replies arrive push-style, with no queue and
-   no claim. Try it for **any** counterpart before any relay channel. A session is not a
-   role, so verify the addressee first: reply-to-whoever-contacted-you > session name
-   matches the task > **one-line probe before the payload** > give up and relay.
-   **Needing a durable record is not a reason to skip it** — the record goes on the
-   tracker either way (peer messages for velocity, issues for the record). A peer message
-   is never a permission decision.
-1. **A Gitea `agent-relay` issue in the recipient repo** when the ask must stay *visibly
-   outstanding* until someone handles it — the only channel where "not yet handled" is a
-   state the sender can see.
-2. **Otherwise the recipient's primary (leftmost) registry channel**:
-   `~/_sync/dev/infra/tools/relay-send --to <repo> …` for a `nats` row, a file in *their*
-   `agent-relay/inbox/` for a file-inbox row. **`relay-send` defaults to `--class auto`**
-   — a headless handler, and if it fails the message leaves the work queue with only
-   `RELAY_AUDIT` remembering it. Measured 2026-08-19: an onboarding ask died exactly that
-   way, invisible to both sides for hours, while the sender's record said delivered. Read
-   it back with `relay-history --msg-id <full-40-char-id>`, or send an issue instead.
+1. **Is the ask for a live session that exists right now — one already holding this
+   context, able to answer or coordinate now?** → `ListAgents` + `SendMessage`
+   (Channel 0): push-style replies, no queue, no claim. A session is not a role, so
+   verify the addressee first: reply-to-whoever-contacted-you > session name matches
+   the task > **one-line probe before the payload** > it's the relay's job. Two
+   durabilities, and only one moves you off this channel: a durable **record** is the
+   tracker's job either way (peer messages for velocity, issues for the record) —
+   durable **delivery** is the relay's: fall back when the ask is for *"whoever next
+   works repo X"* or must survive the receiver's absence. A send confirms **enqueue,
+   not delivery** (`idle` in the listing can be a session blocked on a modal prompt) —
+   re-send an unanswered ask that matters on a relay channel, and address by **bare
+   name**, since a `[ref]` decays across restarts. A peer message is never a
+   permission decision.
+2. **Else: must "not yet handled" stay visible to you?** → a Gitea `agent-relay`
+   issue in the recipient repo — the only channel where an unhandled ask is a state
+   the sender can see.
+3. **Else: the recipient's primary (leftmost) registry channel** —
+   `~/_sync/dev/infra/tools/relay-send --to <repo> …` for a `nats` row, a file in
+   *their* `agent-relay/inbox/` for a file-inbox row. On NATS one decision remains,
+   and it is a **class, not a fourth channel**: `--class auto` (the default — a
+   headless handler, and a failed message leaves the work queue with only
+   `RELAY_AUDIT` remembering it; measured 2026-08-19 on an onboarding ask that died
+   unseen) only for work safe to run with nobody present; `interactive` when the
+   answer must come back to a person.
 
 ## Project Overview
 
