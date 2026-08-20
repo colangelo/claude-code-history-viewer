@@ -91,6 +91,13 @@ DEFAULT_AIPROXY_URL = os.environ.get("CCHV_AIPROXY_URL") or _ENDPOINTS.get("CCHV
 BAO_ADDR = os.environ.get("BAO_ADDR") or _ENDPOINTS.get("BAO_ADDR", "")
 APPROLE_FILE = Path.home() / ".config/cchv/bao-approle"
 PROMPT_BUDGET_CHARS = 120_000  # total transcript chars per LLM call
+# The hub's logical-day fold hour, applied in UTC. MUST equal
+# `crates/hub/src/journal.rs::DAY_START_HOUR`: the hub decides which sessions
+# belong to a group, and this script decides which of their messages reach the
+# prompt. If the two disagree, a group is distilled from a window that is not
+# the window it was grouped by — silently, since both halves still "work".
+# Asserted against the hub in the test suite.
+DAY_START_HOUR = 4
 CLAUDE_TIMEOUT_SECS = 300
 LLM_TIMEOUT_SECS = 300
 HTTP_TIMEOUT_SECS = 30
@@ -310,7 +317,22 @@ class Hub:
             ).json(),
         )
 
-    def session_messages(self, session_id: int) -> list[dict]:
+    def session_messages(
+        self,
+        session_id: int,
+        window: tuple[str, str] | None = None,
+    ) -> list[dict]:
+        """A session's messages, optionally bounded to the half-open `[from, to)`.
+
+        `window` is what keeps a midnight-spanning session's later days out of
+        this group's prompt. Unbounded, a session that ran from the 19th into the
+        20th delivered all 67k of its messages to the 19th's distillation, and
+        the 60/40 head-tail truncation guaranteed the tail — the 20th — survived
+        into a prompt that says "transcripts from 2026-08-19" (#35).
+        """
+        params: dict[str, object] = {"limit": 500}
+        if window is not None:
+            params["from"], params["to"] = window
         msgs: list[dict] = []
         offset = 0
         while True:
@@ -319,11 +341,13 @@ class Hub:
                 # bind offset per-iteration (default arg) — the closure is called
                 # synchronously here, but this keeps it correct and lint-clean.
                 lambda o=offset: self.get(
-                    f"/v1/sessions/{session_id}/messages", limit=500, offset=o
+                    f"/v1/sessions/{session_id}/messages", offset=o, **params
                 ),
             )
             page = r.json()
             msgs.extend(page)
+            # Windowed, X-Total-Count is the WINDOWED total, so this loop
+            # terminates on the filtered set rather than on the session's size.
             total = int(r.headers.get("X-Total-Count", len(msgs)))
             offset += len(page)
             if not page or offset >= total:
@@ -390,11 +414,27 @@ def truncate(text: str, budget: int) -> str:
     return f"{text[:head]}\n\n[... transcript truncated ...]\n\n{text[-tail:]}"
 
 
-def build_transcript(hub: Hub, session_ids: list[int]) -> str:
+def day_window(entry_date: str) -> tuple[str, str]:
+    """The half-open UTC window `[start, end)` of one logical day.
+
+    Mirrors `crates/hub/src/journal.rs::day_bounds` — see `DAY_START_HOUR`.
+    """
+    start = datetime.fromisoformat(entry_date).replace(tzinfo=timezone.utc) + timedelta(
+        hours=DAY_START_HOUR
+    )
+    end = start + timedelta(days=1)
+    return (
+        start.isoformat().replace("+00:00", "Z"),
+        end.isoformat().replace("+00:00", "Z"),
+    )
+
+
+def build_transcript(hub: Hub, session_ids: list[int], entry_date: str) -> str:
     per_session = max(PROMPT_BUDGET_CHARS // max(len(session_ids), 1), 4_000)
+    window = day_window(entry_date)
     chunks = []
     for sid in session_ids:
-        msgs = hub.session_messages(sid)
+        msgs = hub.session_messages(sid, window=window)
         lines = []
         for m in msgs:
             if m.get("is_sidechain"):
@@ -556,9 +596,9 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
     label = f"{entry_date} {project_path}"
     log(f"distilling {label} ({len(session_ids)} sessions)")
 
-    transcript = build_transcript(hub, session_ids)
+    transcript = build_transcript(hub, session_ids, entry_date)
     if not transcript.strip():
-        entry = {"status": "skip", "skip_reason": "no textual content in sessions"}
+        entry = {"status": "skip", "skip_reason": "no textual content in this day's messages"}
     else:
         entry = generate(llm, entry_date, project_path, transcript)
 

@@ -35,6 +35,59 @@ use crate::state::AppState;
 /// distiller drains against.
 pub(crate) const DAY_START_HOUR: i32 = 4;
 
+/// The shared logical-day fold, as a CTE body.
+///
+/// A session belongs to every logical day on which it has **a message** — not to
+/// the single day it started. Bucketing by `sessions.first_message_time` filed a
+/// midnight-spanning session's entire content under its start date, so a session
+/// running from the 19th into the 20th put a day of the 20th's work in the 19th's
+/// entry and left it out of the 20th's altogether (#35).
+///
+/// Three call sites need this fold and must not disagree about it: the pending
+/// work list, the write endpoint's provenance check, and `healthz_journal`. It
+/// used to be written out three times, with comments asking the next reader to
+/// keep the copies in step. It is written once here instead.
+///
+/// Bind positions are fixed: **`$1`** = `day_start_hour` (`int4`), **`$2`** = an
+/// optional inclusive `from` date (`date`; `NULL` = archive start). Callers
+/// number their own parameters from `$3`.
+///
+/// `$2` is pushed onto `messages."timestamp"`, not merely onto the computed
+/// `entry_date`, so a bounded call does not scan the archive's whole history.
+/// The two are exactly equivalent — `entry_date >= F` iff `ts >= F 00:00 UTC + H`
+/// — because the fold is a constant shift.
+pub(crate) const SESSION_DAYS_CTE: &str = r#"
+    msg_days AS (
+        SELECT DISTINCT
+            ((m."timestamp" - make_interval(hours => $1::int))
+                AT TIME ZONE 'UTC')::date  AS entry_date,
+            s.project_id                   AS project_id,
+            m.session_id                   AS session_id
+        FROM messages m
+        JOIN sessions s ON m.session_id = s.id
+        WHERE m."timestamp" IS NOT NULL
+          AND ($2::date IS NULL
+               OR m."timestamp" >= (($2::date + make_interval(hours => $1::int))
+                                       AT TIME ZONE 'UTC'))
+    )
+"#;
+
+/// The half-open UTC window `[start, end)` of one logical day, under the same
+/// fold as [`SESSION_DAYS_CTE`].
+///
+/// The provenance check needs the window as values rather than as SQL so it can
+/// bind it into a per-session `EXISTS` probe, and it is the one piece of the fold
+/// that is worth unit-testing directly.
+pub(crate) fn day_bounds(entry_date: NaiveDate, day_start_hour: i32) -> (DateTime<Utc>, DateTime<Utc>) {
+    let shift = chrono::Duration::hours(i64::from(day_start_hour));
+    let start = entry_date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight is representable")
+        .and_utc()
+        + shift;
+    (start, start + chrono::Duration::days(1))
+}
+
 /// Number of `topics` an `entry`-status row must carry (inclusive range).
 const MIN_TOPICS: usize = 3;
 const MAX_TOPICS: usize = 8;
@@ -77,8 +130,18 @@ fn parse_date(s: Option<&str>, which: &str) -> Result<Option<NaiveDate>, HubErro
 /// no journal row, **or** when a session's `ingest_xid` is not visible in the
 /// row's `generated_snapshot` (dirty): that ingest committed after the entry's
 /// snapshot was taken, so the entry cannot have seen its data — commit-order
-/// exact, immune to wall-clock interleaving. Groups on the still-open logical
-/// day are excluded. Newest-first, honoring `from` + `limit`.
+/// exact, immune to wall-clock interleaving — **or** when the stored entry's
+/// `session_ids` are not the set the group computes today (provenance drift).
+///
+/// Drift is what repairs history written under the old session-start fold, and
+/// it repairs it the same way everything else here works: from the data, not
+/// from an operator remembering to pass a flag. A group re-distilled with the
+/// right set stops matching and never comes back. The comparison is by value, so
+/// both sides must be canonical — `grp` aggregates `ORDER BY`, and `upsert`
+/// stores the sorted, deduplicated ids.
+///
+/// Groups on the still-open logical day are excluded. Newest-first, honoring
+/// `from` + `limit`.
 pub async fn pending(
     _auth: Authenticated,
     State(state): State<AppState>,
@@ -87,18 +150,17 @@ pub async fn pending(
     let from = parse_date(params.from.as_deref(), "from")?;
     let page = Page::from(params.limit, None);
 
-    let rows = sqlx::query_as::<_, PendingGroup>(
+    let rows = sqlx::query_as::<_, PendingGroup>(&format!(
         r"
-        WITH grp AS (
-            SELECT
-                ((s.first_message_time - make_interval(hours => $1::int))
-                    AT TIME ZONE 'UTC')::date        AS entry_date,
-                p.project_path                       AS project_path,
-                array_agg(s.id ORDER BY s.id)        AS session_ids,
-                array_agg(s.ingest_xid)              AS ingest_xids
-            FROM sessions s
-            JOIN projects p ON s.project_id = p.id
-            WHERE s.first_message_time IS NOT NULL
+        WITH {SESSION_DAYS_CTE},
+        grp AS (
+            SELECT d.entry_date                                  AS entry_date,
+                   p.project_path                                AS project_path,
+                   array_agg(d.session_id ORDER BY d.session_id) AS session_ids,
+                   array_agg(s.ingest_xid)                       AS ingest_xids
+            FROM msg_days d
+            JOIN projects p ON d.project_id = p.id
+            JOIN sessions s ON s.id = d.session_id
             GROUP BY 1, 2
         )
         SELECT g.entry_date, g.project_path, g.session_ids,
@@ -109,14 +171,15 @@ pub async fn pending(
            AND j.project_path = g.project_path
         WHERE g.entry_date
                 < ((now() - make_interval(hours => $1::int)) AT TIME ZONE 'UTC')::date
-          AND ($2::date IS NULL OR g.entry_date >= $2)
-          AND (j.id IS NULL OR EXISTS (
-                SELECT 1 FROM unnest(g.ingest_xids) AS x
-                WHERE NOT pg_visible_in_snapshot(x, j.generated_snapshot)))
+          AND (j.id IS NULL
+               OR j.session_ids IS DISTINCT FROM g.session_ids
+               OR EXISTS (
+                    SELECT 1 FROM unnest(g.ingest_xids) AS x
+                    WHERE NOT pg_visible_in_snapshot(x, j.generated_snapshot)))
         ORDER BY g.entry_date DESC, g.project_path DESC
         LIMIT $3
-        ",
-    )
+        "
+    ))
     .bind(DAY_START_HOUR)
     .bind(from)
     .bind(page.limit)
@@ -241,26 +304,41 @@ pub async fn create(
     // watermarking sessions it never saw. A group that grew between the
     // distiller's pending read and this POST is therefore rejected — correct,
     // since the group is dirty again anyway and re-distills next run.
+    //
+    // Membership is now "has a message inside the day", which is a question
+    // about `messages`, not about `sessions`. Asked directly — scan the day's
+    // messages for the project — it costs **6.6 s** on the live archive, once
+    // per POST, up to 50 POSTs a tick. So narrow first on the two bounds
+    // `sessions` already stores: only a session whose span overlaps the day can
+    // possibly have a message in it, which leaves a handful of candidates, each
+    // settled by one 0.115 ms index probe. Measured on the worst group in the
+    // archive (54 sessions): **10.8 ms**.
+    let (day_start, day_end) = day_bounds(payload.entry_date, DAY_START_HOUR);
     let group_ids: Vec<i64> = sqlx::query_scalar(
-        r"
+        r#"
         SELECT s.id
         FROM sessions s
         JOIN projects p ON s.project_id = p.id
         WHERE p.project_path = $1
-          AND s.first_message_time IS NOT NULL
-          AND ((s.first_message_time - make_interval(hours => $2::int))
-                AT TIME ZONE 'UTC')::date = $3
+          AND s.first_message_time < $3
+          AND s.last_message_time >= $2
+          AND EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.session_id = s.id
+                  AND m."timestamp" >= $2
+                  AND m."timestamp" <  $3)
         ORDER BY s.id
-        ",
+        "#,
     )
     .bind(&payload.project_path)
-    .bind(DAY_START_HOUR)
-    .bind(payload.entry_date)
+    .bind(day_start)
+    .bind(day_end)
     .fetch_all(&state.pool)
     .await?;
     if ids.iter().any(|id| !group_ids.contains(id)) {
         return Err(HubError::BadRequest(
-            "one or more session ids do not belong to this (entry_date, project_path) group".into(),
+            "one or more session ids have no message in this (entry_date, project_path) group"
+                .into(),
         ));
     }
     if group_ids.iter().any(|id| !ids.contains(id)) {
@@ -336,7 +414,13 @@ pub async fn create(
     .bind(summary)
     .bind(&topics)
     .bind(&open_questions)
-    .bind(&payload.session_ids)
+    // `ids`, not `payload.session_ids`: stored provenance must be canonical
+    // (sorted, deduplicated) because `pending` now compares it **by value** to
+    // detect drift. Every row written so far happens to be sorted — the
+    // distiller posts the pending list's order, which is sorted — so this
+    // repairs nothing; it makes the invariant hold by construction rather than
+    // by the caller's good manners.
+    .bind(&ids)
     .bind(&payload.model)
     .bind(&payload.as_of)
     .bind(search_text)

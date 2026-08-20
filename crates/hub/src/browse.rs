@@ -12,6 +12,7 @@ use axum::http::HeaderName;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::auth::Authenticated;
@@ -258,9 +259,14 @@ pub async fn list_sessions(
 pub struct PageParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// RFC 3339 bounds on the half-open window `[from, to)`. Either may stand
+    /// alone. Added so the journal distiller can read one logical day of a
+    /// session instead of the whole session (#35).
+    pub from: Option<String>,
+    pub to: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, FromRow)]
 pub struct MessageRow {
     pub id: i64,
     pub message_key: String,
@@ -312,37 +318,69 @@ async fn resolve_session_ref(state: &AppState, session_ref: &str) -> Result<i64,
 
 /// `:id` is the hub's surrogate session id (from the sessions list) or, as a
 /// convenience, an unambiguous provider session id (see [`resolve_session_ref`]).
-/// The response body is the page of messages; `X-Total-Count` carries the
-/// session's total message count so clients can detect a truncated page.
+/// The response body is the page of messages; `X-Total-Count` carries the total
+/// so clients can detect a truncated page.
+///
+/// `from` / `to` bound the half-open window `[from, to)`; either may stand alone.
+/// When one is given, `X-Total-Count` is the count **within the window** — a
+/// header reporting the session total next to a filtered body would make paging
+/// wrong, which is the one thing that header exists to prevent.
+///
+/// The two statements below are runtime queries, not `query!`: the gate builds
+/// with `SQLX_OFFLINE=true` and no sqlx-cli, so a new compile-time-checked
+/// statement has no way to get its `.sqlx` metadata generated. Same reason every
+/// query in `journal.rs` is runtime.
 pub async fn session_messages(
     _auth: Authenticated,
     State(state): State<AppState>,
     Path(session_ref): Path<String>,
-    Query(page): Query<PageParams>,
+    Query(params): Query<PageParams>,
 ) -> Result<([(HeaderName, String); 1], Json<Vec<MessageRow>>), HubError> {
+    let from = crate::search::parse_bound(params.from.as_deref(), "from")?;
+    let to = crate::search::parse_bound(params.to.as_deref(), "to")?;
     let session_pk = resolve_session_ref(&state, &session_ref).await?;
-    let page = Page::from(page.limit, page.offset);
-    // Read the maintained aggregate rather than `COUNT(*)`-ing the messages: a
-    // count over `session_id` range-scans `messages_session_id_message_key_key`
-    // (that unique index doubles as the only index on `session_id`), so every
-    // page view of a 3,000-message session read 3,000 index tuples for a number
-    // ingest already recomputes on that row, inside the same transaction that
-    // wrote the messages. Same value, one row read.
-    let total = i64::from(
-        sqlx::query_scalar!(
-            r#"SELECT message_count AS "count!" FROM sessions WHERE id = $1"#,
-            session_pk,
+    let page = Page::from(params.limit, params.offset);
+    // Unwindowed, read the maintained aggregate rather than `COUNT(*)`-ing the
+    // messages: a count over `session_id` range-scans
+    // `messages_session_id_message_key_key` (that unique index doubles as the
+    // only index on `session_id`), so every page view of a 3,000-message session
+    // read 3,000 index tuples for a number ingest already recomputes on that row,
+    // inside the same transaction that wrote the messages. Same value, one row
+    // read.
+    //
+    // Windowed, that aggregate is the wrong number and there is nothing to
+    // reuse — but `messages_session_timestamp_idx` (migration 0006) makes the
+    // count a range scan over just the window.
+    let total = if from.is_some() || to.is_some() {
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT count(*)
+            FROM messages
+            WHERE session_id = $1
+              AND ($2::timestamptz IS NULL OR "timestamp" >= $2)
+              AND ($3::timestamptz IS NULL OR "timestamp" <  $3)
+            "#,
         )
+        .bind(session_pk)
+        .bind(from)
+        .bind(to)
         .fetch_one(&state.pool)
-        .await?,
-    );
-    let rows = sqlx::query!(
+        .await?
+    } else {
+        i64::from(
+            sqlx::query_scalar::<_, i32>("SELECT message_count FROM sessions WHERE id = $1")
+                .bind(session_pk)
+                .fetch_one(&state.pool)
+                .await?,
+        )
+    };
+    let rows = sqlx::query_as::<_, MessageRow>(
         r#"
-        SELECT m.id            AS "id!",
-               m.message_key   AS "message_key!",
+        SELECT m.id,
+               m.message_key,
                m.uuid,
                m.parent_uuid,
-               m.seq           AS "seq!",
+               m.seq,
                m."timestamp",
                m.type          AS message_type,
                m.role,
@@ -352,43 +390,26 @@ pub async fn session_messages(
                m.output_tokens,
                m.cost_usd,
                m.duration_ms,
-               m.is_sidechain  AS "is_sidechain!",
+               m.is_sidechain,
                m.content
         FROM messages m
         WHERE m.session_id = $1
+          AND ($4::timestamptz IS NULL OR m."timestamp" >= $4)
+          AND ($5::timestamptz IS NULL OR m."timestamp" <  $5)
         ORDER BY m."timestamp" ASC NULLS LAST, m.seq ASC, m.id ASC
         LIMIT $2 OFFSET $3
         "#,
-        session_pk,
-        page.limit,
-        page.offset,
     )
+    .bind(session_pk)
+    .bind(page.limit)
+    .bind(page.offset)
+    .bind(from)
+    .bind(to)
     .fetch_all(&state.pool)
     .await?;
 
     Ok((
         [(HeaderName::from_static("x-total-count"), total.to_string())],
-        Json(
-            rows.into_iter()
-                .map(|r| MessageRow {
-                    id: r.id,
-                    message_key: r.message_key,
-                    uuid: r.uuid,
-                    parent_uuid: r.parent_uuid,
-                    seq: r.seq,
-                    timestamp: r.timestamp,
-                    message_type: r.message_type,
-                    role: r.role,
-                    model: r.model,
-                    stop_reason: r.stop_reason,
-                    input_tokens: r.input_tokens,
-                    output_tokens: r.output_tokens,
-                    cost_usd: r.cost_usd,
-                    duration_ms: r.duration_ms,
-                    is_sidechain: r.is_sidechain,
-                    content: r.content,
-                })
-                .collect(),
-        ),
+        Json(rows),
     ))
 }

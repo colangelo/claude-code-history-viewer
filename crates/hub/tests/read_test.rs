@@ -934,9 +934,16 @@ fn group_absent(body: &Value, project: &str) -> bool {
 }
 
 /// Ingest one closed-day session for this machine (project, session, one
-/// message), then push its logical day and data-arrival time via raw SQL —
-/// `first_message_time` sets the logical day, `messages.created_at` the arrival
-/// (both scoped by `machine_id`, so nothing else in the shared DB is touched).
+/// message), then push its logical day and data-arrival time via raw SQL.
+///
+/// The logical day is set on **`messages."timestamp"`**, because that is what
+/// the fold reads: a session belongs to the days its messages fall on, not to
+/// the day it started. `sessions.first_message_time`/`last_message_time` are
+/// moved to match — they no longer drive the fold, but the provenance check
+/// narrows candidates on them, so a fixture that left them at their ingested
+/// values would be internally inconsistent in a way that only some queries
+/// notice. `messages.created_at` is the arrival. All scoped by `machine_id`, so
+/// nothing else in the shared DB is touched.
 async fn seed_day(
     hub: &TestHub,
     pool: &sqlx::PgPool,
@@ -958,14 +965,20 @@ async fn seed_day(
     );
     ingest(hub, &b).await;
     sqlx::query(&format!(
-        "UPDATE sessions SET first_message_time = now() - interval '{day_interval}' WHERE machine_id = $1"
+        "UPDATE messages
+            SET \"timestamp\" = now() - interval '{day_interval}',
+                created_at    = now() - interval '{arrival_interval}'
+          WHERE machine_id = $1"
     ))
     .bind(hub.machine_id)
     .execute(pool)
     .await
     .unwrap();
     sqlx::query(&format!(
-        "UPDATE messages SET created_at = now() - interval '{arrival_interval}' WHERE machine_id = $1"
+        "UPDATE sessions
+            SET first_message_time = now() - interval '{day_interval}',
+                last_message_time  = now() - interval '{day_interval}'
+          WHERE machine_id = $1"
     ))
     .bind(hub.machine_id)
     .execute(pool)
@@ -1035,12 +1048,20 @@ async fn journal_health_drained_day_absent() {
     // Insert a journal entry for the group AFTER ingest: its default snapshot
     // (pg_current_snapshot at insert) sees the session's ingest xid → not dirty
     // → not pending → not evaluated, even though its arrival is 3h old.
+    //
+    // `session_ids` must be the group's real set, not left empty: provenance
+    // drift is itself a pending condition now, so an entry that names no
+    // sessions is dirty on arrival.
     sqlx::query(
-        "INSERT INTO journal_entries (entry_date, project_path, status, headline, summary, model, search_text)
-         SELECT ((s.first_message_time - make_interval(hours => 4)) AT TIME ZONE 'UTC')::date,
-                p.project_path, 'entry', 'h', 's', 'm', 'h s'
-         FROM sessions s JOIN projects p ON s.project_id = p.id
-         WHERE s.machine_id = $1",
+        "INSERT INTO journal_entries (entry_date, project_path, status, headline, summary, model, search_text, session_ids)
+         SELECT ((m.\"timestamp\" - make_interval(hours => 4)) AT TIME ZONE 'UTC')::date,
+                p.project_path, 'entry', 'h', 's', 'm', 'h s',
+                array_agg(DISTINCT s.id ORDER BY s.id)
+         FROM messages m
+         JOIN sessions s ON m.session_id = s.id
+         JOIN projects p ON s.project_id = p.id
+         WHERE s.machine_id = $1
+         GROUP BY 1, 2",
     )
     .bind(hub.machine_id)
     .execute(&pool)

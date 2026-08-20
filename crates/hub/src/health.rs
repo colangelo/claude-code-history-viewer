@@ -277,42 +277,52 @@ pub async fn healthz_journal(
     let within_days = i32::try_from(within_days_i64).map_err(|_| {
         HubError::BadRequest(format!("within_days too large, got {within_days_i64}"))
     })?;
+    let day_start_hour = crate::journal::DAY_START_HOUR;
 
     // Runtime query (not `query!`): the offline gate has no `.sqlx` metadata for
     // new statements — same reason every query in `journal.rs` is runtime.
     //
-    // `sess_win` filters to in-window closed days BEFORE the messages join so
-    // `arrivals` scans only the last `within_days` of sessions, not the whole
-    // archive. `grp` carries the per-session ingest xids for the dirty check;
-    // `arrivals` carries the latest arrival. A group is pending when it has no
-    // journal row, or a session's ingest xid is invisible in the row's snapshot
+    // The fold comes from `journal::SESSION_DAYS_CTE`, not from a copy: this
+    // check exists to page when the distiller is behind, so it has to agree with
+    // the distiller's own work list about which sessions belong to a day. It
+    // used to hold its own transcription of the fold expression, with a comment
+    // asking the reader to keep them in step.
+    //
+    // The CTE's `$2` (inclusive `from` date) is the horizon bound, pushed onto
+    // `messages."timestamp"` so this scans the last `within_days` of the archive
+    // rather than all of it. It is computed here rather than from `now()` in
+    // SQL because the CTE takes a date: a horizon bound is a filter, not a
+    // correctness boundary, so app/DB clock skew of much less than a day cannot
+    // change the verdict. The closed-day bound below stays on the database's
+    // `now()`, where it does matter.
+    //
+    // `sess_win` bounds the days; `grp` carries the per-session ingest xids for
+    // the dirty check, `arrivals` the latest arrival. A group is pending when it
+    // has no journal row, or its stored session set has drifted from the
+    // computed one, or a session's ingest xid is invisible in the row's snapshot
     // (committed after the entry was generated) — commit-order exact, identical
     // to `journal::pending`.
-    let rows = sqlx::query_as::<_, JournalGroupRow>(
+    let horizon_from = (Utc::now() - chrono::Duration::hours(i64::from(day_start_hour)))
+        .date_naive()
+        - chrono::Duration::days(i64::from(within_days));
+    let rows = sqlx::query_as::<_, JournalGroupRow>(&format!(
         r"
-        WITH sess AS (
-            SELECT
-                s.id                                     AS session_id,
-                ((s.first_message_time - make_interval(hours => $1::int))
-                    AT TIME ZONE 'UTC')::date            AS entry_date,
-                p.project_path                           AS project_path,
-                s.ingest_xid                             AS ingest_xid
-            FROM sessions s
-            JOIN projects p ON s.project_id = p.id
-            WHERE s.first_message_time IS NOT NULL
-        ),
+        WITH {session_days},
         sess_win AS (
-            SELECT *
-            FROM sess
-            WHERE entry_date
+            SELECT d.session_id   AS session_id,
+                   d.entry_date   AS entry_date,
+                   p.project_path AS project_path,
+                   s.ingest_xid   AS ingest_xid
+            FROM msg_days d
+            JOIN projects p ON d.project_id = p.id
+            JOIN sessions s ON s.id = d.session_id
+            WHERE d.entry_date
                     < ((now() - make_interval(hours => $1::int)) AT TIME ZONE 'UTC')::date
-              AND entry_date
-                    >= ((now() - make_interval(hours => $1::int)) AT TIME ZONE 'UTC')::date
-                        - $2::int
         ),
         grp AS (
             SELECT entry_date, project_path,
-                   array_agg(ingest_xid) AS ingest_xids
+                   array_agg(session_id ORDER BY session_id) AS session_ids,
+                   array_agg(ingest_xid)                     AS ingest_xids
             FROM sess_win
             GROUP BY entry_date, project_path
         ),
@@ -329,14 +339,17 @@ pub async fn healthz_journal(
             ON a.entry_date = g.entry_date AND a.project_path = g.project_path
         LEFT JOIN journal_entries j
             ON j.entry_date = g.entry_date AND j.project_path = g.project_path
-        WHERE j.id IS NULL OR EXISTS (
+        WHERE j.id IS NULL
+           OR j.session_ids IS DISTINCT FROM g.session_ids
+           OR EXISTS (
                 SELECT 1 FROM unnest(g.ingest_xids) AS x
                 WHERE NOT pg_visible_in_snapshot(x, j.generated_snapshot))
         ORDER BY g.entry_date DESC, g.project_path DESC
         ",
-    )
-    .bind(crate::journal::DAY_START_HOUR)
-    .bind(within_days)
+        session_days = crate::journal::SESSION_DAYS_CTE,
+    ))
+    .bind(day_start_hour)
+    .bind(horizon_from)
     .fetch_all(&state.pool)
     .await?;
 
