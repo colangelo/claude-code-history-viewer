@@ -99,7 +99,7 @@
       pin the version (widen-before/narrow-after; exact semver if it ever compares).
       Verify: relay sent on a channel that confirms delivery (Channel 0 to
       `infra-peer-relay` while `ac/infra#98` is open), `RELAY_AUDIT`/ack noted.
-- [ ] 6.5 Verify live on m4m after infra's ack: `/v1/healthz` version, then after the
+- [x] 6.5 Verify live on m4m after infra's ack: `/v1/healthz` version, then after the
       next tick `/v1/healthz/journal` identity triple; record the readings on #39 and
       #40 and close both with the evidence. Verify: the issues are closed with the
       probe output quoted.

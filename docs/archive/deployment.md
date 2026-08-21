@@ -560,6 +560,56 @@ route, a new column/index name, a new error string) over anything derived from
 the version number, and prove the 0 on the outgoing file rather than assuming
 it. A relay handing off a rev marker should carry both counts, new **and** old.
 
+> **From `cchv-v0.21.0` this entire marker-trap family is retired for the hub
+> binary** — see the swap-proof block at the top of §2b. `GET /v1/healthz` now
+> reports `version`, so there is no longer any reason to choose a `strings`
+> marker, a class fragment, a new route, or a header for a *hub* swap: ask the
+> running process what it is. Keep the passage above, because the reasoning still
+> governs the **webapp** swap (which has no such field, only the bundle's
+> embedded version) and because the family's shape — a check that reads as strict
+> while answering a different question — recurs far beyond this file. What it no
+> longer governs is the case it was written for.
+
+**2026-08-21, `cchv-v0.20.1` → `cchv-v0.21.0` (release `9b0633cb`) — all three
+steps landed and verified.** The release whose whole purpose was to make this
+section's central question answerable: *which build is running?*
+
+- Hub: `/v1/healthz` `{"db":"up","status":"ok"}` (no `version` key) → 
+  `{"db":"up","status":"ok","version":"0.21.0"}`; migration `max(version)` 8 → 9;
+  pid 30528 fresh at 14:29:32Z. Asset
+  `cchv-hub-0.21.0-aarch64-apple-darwin`, sha256 `406d189a…4e6ab893`, agreeing
+  across the `.sha256` sidecar and the GitHub API `digest`.
+- Distiller: reinstalled from `git cat-file blob cchv-v0.21.0:scripts/cchv-distill.py`;
+  installed blob `a44b4d32bb99…` = `git rev-parse cchv-v0.21.0:scripts/cchv-distill.py`.
+  Its first log line under real `uv run` is now
+  `cchv-distill 0.21.0 blob=a44b4d32bb99 mode=…`, emitted **before** secrets
+  resolution, so a run that dies on bao/op still says which copy it was.
+- Webapp: served entry chunk `archive-soSQSDI9.js` (2× `cchv-v0.20.1`) →
+  `archive-zcC8x53V.js` (2× `cchv-v0.21.0`, and the *only* `cchv-v*` semver in
+  that chunk); the old chunk 404s.
+- Migration `0009` (two nullable columns on `distiller_ticks`) was **measured
+  before the relay rather than estimated**: 0.93 ms against a local table of
+  prod's exact shape, prod holding 16 rows. Contrast `0006`'s 6.66 s, which is
+  why that one needed a startup window planned around it.
+- Predicted and held: **no behavioural non-200.** The v0.20.0 deploy flipped
+  `/v1/healthz/journal` 200 → 503 by changing the predicate the check evaluates
+  and the relay did not say so, leaving infra to judge mid-deploy whether a 503
+  was their swap or our code. This release changed only additive response fields,
+  the relay said a 503 would be new and real, and the endpoint stayed 200/0
+  groups throughout.
+
+Two things worth carrying from how this one was prepared, both of which cost
+nothing and each of which replaced an assumption the relay would otherwise have
+shipped as fact: (a) **a new distiller against an old hub was checked, not
+reasoned** — `git show cchv-v0.20.1:crates/hub/src/journal.rs` shows `TickPayload`
+is a plain `#[derive(Deserialize)]` with zero `deny_unknown_fields`, so serde
+ignores the new keys and either deploy order is safe; (b) **`cargo metadata`,
+not the `Cargo.toml` declaration**, confirmed the hub crate resolves to `0.21.0`,
+so the string the swap proof compares is the string the binary carries. The
+general form: when a relay is about to assert a fact, prefer the command that
+*produces* it over the reasoning that predicts it — they cost the same and only
+one of them can be wrong.
+
 Step 4 was missing until the `v0.16.0` swap (2026-07-26, thread `1b97e64b`),
 where infra caught the live binary sitting `-rw-r--r--` *before* the restart
 and fixed it by hand — and found `staging/cchv-hub-0.15.0-…` is `-rw-r--r--`
