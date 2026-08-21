@@ -92,12 +92,25 @@ Three things that outlive the ack:
 
 **What it costs on deploy: hub startup latency, and nothing else.** sqlx applies
 pending migrations before the listener binds, so the first start after the §2b
-swap builds the index before answering anything. Over the 7.22 M rows pg1 held on
-2026-08-21 that is **an estimate, not a measurement** — call it under two minutes,
-calibrated against a full parallel seq scan of the same table at 5.4 s. It is
-deliberately unmeasured: measuring it means building the index on prod, which is
-the deploy. **Do not read a longer-than-usual connection-refused window after this
-particular swap as a failed bootstrap.**
+swap builds the index before answering anything. It was deliberately unmeasured
+before the deploy — measuring it means building the index on prod, which *is* the
+deploy — so this section shipped an estimate of "under two minutes", calibrated
+against a full parallel seq scan of the same table at 5.4 s.
+
+**Now measured, on the real deploy: 6.66 s** (`_sqlx_migrations` version 6,
+`success = t`, `execution_time` 6.6616719590 s, over the 7.22 M rows pg1 held on
+2026-08-21; `messages_session_timestamp_idx` `indisvalid = t`). The whole
+bootout→first-200 window was **17 s** (00:27:03Z → 00:27:20Z), so the migration
+was not even the dominant term in it. The estimate was ~18× high — publishing it
+was still right (a caller who budgets two minutes and waits seven seconds loses
+nothing), but **the next deploy carrying a migration of this shape should budget
+from this number, not re-derive the caution.** Do not read a longer-than-usual
+connection-refused window after such a swap as a failed bootstrap — while
+knowing that "longer than usual" here means seconds.
+
+Reading `_sqlx_migrations` on pg1 needs `sudo -u postgres psql`: `psql -U cchv`
+over ssh fails **peer** authentication (the ssh user is not `cchv`), which reads
+like a missing grant and is not one.
 
 **The `SHARE` lock it takes cannot bite here, and it is worth knowing why**, since
 `0005` above needed real care about exactly this. `CREATE INDEX` blocks writers on
@@ -468,6 +481,8 @@ ls -l "$LIVE"
 #     passes steps 1-6 intact, because cp CREATES the file it was aimed at.
 #     By content, never by hash — step 5's ad-hoc re-sign guarantees the installed
 #     file cannot hash to the published asset.
+#     Pick the marker by MEASURING it against the outgoing binary first (see the
+#     version-string trap below): a marker is only a marker if it counts 0 there.
 strings -a "$LIVE" | grep -c '<the rev marker from the handoff>'   # expect 1, was 0
 
 # 7. bootout + bootstrap — NOT `kickstart -k` (which can wedge in
@@ -493,6 +508,26 @@ check that looks at the *staged* copy passes; only a probe of the **live** path 
 the **running process** can tell you nothing happened. That is the same shape as
 this section's marker-trap family: a check that looks strict while answering a
 different question. Probe `$LIVE` itself after step 5, as the recipe now does.
+
+**The version string is NOT a rev marker — measure any candidate against the
+OUTGOING binary before trusting it.** Fifth member of the marker-trap family
+(v0.11.1 class fragment, v0.14.0 CSS chunk, v0.15.0 installed-file re-hash,
+the permanent `x-total-count` header decoy), and the one the recipe invites
+most, because `0.19.0` is the obvious thing to grep for. Measured by infra on
+the v0.19.0 swap (2026-08-21, thread `576c10a3`): `strings | grep -c '0.19.0'`
+returns **2 in the new asset and 2 in the outgoing v0.18.1 binary** —
+dependency versions carry the same digits — so the probe is vacuously green
+before the swap and proves nothing after it. Same failure mode as the class
+fragment: a check that reads as strict while answering "does this file contain
+some crate at 0.19.0", not "is this the new hub".
+
+What infra used instead: `messages_session_timestamp_idx`, the migration's index
+name, **counted 1 in the new asset and 0 in the outgoing binary** — i.e. a
+string that only exists because of the change being shipped. That is the
+general rule for choosing one: prefer a symbol the release *introduces* (a new
+route, a new column/index name, a new error string) over anything derived from
+the version number, and prove the 0 on the outgoing file rather than assuming
+it. A relay handing off a rev marker should carry both counts, new **and** old.
 
 Step 4 was missing until the `v0.16.0` swap (2026-07-26, thread `1b97e64b`),
 where infra caught the live binary sitting `-rw-r--r--` *before* the restart
