@@ -91,9 +91,15 @@ struct RecordingHub {
 }
 
 impl HubClient for RecordingHub {
-    async fn ingest(&self, batch: &IngestBatch) -> anyhow::Result<IngestResponse> {
+    // Synchronous — see the note on `MockHub` in
+    // `crates/sync-daemon/tests/sync_test.rs`: an `async fn` with no `.await`
+    // is `clippy::unused_async_trait_impl`, and `-D warnings` in CI.
+    fn ingest(
+        &self,
+        batch: &IngestBatch,
+    ) -> impl std::future::Future<Output = anyhow::Result<IngestResponse>> {
         self.batches.lock().unwrap().push(batch.clone());
-        Ok(IngestResponse::default())
+        std::future::ready(Ok(IngestResponse::default()))
     }
 }
 

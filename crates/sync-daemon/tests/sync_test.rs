@@ -32,7 +32,21 @@ struct MockState {
 }
 
 impl HubClient for MockHub {
-    async fn ingest(&self, batch: &IngestBatch) -> anyhow::Result<IngestResponse> {
+    // Not an `async fn`: this mock does no I/O, so it hands back an
+    // already-complete future rather than one that never awaits
+    // (`clippy::unused_async_trait_impl`, `-D warnings` in CI). The real client
+    // in `client.rs` stays async.
+    fn ingest(
+        &self,
+        batch: &IngestBatch,
+    ) -> impl std::future::Future<Output = anyhow::Result<IngestResponse>> {
+        std::future::ready(self.record(batch))
+    }
+}
+
+impl MockHub {
+    /// The mock's whole behaviour, kept synchronous and readable.
+    fn record(&self, batch: &IngestBatch) -> anyhow::Result<IngestResponse> {
         let mut s = self.state.lock().unwrap();
         if s.fail_remaining > 0 {
             s.fail_remaining -= 1;
@@ -41,9 +55,7 @@ impl HubClient for MockHub {
         s.batches.push(batch.clone());
         Ok(IngestResponse::default())
     }
-}
 
-impl MockHub {
     fn fail_next(&self, n: usize) {
         self.state.lock().unwrap().fail_remaining = n;
     }
