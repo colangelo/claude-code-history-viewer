@@ -48,3 +48,32 @@ jobs:
         # Lockfile lives at the workspace root since the crates extraction
         # (was src-tauri/Cargo.lock). Run audit from the root.
         run: cargo audit
+
+      # SOME ignores in .cargo/audit.toml rest on "the crate is not in the build
+      # graph" — a `cargo tree -i <crate>` that printed nothing on the day the
+      # entry was written. Nothing re-checks that, so such an entry silently
+      # becomes a blindfold the moment a feature flag or a dependency bump pulls
+      # the crate in: the advisory stays suppressed and the job stays green.
+      #
+      # ONLY the absence-based entries belong here. `quick-xml` is deliberately
+      # NOT in this list — it IS in the graph (plist -> tauri/os_info) and its
+      # ignore rests on the input being Tauri's own Info.plist rather than
+      # attacker-supplied XML. Adding it would fail the build immediately, which
+      # is how this list gets checked: a name here asserts absence, so verify
+      # with `cargo tree -i <crate> --target all` before adding one.
+      - name: Absence-based ignores must stay outside the build graph
+        run: |
+          set -uo pipefail
+          status=0
+          for crate in rsa rkyv; do
+            if cargo tree -i "$crate" --target all --quiet 2>/dev/null | grep -q .; then
+              echo "::error::$crate is now IN the build graph, but .cargo/audit.toml"\
+                   "ignores its advisory on the grounds that it is not. Re-triage the"\
+                   "entry — do not widen the ignore."
+              cargo tree -i "$crate" --target all | head -20
+              status=1
+            else
+              echo "ok: $crate is outside the build graph"
+            fi
+          done
+          exit $status

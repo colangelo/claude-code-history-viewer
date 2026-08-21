@@ -28,4 +28,19 @@ ignore = [
     # Way out: a Tauri release that bumps plist past quick-xml 0.41.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # rkyv 0.7.46 — out-of-bounds reads validating archives containing Rc/Arc.
+    # The fix is 0.8.17, a semver-major bump we do not control: the only path is
+    # rust_decimal's optional `rkyv` feature, which nothing here enables, so it
+    # is a lockfile entry that is never compiled (`cargo tree -i rkyv
+    # --target all` prints nothing — same evidence as the rsa entry above, and
+    # `cargo tree -i h2` printing a real path is the control that says the
+    # command works). We also never deserialize an rkyv archive from anywhere.
+    # Verified three ways before ignoring: no build-graph edge, no `rkyv`
+    # symbols in `strings` on the shipped binary, and the same result reached
+    # independently by infra on m4m before the cchv-v0.20.0 swap.
+    # Way out: drops off the list when rust_decimal's dependency moves to
+    # rkyv 0.8. The CI guard below fails if it ever enters the build graph, so
+    # this entry cannot outlive its justification silently.
+    "RUSTSEC-2026-0235",
 ]
