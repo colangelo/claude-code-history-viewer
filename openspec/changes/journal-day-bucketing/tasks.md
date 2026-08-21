@@ -284,3 +284,46 @@ copy, so nothing about a green `main` says anything about what is running"* — 
 applied it to one task. The rule is about the **install boundary**, so it applies to
 every task on the far side of it at once. When a deploy gap is found, re-check the whole
 section it sits in, not the task that surfaced it.
+
+## 13. Dirty detection at the grouping's granularity (#37)
+
+The defect this change shipped, found 2026-08-21 09:34Z on the live archive while
+explaining a group count infra could not account for. §2 moved *grouping* from session
+to day and left *dirty detection* on `sessions.ingest_xid`, so one still-running session
+re-dirtied every day it had ever touched, on every ingest — frozen days re-distilled
+forever at ~20 s/group, and `/v1/healthz/journal` permanently 503.
+
+Confirmed from two independent instruments: here, session 1133739's 2026-08-15 messages
+last arrived 2026-08-16 while the session was still being written on 2026-08-21; and by
+infra, 7 of 9 groups distilled at 08:51Z pending again by 09:36Z (78% re-work), with one
+project re-dirtied on four separate frozen days.
+
+- [x] 13.1 `migrations/0008_messages_ingest_xid.sql` — `ADD COLUMN` with **no** default
+      (metadata-only; a volatile default rewrites 7.3 M rows and holds ACCESS EXCLUSIVE),
+      then `SET DEFAULT pg_current_xact_id()` for new rows. Existing rows stay NULL and
+      read as visible, so the migration does not mark the archive dirty. Numbered 0008,
+      not 0007 — the tick-observability work took 0007 first, and two files at one
+      version is a duplicate-version error, not a merge.
+- [x] 13.2 `journal::pending` — the ingest test now asks the group's **own day's**
+      messages (`m.session_id = ANY(g.session_ids)` bounded by the day window, using
+      `messages_session_timestamp_idx`). `grp` no longer aggregates session xids.
+- [x] 13.3 `health::healthz_journal` — same change, so the two still agree.
+- [x] 13.4 Regression test `a_live_session_does_not_dirty_its_own_frozen_day`. Verified
+      meaningful: reverted to the session-granular form it fails with **both** days
+      pending; on the fix only the day that gained a message is.
+- [x] 13.5 Spec delta: the pending requirement now states the day scoping and carries a
+      scenario for it.
+- [ ] 13.6 Release + deploy. Infra is holding for it and has silenced the `cchv-journal`
+      **page** (not the check) under `ac/infra#118`, which names this fix as the expiry
+      condition. **Closing that issue is part of this deploy, not a follow-up.**
+
+**Two test-harness bugs this uncovered, both of which made a test lie rather than fail:**
+
+- `seed()` keyed messages by array index, so a *second* seed of the same session
+  restarted at 0, collided, upserted to a no-op — and the test observed "no new data"
+  while believing it had ingested some. Keys are timestamp-derived now.
+- `pending_for()` read absence off a possibly-truncated page (fixed earlier in §8).
+
+Both have the same shape as the product bugs this change has been chasing all day: a
+check that cannot fail, reporting success. Worth noticing that the test harness is not
+exempt from the class of bug the tests exist to catch.

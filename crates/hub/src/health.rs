@@ -413,24 +413,21 @@ pub async fn healthz_journal(
     // both free there and the more correct number (see its doc comment).
     let horizon_from = horizon_from(Utc::now(), day_start_hour, within_days);
     let rows = sqlx::query_as::<_, JournalGroupRow>(&format!(
-        r"
+        r#"
         WITH {session_days},
         sess_win AS (
             SELECT d.session_id     AS session_id,
                    d.entry_date     AS entry_date,
                    p.project_path   AS project_path,
-                   s.ingest_xid     AS ingest_xid,
                    d.latest_arrival AS latest_arrival
             FROM msg_days d
             JOIN projects p ON d.project_id = p.id
-            JOIN sessions s ON s.id = d.session_id
             WHERE d.entry_date
                     < ((now() - make_interval(hours => $1::int)) AT TIME ZONE 'UTC')::date
         ),
         grp AS (
             SELECT entry_date, project_path,
                    array_agg(session_id ORDER BY session_id) AS session_ids,
-                   array_agg(ingest_xid)                     AS ingest_xids,
                    max(latest_arrival)                       AS latest_arrival
             FROM sess_win
             GROUP BY entry_date, project_path
@@ -442,10 +439,17 @@ pub async fn healthz_journal(
         WHERE j.id IS NULL
            OR j.session_ids IS DISTINCT FROM g.session_ids
            OR EXISTS (
-                SELECT 1 FROM unnest(g.ingest_xids) AS x
-                WHERE NOT pg_visible_in_snapshot(x, j.generated_snapshot))
+                SELECT 1
+                FROM messages m
+                WHERE m.session_id = ANY(g.session_ids)
+                  AND m."timestamp" >= ((g.entry_date
+                        + make_interval(hours => $1::int)) AT TIME ZONE 'UTC')
+                  AND m."timestamp" <  ((g.entry_date + 1
+                        + make_interval(hours => $1::int)) AT TIME ZONE 'UTC')
+                  AND m.ingest_xid IS NOT NULL
+                  AND NOT pg_visible_in_snapshot(m.ingest_xid, j.generated_snapshot))
         ORDER BY g.entry_date DESC, g.project_path DESC
-        ",
+        "#,
         session_days = crate::journal::SESSION_DAYS_CTE,
     ))
     .bind(day_start_hour)

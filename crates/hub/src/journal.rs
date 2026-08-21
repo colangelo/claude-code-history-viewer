@@ -151,6 +151,16 @@ fn parse_date(s: Option<&str>, which: &str) -> Result<Option<NaiveDate>, HubErro
 /// exact, immune to wall-clock interleaving — **or** when the stored entry's
 /// `session_ids` are not the set the group computes today (provenance drift).
 ///
+/// The ingest test is asked of **that day's messages**, via `messages.ingest_xid`
+/// (migration 0008). It used to be asked of `sessions.ingest_xid`, which was the
+/// right granularity only while a session belonged to one group. Once a session
+/// belonged to every day it had messages on, one still-running session re-dirtied
+/// every day it had ever touched, on every ingest — frozen days re-distilled
+/// forever, `healthz/journal` permanently 503 (#37). The mechanism is unchanged
+/// and deliberately so: still `pg_visible_in_snapshot`, still commit-order exact,
+/// just asked about the right rows. A NULL `ingest_xid` is a row predating the
+/// migration and counts as visible.
+///
 /// Drift is what repairs history written under the old session-start fold, and
 /// it repairs it the same way everything else here works: from the data, not
 /// from an operator remembering to pass a flag. A group re-distilled with the
@@ -169,16 +179,14 @@ pub async fn pending(
     let page = Page::from(params.limit, None);
 
     let rows = sqlx::query_as::<_, PendingGroup>(&format!(
-        r"
+        r#"
         WITH {SESSION_DAYS_CTE},
         grp AS (
             SELECT d.entry_date                                  AS entry_date,
                    p.project_path                                AS project_path,
-                   array_agg(d.session_id ORDER BY d.session_id) AS session_ids,
-                   array_agg(s.ingest_xid)                       AS ingest_xids
+                   array_agg(d.session_id ORDER BY d.session_id) AS session_ids
             FROM msg_days d
             JOIN projects p ON d.project_id = p.id
-            JOIN sessions s ON s.id = d.session_id
             GROUP BY 1, 2
         )
         SELECT g.entry_date, g.project_path, g.session_ids,
@@ -192,11 +200,19 @@ pub async fn pending(
           AND (j.id IS NULL
                OR j.session_ids IS DISTINCT FROM g.session_ids
                OR EXISTS (
-                    SELECT 1 FROM unnest(g.ingest_xids) AS x
-                    WHERE NOT pg_visible_in_snapshot(x, j.generated_snapshot)))
+                    SELECT 1
+                    FROM messages m
+                    WHERE m.session_id = ANY(g.session_ids)
+                      AND m."timestamp" >= ((g.entry_date
+                            + make_interval(hours => $1::int)) AT TIME ZONE 'UTC')
+                      AND m."timestamp" <  ((g.entry_date + 1
+                            + make_interval(hours => $1::int)) AT TIME ZONE 'UTC')
+                      AND m.ingest_xid IS NOT NULL
+                      AND NOT pg_visible_in_snapshot(
+                                m.ingest_xid, j.generated_snapshot)))
         ORDER BY g.entry_date DESC, g.project_path DESC
         LIMIT $3
-        "
+        "#
     ))
     .bind(DAY_START_HOUR)
     .bind(from)

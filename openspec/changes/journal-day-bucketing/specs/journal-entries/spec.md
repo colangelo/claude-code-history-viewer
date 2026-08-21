@@ -47,11 +47,14 @@ about which sessions belong to a day.
 The hub SHALL expose `GET /v1/journal/pending` (read-auth) returning the
 (date, project_path) groups needing distillation, computed from data — not from a
 schedule. A group is pending when it has archived sessions but no journal row,
-**or** when session data for it became visible after the entry was generated (dirty)
-— judged by transaction visibility, not wall-clock comparison, so an ingest still in
-flight when the entry was generated counts as dirty regardless of timestamp
+**or** when **that day's** message data became visible after the entry was generated
+(dirty) — judged by transaction visibility, not wall-clock comparison, so an ingest
+still in flight when the entry was generated counts as dirty regardless of timestamp
 interleaving, and replaying an already-archived batch (no new messages) does NOT dirty
-a group — **or** when the stored entry's session ids differ from the group's computed
+a group. The visibility test MUST be scoped to the messages of the group's own logical
+day: a session that spans several days belongs to all of them, so testing at session
+granularity lets one still-running session hold every day it has ever touched
+permanently dirty — **or** when the stored entry's session ids differ from the group's computed
 session set (provenance drift). Each pending group SHALL carry an `as_of` generation
 marker (a database snapshot taken before the caller reads any transcript) that the
 distiller echoes back in its entry POST, anchoring dirty-detection to the moment the
@@ -74,6 +77,12 @@ computed group key, so a bounded call does not read the whole archive.
 - **WHEN** an entry was generated at T and a session for its group is ingested at T+1
   (e.g. a machine syncing days of backlog)
 - **THEN** the group reappears in the pending list until re-distilled
+
+#### Scenario: A still-running session does not dirty its own frozen days
+
+- **WHEN** a session has messages on two logical days, both are distilled, and the
+  session then gains a new message on the later day only
+- **THEN** the later day is pending and the earlier day is NOT
 
 #### Scenario: Provenance drift dirties an existing entry
 

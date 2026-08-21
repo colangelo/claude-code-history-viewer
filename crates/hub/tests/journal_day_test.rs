@@ -157,8 +157,13 @@ async fn seed(hub: &TestHub, project: &str, sessions: &[(&str, Vec<String>)]) {
         messages: sessions
             .iter()
             .flat_map(|(name, stamps)| {
+                // Key off the TIMESTAMP, not the index: a second `seed` for the
+                // same session restarts the index at 0, so index-keyed messages
+                // collide with the first batch, upsert to a no-op, and the test
+                // silently observes "no new data" instead of what it seeded.
                 stamps.iter().enumerate().map(move |(i, ts)| {
-                    msg(name, &format!("{name}-k{i}"), i32::try_from(i).unwrap(), ts)
+                    let key = format!("{name}-{}", ts.replace([':', '-'], ""));
+                    msg(name, &key, i32::try_from(i).unwrap(), ts)
                 })
             })
             .collect(),
@@ -195,18 +200,34 @@ async fn pending_for(hub: &TestHub, project: &str, from: &str) -> Vec<(String, V
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     let all = body.as_array().unwrap();
+    // Headroom, measured 2026-08-21 rather than assumed: one full run of the
+    // archive suite against a fresh database peaks at 69 groups on a single
+    // logical date, against a 200 cap. So CI is comfortably clear and the guard
+    // below fires only on a REUSED local database — which is exactly when a
+    // silent truncation would otherwise be read as a product bug.
     // A FULL page means "the newest LIMIT groups", not "all of them", so every
     // absence assertion built on one is unsound — the row may be on page two.
     // Not hypothetical: this silently broke
     // `idle_day_inside_a_session_span_is_not_a_group` once the shared database
     // held 322 groups in the window, and it failed by accusing the PRODUCT.
     // Refuse to answer rather than answer unsoundly.
+    // A full page is only unsound if it did not reach back to `from`. Results are
+    // ordered `entry_date DESC`, so when the last row's date is <= `from` every
+    // group strictly newer than `from` is present — and every caller here asserts
+    // about dates strictly newer than the `from` it passes. Panicking on ANY full
+    // page (the first version of this guard) made the suite fail in a shared
+    // database that was merely busy, not truncating.
+    let reached_from = all
+        .last()
+        .and_then(|g| g["entry_date"].as_str())
+        .is_some_and(|d| d <= from);
     assert!(
-        all.len() < LIMIT,
-        "pending returned a FULL page ({LIMIT}) for from={from}: this test's groups \
-         may be past the page boundary, so neither presence nor absence can be \
-         concluded. The shared test database has accumulated too much data — drop \
-         and recreate it (CI runs against a fresh one). Refusing to assert."
+        all.len() < LIMIT || reached_from,
+        "pending returned a FULL page ({LIMIT}) for from={from} whose oldest row is \
+         {:?} — the page was truncated before reaching {from}, so this test's groups \
+         may be past the boundary and neither presence nor absence can be concluded. \
+         Refusing to assert. (Shared test database; CI runs against a fresh one.)",
+        all.last().and_then(|g| g["entry_date"].as_str())
     );
     all.iter()
         .filter(|g| g["project_path"] == Value::String(project.to_string()))
@@ -653,5 +674,60 @@ async fn each_day_reports_its_own_arrival_not_the_session_s() {
         later["stale"],
         Value::Bool(false),
         "the later day's data just arrived: {later:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// dirty granularity (#37)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_live_session_does_not_dirty_its_own_frozen_day() {
+    // The defect that shipped in cchv-v0.19.0. Grouping became day-granular while
+    // dirty detection stayed on `sessions.ingest_xid`, so ONE still-running
+    // session re-dirtied every day it had ever touched, on every ingest. Frozen
+    // days were re-distilled forever and `/v1/healthz/journal` could never reach
+    // green. Measured on the live archive: session 1133739's 2026-08-15 messages
+    // last arrived 2026-08-16, the session was still being written on 2026-08-21,
+    // and it held the 2026-08-15 group dirty indefinitely.
+    let hub = spawn().await;
+    let project = format!("/w/jd-dirty-{}", hub.hostname);
+    seed(
+        &hub,
+        &project,
+        &[("s-live", vec![at(2, 10, 0, 0), at(1, 10, 0, 0)])],
+    )
+    .await;
+    let from = day(3).to_string();
+    let frozen = day(2).to_string();
+    let recent = day(1).to_string();
+
+    // Distil BOTH days, so neither is pending on provenance or absence.
+    let ids = pending_for(&hub, &project, &from).await[0].1.clone();
+    for d in [&frozen, &recent] {
+        assert_eq!(post_entry(&hub, &project, d, &ids).await.status(), 200);
+    }
+    assert!(
+        pending_for(&hub, &project, &from).await.is_empty(),
+        "both days drained"
+    );
+
+    // Now the session gains a message on the RECENT day only — the ordinary case
+    // of an agent session that is still running. Same session id, so
+    // `sessions.ingest_xid` is bumped, which is what used to dirty everything.
+    let batch_2 = vec![at(1, 18, 0, 0)];
+    seed(&hub, &project, &[("s-live", batch_2)]).await;
+
+    let after = pending_for(&hub, &project, &from).await;
+    let dates: Vec<&str> = after.iter().map(|(d, _)| d.as_str()).collect();
+    assert!(
+        dates.contains(&recent.as_str()),
+        "the day that gained a message must be pending: {after:?}"
+    );
+    assert!(
+        !dates.contains(&frozen.as_str()),
+        "the FROZEN day gained nothing and must NOT be pending — a still-running \
+         session re-dirtying every day it ever touched is #37, and it costs an LLM \
+         call per day per tick forever: {after:?}"
     );
 }
