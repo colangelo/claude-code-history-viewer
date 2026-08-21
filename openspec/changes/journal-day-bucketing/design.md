@@ -151,9 +151,24 @@ Additive, `IF NOT EXISTS`, no rewrite.
   Deriving the group from non-sidechain messages instead would push a
   transcript-shaping concern into the hub's group key; keeping the hub's rule
   simple and letting the distiller judge substance matches how `skip` already works.
-- **A long session is re-distilled every day it stays open,** in each of its days. That
-  is correct — those days really are dirty — but a session running for a week costs a
-  re-distill of each earlier day whenever the `ingest_xid` moves. The `session_ids`
-  drift check does not add to this; the existing snapshot rule already does it.
+- ~~**A long session is re-distilled every day it stays open,** in each of its days.
+  That is correct — those days really are dirty~~ — **WRONG, and it shipped. See #37.**
+  Measured on the live archive 2026-08-21: session 1133739's 2026-08-15 messages last
+  arrived 2026-08-16, but the session was still being written on 2026-08-21, so its
+  `ingest_xid` re-dirtied the frozen 2026-08-15 group indefinitely. All 19 pending
+  groups at 09:34Z had been distilled minutes earlier and were already dirty again.
+  Those days are **not** dirty: new messages today cannot change a frozen day's slice.
+  The defect is that this change made grouping day-granular while leaving dirty
+  detection on `sessions.ingest_xid`, which is session-granular. Consequences: endless
+  LLM spend on frozen days, and `healthz/journal` permanently 503 while any long session
+  is active.
+
+  **The reasoning error is the part worth keeping.** This risk was written down, looked
+  at, and dismissed in the same sentence with "that is correct" — a claim about live
+  behaviour settled by intuition when the archive was one query away. Two of the three
+  places where session-ness was assumed (the arrival timestamp, this predicate) were
+  found only by someone noticing an odd number in production. **When a change alters the
+  granularity of a key, sweep every predicate that tests that key** — do not evaluate
+  them one at a time as they occur to you.
 - **Pending cost grows with total archive size,** not window size, while the seq-scan
   plan holds. See Decision 3; it inverts once the window is selective enough.
