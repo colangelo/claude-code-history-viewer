@@ -76,6 +76,25 @@ archive (pg1) on 2026-08-21 and are recorded on **#36 comment 7390** and **#41 c
    `pg_stat_user_tables` for `messages` (last autovacuum, dead tuples) and records it, so
    a future regression has a baseline to be compared against rather than a shrug.
 
+6. **The fold is ~80 % of the query, and the design says so out loud.** Measured after
+   the first draft of this document: the complete `healthz_journal` query takes 8,267 ms,
+   of which the fold (seq scan → `grp`) is ~6.6 s and the per-group `EXISTS` provenance
+   check (`ingest_xid` + `pg_visible_in_snapshot`, shipped in v0.20.1) is ~1.6 s. So a
+   perfect index-only scan is **bounded by Amdahl at ~80 %** of this query and leaves the
+   `EXISTS` untouched. This is stated because the first draft implied the fold *was* the
+   endpoint, which would have set up the deploy to under-deliver against its own promise.
+   Optimising the `EXISTS` is deliberately out of scope — it is a different access pattern
+   (per-group, session-scoped) and deserves its own measurement.
+
+7. **`SET LOCAL work_mem` is a real third option and complements the index.** The same
+   plan reports ~130 MB of temp file I/O per execution (`temp read=16664
+   written=16701`) against `work_mem = 4 MB`: the aggregate over ~2.2 M rows spills to
+   disk on **every poll**. Raising it for just these two statements costs no storage, no
+   schema change and no behaviour change, and it is reversible in one line. It is not an
+   alternative to the index — the index removes the bytes read, this removes the bytes
+   *written* — and the tasks measure both, separately, so neither is credited with the
+   other's win.
+
 ## Risks / Trade-offs
 
 - [The planner declines the new index] → the same cost model that prefers a seq scan today
@@ -96,6 +115,14 @@ archive (pg1) on 2026-08-21 and are recorded on **#36 comment 7390** and **#41 c
 - [The measurements age] → they are a snapshot of a growing archive. The spec is written
   as "does not read payloads", which stays true as the table grows; the numbers in the
   docs are dated.
+- [Benchmarking this endpoint with a client timeout measures your own backlog] → an
+  abandoned HTTP request leaves the query running server-side; six accumulated during
+  this change's own measurement and starved each other on IO. Probe without a client
+  timeout, and check `pg_stat_activity` for orphans before trusting a reading.
+- [Today's high readings are a cold-cache picture] → heavy analysis scans for #41 evicted
+  the window from `shared_buffers` the same afternoon. The honest statement is a *range*
+  — floor ~3.7 s warm, up to ~19 s cold — not a single new number. Gatus independently
+  saw 13.30 s, so the range is real and not an artefact of local probing.
 
 ## Migration Plan
 

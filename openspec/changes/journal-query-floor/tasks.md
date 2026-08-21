@@ -1,5 +1,9 @@
 ## 1. Baseline, taken before anything changes
 
+- [ ] 1.0 Probe **without a client timeout** and check `pg_stat_activity` for orphaned
+      `msg_days` queries before any reading. An abandoned HTTP request leaves the query
+      running server-side; six accumulated during this change's own measurement and
+      starved each other. Verify: zero active `%msg_days%` queries before each timing run.
 - [ ] 1.1 Capture `EXPLAIN (ANALYZE, BUFFERS)` for the `healthz_journal` fold query and for
       `journal::pending`, against pg1, in one session. Verify: both plans recorded with node
       type and `shared read`/`hit` block counts, saved into the change folder as
@@ -37,6 +41,13 @@
       decision 1's fallback (`SET LOCAL random_page_cost` on just these two statements)
       before deciding. Verify: whichever way it goes, the reading is on #36 — a slow
       endpoint left slow silently is the outcome this task exists to prevent.
+- [ ] 3.5 Measure `SET LOCAL work_mem` **separately from the index**, so neither is
+      credited with the other's win: re-run the two queries with work_mem raised (start
+      from the ~130 MB of temp I/O the baseline reports and size from pg1's memory, not a
+      guess), with and without the index. Verify: four readings recorded — baseline,
+      index only, work_mem only, both — and `temp read/written` drops to ~0 in the
+      work_mem arms. It is complementary, not an alternative: the index removes bytes
+      read, work_mem removes bytes written.
 - [ ] 3.4 Watch one heavy ingest after the build for write amplification on `messages`.
       Verify: ingest duration compared against a pre-build batch of comparable size; noted
       even if unchanged, so a later regression has a baseline.
