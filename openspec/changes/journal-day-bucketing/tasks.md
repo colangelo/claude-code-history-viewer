@@ -80,17 +80,30 @@
       (numbers in design.md). Verified on the real data that the new grouping produces
       a 2026-08-20 group carrying both spanning sessions (it had none), and grows
       2026-08-19 from 7 stored sessions to 9.
-- [ ] 9.2b Post-deploy: confirm `messages_session_timestamp_idx` is used by the
-      windowed fetch, and that the pending query's runtime is in design.md's envelope
-      now that the index exists.
-- [ ] 9.3 Post-deploy: the 2026-08-19 `infra` entry no longer contains 2026-08-20 work,
-      and a 2026-08-20 entry exists carrying the spanning sessions.
+- [x] 9.2b Post-deploy (2026-08-21 00:29Z): `messages_session_timestamp_idx` present on
+      pg1, `indisvalid = t`, 215 MB.
+- [ ] 9.2c Still open: confirm the windowed fetch *plans* onto the new index, and
+      re-measure the pending query now that it exists (design.md's numbers predate it).
+- [x] 9.3a Post-deploy API verification (2026-08-21 00:28Z, **on m4m** — not an
+      independent cross-machine check): windowed read 200 with
+      `X-Total-Count` 64402 vs 67889 unwindowed on session 1231594; malformed bound
+      400; `/v1/healthz` ok. `pending` lists 2026-08-19 `infra` with the corrected
+      9 sessions (7 stored).
+- [ ] 9.3b Awaiting the 01:09Z distiller tick: the 2026-08-19 `infra` entry
+      re-distilled to 9 sessions.
+- [ ] 9.3c Awaiting ~04:30–05:00Z (the 20th closes at 04:00Z): a 2026-08-20 entry
+      exists carrying sessions 1231594 and 1233018. **This is the actual proof of the
+      reported bug being fixed.**
+- [ ] 9.3d `/v1/healthz/journal` back to 200 (503 now: 64 pending, 53 stale — the
+      expected consequence of drift-as-dirty; est. green ~03:30Z).
 
 ## 10. Rollout
 
-- [ ] 10.1 Release + deploy via the `cchv-deploy` skill (hub binary swap on m4m — the
-      migration runs at hub startup).
+- [x] 10.1 Released `cchv-v0.19.0` (`91df7b8e`), relayed `576c10a3`, swapped by infra
+      and verified live at 00:27:31Z. Follow-ups `e4615da0` (the expected 503) and
+      `6cba8c6e` (corrected clear-by time).
 - [ ] 10.2 After the first forward tick drains, run the bounded historical repair:
       `cchv-distill --backfill --from 2026-07-04` — 459 groups (287 never distilled,
       172 drifted), 20 per tick by default. Operator's call, not automatic.
-- [ ] 10.3 Close `ac/claude-code-history-viewer#35` with the measured before/after.
+- [ ] 10.3 Close `ac/claude-code-history-viewer#35` with the measured before/after —
+      **after 9.3c**, which is the before/after worth quoting.
