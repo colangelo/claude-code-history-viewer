@@ -486,6 +486,24 @@ pub struct TickPayload {
     /// Groups the tick found pending. Recorded before any LLM call, so it is the
     /// size of the work list — not of the work completed.
     pub groups_pending: i32,
+    /// Which distiller copy is ticking (#40): the release version its script was
+    /// cut at. Optional so a distiller that predates the field keeps ticking;
+    /// absent reads back as `null`, which is itself the reading "an old
+    /// distiller is ticking". Not validated against the hub's own version —
+    /// skew is a *reading*, not an error, and seeing it is the whole point.
+    #[serde(default)]
+    pub distiller_version: Option<String>,
+    /// Git blob id of the file that actually ran — `git hash-object` over its own
+    /// bytes — so the log, this table and `/v1/healthz/journal` can be compared
+    /// to `git rev-parse <rev>:scripts/cchv-distill.py` without an ssh. Exactly
+    /// 40 lowercase hex when present; anything else is rejected, because a
+    /// malformed identity is worse than none — it reads as one.
+    #[serde(default)]
+    pub distiller_blob: Option<String>,
+}
+
+fn is_git_blob_id(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Records one distiller tick. Machine-token auth, same model as the entry
@@ -521,14 +539,23 @@ pub async fn record_tick(
             payload.groups_pending
         )));
     }
+    if let Some(blob) = payload.distiller_blob.as_deref() {
+        if !is_git_blob_id(blob) {
+            return Err(HubError::BadRequest(format!(
+                "distiller_blob must be a 40-character lowercase hex git blob id, got `{blob}`"
+            )));
+        }
+    }
 
     let tick_at: DateTime<Utc> = sqlx::query_scalar(
-        r"INSERT INTO distiller_ticks (mode, groups_pending)
-          VALUES ($1, $2)
+        r"INSERT INTO distiller_ticks (mode, groups_pending, distiller_version, distiller_blob)
+          VALUES ($1, $2, $3, $4)
           RETURNING tick_at",
     )
     .bind(&payload.mode)
     .bind(payload.groups_pending)
+    .bind(&payload.distiller_version)
+    .bind(&payload.distiller_blob)
     .fetch_one(&state.pool)
     .await?;
 

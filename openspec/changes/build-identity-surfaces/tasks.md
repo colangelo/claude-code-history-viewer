@@ -1,6 +1,6 @@
 ## 1. Hub: version on `/v1/healthz` (#39)
 
-- [ ] 1.1 `crates/hub/src/health.rs::healthz` — add `"version": env!("CARGO_PKG_VERSION")`
+- [x] 1.1 `crates/hub/src/health.rs::healthz` — add `"version": env!("CARGO_PKG_VERSION")`
       to both the `db: up` and `db: down` bodies. Verify: `read_test.rs`
       `healthz_reports_ok_unauthenticated` asserts `version == env!("CARGO_PKG_VERSION")`
       and that it is exact semver (`\d+\.\d+\.\d+`), and the db-down test asserts the
@@ -8,25 +8,25 @@
 
 ## 2. Hub: tick identity (#40, hub half)
 
-- [ ] 2.1 `migrations/0009_distiller_ticks_identity.sql` — `ALTER TABLE distiller_ticks
+- [x] 2.1 `migrations/0009_distiller_ticks_identity.sql` — `ALTER TABLE distiller_ticks
       ADD COLUMN distiller_version text, ADD COLUMN distiller_blob text` (nullable, no
       default), with a header comment saying why null is a reading. Verify:
       `migration_test.rs` applies cleanly on a 0008 database and the columns exist.
-- [ ] 2.2 `journal.rs::TickPayload` — `#[serde(default)] distiller_version:
+- [x] 2.2 `journal.rs::TickPayload` — `#[serde(default)] distiller_version:
       Option<String>`, `distiller_blob: Option<String>`; `record_tick` rejects a present
       blob that is not `^[0-9a-f]{40}$` with `BadRequest` naming `distiller_blob`, and
       binds both into the INSERT. Verify: `read_test.rs` — POST with both fields → 200
       and the row holds them; POST with neither → 200 (unchanged behaviour); POST with a
       39-char / uppercase / non-hex blob → 400 whose message contains `distiller_blob`
       and no row is written.
-- [ ] 2.3 `health.rs` — `TickSummary` + the LATERAL query gain `distiller_version`,
+- [x] 2.3 `health.rs` — `TickSummary` + the LATERAL query gain `distiller_version`,
       `distiller_blob`; `JournalHealthResponse` gains `hub_version: &'static str`
       (`CARGO_PKG_VERSION`), `last_tick_distiller_version`, `last_tick_distiller_blob`.
       Verdict logic untouched. Verify: `read_test.rs` — after a tick with identity the
       journal health body carries all three; after a tick without identity the two
       `last_tick_*` are null and `last_tick_at` is set; with an empty table all three
       tick fields are null and `hub_version` is still present.
-- [ ] 2.4 `cargo test -p hub -- --test-threads=1`, `cargo clippy --all-targets
+- [x] 2.4 `cargo test -p hub -- --test-threads=1`, `cargo clippy --all-targets
       --all-features -- -D warnings`, `cargo fmt --all -- --check` all green. Verify:
       exit codes.
 

@@ -25,17 +25,29 @@ use crate::error::HubError;
 use crate::mirror::MirrorState;
 use crate::state::AppState;
 
+/// The release this binary was built at — `package.json`'s version, inherited
+/// through `[workspace.package]` by `just sync-version`. Exact semver; consumers
+/// MUST compare it as such (`0.18.1` is a prefix of `0.18.10`).
+pub const HUB_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     match sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.pool)
         .await
     {
-        Ok(_) => (StatusCode::OK, Json(json!({ "status": "ok", "db": "up" }))),
+        // `version` is the workspace version `just sync-version` derives from
+        // package.json, so a swap is proven by reading the running build rather
+        // than by guessing it from which routes answer (#39). Present in both
+        // arms: a degraded hub still has an identity.
+        Ok(_) => (
+            StatusCode::OK,
+            Json(json!({ "status": "ok", "db": "up", "version": HUB_VERSION })),
+        ),
         Err(e) => {
             tracing::error!(error = %e, "healthz db check failed");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "status": "degraded", "db": "down" })),
+                Json(json!({ "status": "degraded", "db": "down", "version": HUB_VERSION })),
             )
         }
     }
@@ -285,6 +297,20 @@ pub struct JournalHealthResponse {
     /// counting `done:` lines in the distiller log.
     pub ticks_last_24h: i64,
     pub max_tick_age_secs: Option<i64>,
+    /// Identity next to liveness (#40). A release deploys in two halves through
+    /// different hands — a hub swap and a distiller reinstall — and this is the
+    /// one read that says whether both landed: `hub_version` ahead of
+    /// `last_tick_distiller_version` *after a tick* means the distiller half is
+    /// still the old copy. Reported, never alerted on.
+    pub hub_version: &'static str,
+    /// The release version the last-ticking distiller's script was cut at.
+    /// `null` until a tick arrives from a distiller that announces itself.
+    pub last_tick_distiller_version: Option<String>,
+    /// Git blob id of the distiller file that actually ran — equal to
+    /// `git rev-parse <rev>:scripts/cchv-distill.py` for the revision the
+    /// installed copy matches, so a reader with the repo can name the commit the
+    /// copy came from, or show that it matches none.
+    pub last_tick_distiller_blob: Option<String>,
     pub groups: Vec<JournalStaleGroup>,
 }
 
@@ -295,6 +321,8 @@ struct TickSummary {
     last_tick_at: Option<DateTime<Utc>>,
     last_tick_mode: Option<String>,
     last_tick_groups_pending: Option<i32>,
+    last_tick_distiller_version: Option<String>,
+    last_tick_distiller_blob: Option<String>,
     ticks_last_24h: i64,
 }
 
@@ -467,15 +495,17 @@ pub async fn healthz_journal(
     // most needs to be able to answer.
     let ticks = sqlx::query_as::<_, TickSummary>(
         r"
-        SELECT t.tick_at        AS last_tick_at,
-               t.mode           AS last_tick_mode,
-               t.groups_pending AS last_tick_groups_pending,
+        SELECT t.tick_at           AS last_tick_at,
+               t.mode              AS last_tick_mode,
+               t.groups_pending    AS last_tick_groups_pending,
+               t.distiller_version AS last_tick_distiller_version,
+               t.distiller_blob    AS last_tick_distiller_blob,
                (SELECT count(*) FROM distiller_ticks
                  WHERE tick_at > now() - interval '24 hours')::bigint
                    AS ticks_last_24h
         FROM (SELECT 1) AS base
         LEFT JOIN LATERAL (
-            SELECT tick_at, mode, groups_pending
+            SELECT tick_at, mode, groups_pending, distiller_version, distiller_blob
             FROM distiller_ticks
             ORDER BY tick_at DESC
             LIMIT 1
@@ -539,6 +569,9 @@ pub async fn healthz_journal(
             last_tick_groups_pending: ticks.last_tick_groups_pending,
             ticks_last_24h: ticks.ticks_last_24h,
             max_tick_age_secs,
+            hub_version: HUB_VERSION,
+            last_tick_distiller_version: ticks.last_tick_distiller_version,
+            last_tick_distiller_blob: ticks.last_tick_distiller_blob,
             groups,
         }),
     ))

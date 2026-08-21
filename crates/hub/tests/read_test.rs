@@ -165,6 +165,16 @@ async fn healthz_reports_ok_unauthenticated() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
     assert_eq!(body["db"], "up");
+    // #39: a swap is proven by reading the running build, not by guessing it
+    // from which routes answer. Exact semver, equal to the workspace version
+    // `just sync-version` derives from package.json.
+    let version = body["version"].as_str().expect("version reported");
+    assert_eq!(version, env!("CARGO_PKG_VERSION"));
+    let parts: Vec<&str> = version.split('.').collect();
+    assert!(
+        parts.len() == 3 && parts.iter().all(|p| p.parse::<u32>().is_ok()),
+        "not exact semver: {version}"
+    );
 }
 
 #[tokio::test]
@@ -1246,6 +1256,103 @@ async fn journal_tick_record_validates_and_requires_a_token() {
     assert_eq!(body["last_tick_at"], Value::Null);
     assert_eq!(body["last_tick_age_secs"], Value::Null);
     assert_eq!(body["ticks_last_24h"], 0);
+}
+
+/// #40: the tick record carries which distiller copy ticked, and journal health
+/// reports it next to the hub's own version — so "did both halves of the release
+/// land" is one GET instead of a hub probe plus an ssh and a `cmp`.
+#[tokio::test]
+async fn journal_tick_identity_is_stored_and_reported() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    clear_ticks(&pool).await;
+
+    // Empty table: identity is null, but the hub still names itself.
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["hub_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["last_tick_distiller_version"], Value::Null);
+    assert_eq!(body["last_tick_distiller_blob"], Value::Null);
+
+    // A pre-identity distiller (no fields at all) is still a tick — and reads as
+    // "an old distiller is ticking", which is itself the point.
+    let resp = post_tick(&hub, json!({"mode": "forward", "groups_pending": 0}), true).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(body["last_tick_at"].is_string());
+    assert_eq!(body["last_tick_distiller_version"], Value::Null);
+    assert_eq!(body["last_tick_distiller_blob"], Value::Null);
+
+    // A distiller that says who it is.
+    let blob = "0123456789abcdef0123456789abcdef01234567";
+    let resp = post_tick(
+        &hub,
+        json!({
+            "mode": "forward",
+            "groups_pending": 3,
+            "distiller_version": "0.21.0",
+            "distiller_blob": blob,
+        }),
+        true,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["last_tick_distiller_version"], "0.21.0");
+    assert_eq!(body["last_tick_distiller_blob"], blob);
+    assert_eq!(body["hub_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(body["ticks_last_24h"], 2);
+    let stored: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT distiller_version, distiller_blob FROM distiller_ticks ORDER BY tick_at DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored, (Some("0.21.0".into()), Some(blob.into())));
+}
+
+/// A malformed identity is worse than none, because it reads as one.
+#[tokio::test]
+async fn journal_tick_rejects_a_malformed_blob_id() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    clear_ticks(&pool).await;
+
+    for bad in [
+        "0123456789abcdef0123456789abcdef0123456",  // 39 chars
+        "0123456789ABCDEF0123456789ABCDEF01234567", // uppercase
+        "0123456789abcdef0123456789abcdef0123456g", // non-hex
+        "",
+    ] {
+        let resp = post_tick(
+            &hub,
+            json!({"mode": "forward", "groups_pending": 0, "distiller_blob": bad}),
+            true,
+        )
+        .await;
+        assert_eq!(resp.status(), 400, "blob {bad:?} must 400");
+        let msg: Value = resp.json().await.unwrap();
+        assert!(
+            msg.to_string().contains("distiller_blob"),
+            "400 must name the field: {msg}"
+        );
+    }
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM distiller_ticks")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "a rejected tick writes nothing");
 }
 
 /// Tick age is reported always and alerts only on request — the `max_lag_rows`
