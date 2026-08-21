@@ -88,7 +88,7 @@
       -p hub`, both censuses, explicit `git add` (five bump targets now), Guards 1+2,
       commit, tag, push both remotes, publication proof by `${SHA}` with `case` on rc.
       Verify: the proof prints `published on internal` and `published on origin`.
-- [ ] 6.3 Phase 4 — `gh run list -R colangelo/claude-code-history-viewer --commit
+- [x] 6.3 Phase 4 — `gh run list -R colangelo/claude-code-history-viewer --commit
       $TAGSHA` shows every workflow `success` (Security Audit included: this is the
       first tag after `ac3945ec`, so a red here is new and real); release has 3 assets.
       Verify: the listing and `gh release view`.
