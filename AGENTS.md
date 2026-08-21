@@ -553,6 +553,37 @@ Known dead weight in `rust-tests.yml`: the **Benchmarks** job uploads nothing �
 `target/` to the repo root (the run annotation reads *"No files were found with
 the provided path"*). It only proves benches compile.
 
+**`security-audit.yml` has been red since 2026-08-10 on one unreachable
+advisory, and the fix is a three-line config edit nobody has made.** Diagnosed
+2026-08-21 while gating `cchv-v0.20.0`; the red mark rides on the release commit
+of v0.18.1, v0.19.0 and v0.20.0, which is exactly the shape that gets read as
+"the release is unsafe to deploy". It is not.
+
+- The run reports **`error: 1 vulnerability found!` plus 30 allowed warnings** —
+  the warnings do not fail it. The single vulnerability is **RUSTSEC-2026-0235**,
+  `rkyv 0.7.46`, out-of-bounds reads on archives containing `Rc`/`Arc`.
+- **`rkyv` is never compiled.** It is an *optional* dependency of
+  `rust_decimal 1.37.2` whose feature is not enabled. `cargo tree -i rkyv
+  --target all` prints nothing, while `cargo tree -i rust_decimal --target all`
+  prints the whole chain: `rust_decimal ← byte-unit 5.1.6 ← tauri-plugin-log
+  2.8.0 ← claude-code-history-viewer` (`src-tauri`). The chain is real up to the
+  optional edge and stops there.
+- Note where the chain lands. `tauri-plugin-log` is one of the unconditional
+  desktop deps from *Desktop app (retired…)* above, so this advisory cannot
+  reach the **hub binary we actually deploy** under any feature selection — not
+  merely under today's. It is a `src-tauri`-only lockfile entry, and the
+  web-only-cut deletes it outright.
+- `cargo audit` scans `Cargo.lock`, not the resolved feature graph, so a locked
+  entry is enough to fail it. `.cargo/audit.toml` exists for precisely this and
+  already carries three such entries (`rsa` via `sqlx-mysql`, two `quick-xml`
+  via `plist`) — the `rsa` one proves unreachability with the same
+  `cargo tree -i … --target all` probe used above. **Adding
+  `"RUSTSEC-2026-0235"` with that reasoning is the repo's own convention**, not
+  a new judgment call; the edit was left unmade only because `.cargo/` is
+  permission-gated for agents, and an unattended run must not talk its way past
+  that gate. Way out for the entry: `rust_decimal` moving to `rkyv` 0.8, or the
+  web-only-cut, whichever lands first.
+
 ## Architecture
 
 ### Data Flow

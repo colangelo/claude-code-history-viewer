@@ -73,8 +73,33 @@
       does not matter: new-distiller/old-hub swallows a **405** with a WARN, and
       new-hub/old-distiller reports `null` and alerts nobody. **Distiller half DONE**
       2026-08-21 (infra took it early rather than waiting for the swap; it also
-      carried `journal-day-bucketing` §11.5). Hub half still owed — it needs a
-      release past `cchv-v0.19.0`.
+      carried `journal-day-bucketing` §11.5). Hub half: **`cchv-v0.20.0` is cut and
+      its assets are verified** (2026-08-21, commit `1fb2ef30`) — only the swap on
+      m4m is outstanding, and it is infra's to run.
+
+      Everything a swap relay needs, measured rather than quoted:
+      - asset `cchv-hub-0.20.0-aarch64-apple-darwin`, sha256
+        `6b0cf5f6cd6960eddfc14da6a28a17b22d9312ff9da1caa0e067805915483a45`,
+        57 698 048 B — agreeing across the `.sha256` sidecar and the releases API.
+      - webapp entry chunk `archive-Cq5JqeN4.js` → **`archive-BLFltIAu.js`**, so the
+        old chunk 404s post-swap; `cchv-v0.20.0` appears **2×** in the entry chunk
+        and is the only `cchv-v[0-9]+\.[0-9]+\.[0-9]+` in it.
+      - **swap-proof probe, and it is a GET**: `/v1/healthz/journal` gains the
+        response fields `last_tick_at`, `ticks_last_24h`, `max_tick_age_secs`, all
+        three absent from the v0.19.0 struct. Prefer this over the new
+        `POST /v1/journal/ticks` route, which would prove the same thing by writing
+        a row to prod — and over the `?max_tick_age_secs=` **query param**, which
+        the deployed hub already answers 200 to and ignores, so sending it
+        discriminates nothing (infra, 08-21). The param is honoured *and echoed
+        back in the body* only post-swap; the body is the discriminator, never the
+        status.
+      - migration **0007** (`distiller_ticks`) is new and unapplied: `CREATE TABLE`
+        + one index on an empty table, so unlike 0006's measured 6.66 s there is no
+        long startup window to plan around.
+      - `cchv-v0.20.0`'s Security Audit check is **red, and not a reason to hold the
+        swap** — one unreachable advisory (RUSTSEC-2026-0235, `rkyv`), diagnosed in
+        `AGENTS.md` § *What CI builds*. Archive/Rust/Frontend/Server-Release are all
+        green on that commit.
 
       **The warning is a `405`, not a `404`** (infra's correction of their own probe,
       2026-08-21, and the reason it is worth the line): they read `GET
