@@ -12,11 +12,22 @@
 - [ ] 1.2 Record `pg_stat_user_tables` for `messages`: `last_autovacuum`, `last_autoanalyze`,
       `n_dead_tup`, `n_live_tup`. Verify: values captured in the same file. This is the
       visibility-map baseline decision 5 depends on; an index-only scan degrades silently
-      without it. **Measured 2026-08-21: `last_autovacuum` 2026-08-19, `last_autoanalyze`
-      2026-08-20, `n_mod_since_analyze` 647,856** — i.e. autovacuum is two days behind on
-      the table whose visibility map the index-only scan depends on. Treat that as a
-      finding, not a footnote: it may cap `Heap Fetches` improvements before the index is
-      even judged.
+      without it. **CORRECTED 2026-08-21 (the first version of this line was wrong).**
+      `last_autovacuum 2026-08-19` is *not* a backlog: autovacuum is threshold-driven and
+      no trigger has been crossed — `n_dead_tup` 929 against a 1,515,886 dead-tuple
+      trigger (0.06 %; on an append-mostly archive that trigger will never fire, correctly,
+      because there is nothing to reclaim), and `n_ins_since_vacuum` 1,132,642 against a
+      1,516,886 insert trigger (75 %). Reading a threshold as a schedule was the error.
+
+      **The real constraint is worse and is structural.** The visibility map is maintained
+      by VACUUM, and on this table VACUUM is driven by the *insert* trigger at scale factor
+      0.2 — roughly every 1.5 M inserts. Between runs the newest rows carry no VM mark, and
+      a 7-day journal window reads exactly that hot range. Measured now: the table is
+      **89.5 % VM-marked overall** (501,384 of 559,953 pages), but **46.4 % of the window's
+      rows** (1,132,642 of 2,439,743) sit on pages inserted since the last vacuum. So an
+      index-only scan incurs `Heap Fetches` on ~46 % of what it touches **today**, and that
+      fraction **oscillates with the vacuum cycle** — near 0 % just after a vacuum, ~60 %+
+      just before the next fires.
 - [ ] 1.3 **Capture 1.2 BEFORE any `pg_stat_reset()`.** A clean per-day temp rate wants the
       counters reset (`stats_reset` on `cchv_archive` is NULL, so the 3,781 GB / 295,895
       temp files are lifetime totals and no rate can be derived from them — infra's point).
@@ -41,6 +52,13 @@
 
 ## 3. Prove it, or say it did not work
 
+- [ ] 3.0 **Record where in the vacuum cycle each measurement was taken** — `n_ins_since_vacuum`
+      and `relallvisible`/`relpages` immediately before and after every timing run. Because
+      the unmarked fraction of the window swings from ~0 % to ~60 % across an insert cycle,
+      the *same index* measures anywhere between "nearly free" and "half-wasted" depending
+      on when you look. A single reading without its cycle position is not a measurement of
+      the index; it is a measurement of the day. Verify: every arm's readings carry both
+      numbers.
 - [ ] 3.1 Re-run 1.1's two `EXPLAIN (ANALYZE, BUFFERS)` and diff against `baseline.txt`.
       Verify: node is `Index Only Scan using messages_journal_fold_idx`; `Heap Fetches` is
       small relative to rows returned; `shared read+hit` drops by roughly an order of
@@ -66,6 +84,13 @@
       top-level Sort reports `rows=0.00`), so it is not "floor versus with-work". Candidates
       are `EXPLAIN ANALYZE` instrumentation and an hour of window drift between the two.
       Re-measure both ways in the same session before quoting either number.
+- [ ] 3.6 **Decide whether to ask ac for `autovacuum_vacuum_insert_scale_factor = 0.02`
+      on `messages`** (~150 k inserts between vacuums instead of ~1.5 M, keeping the window
+      mostly VM-marked). infra has named it and deliberately **not run it** — it is a prod
+      DDL on their box and therefore ac's call. Only worth asking once 3.0–3.1 show the
+      index's win is genuinely capped by `Heap Fetches` rather than by the planner ignoring
+      the index. Verify: either a measured case put to ac with numbers, or a recorded
+      decision that the uncapped win is already sufficient.
 - [ ] 3.5 Watch one heavy ingest after the build for write amplification on `messages`.
       Verify: ingest duration compared against a pre-build batch of comparable size; noted
       even if unchanged, so a later regression has a baseline.

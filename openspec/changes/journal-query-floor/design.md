@@ -69,12 +69,26 @@ archive (pg1) on 2026-08-21 and are recorded on **#36 comment 7390** and **#41 c
    whatever else pg1 is doing; the buffer counts are the thing the index actually changes.
    Take the "before" reading in the same session as the "after", or it is not a comparison.
 
-5. **Autovacuum is part of the design, not an afterthought.** An index-only scan reads
-   the visibility map to decide whether it may skip the heap; on an append-heavy table
-   whose autovacuum is behind, `Heap Fetches` rises and the plan quietly degrades toward
-   the thing it replaced. So the change asserts the current state of
-   `pg_stat_user_tables` for `messages` (last autovacuum, dead tuples) and records it, so
-   a future regression has a baseline to be compared against rather than a shrug.
+5. **The visibility map is the design's biggest exposure, and the mechanism is not the
+   obvious one.** An index-only scan reads the VM to decide whether it may skip the heap.
+   The first version of this decision said "autovacuum must be keeping up", which is the
+   wrong frame: autovacuum **is** keeping up by its own rules (`n_dead_tup` 929 against a
+   1.5 M dead-tuple trigger — on an append-mostly archive that trigger correctly never
+   fires). The problem is that those rules do not maintain a VM over this table's hot
+   range. VACUUM here is driven by the **insert** trigger at scale factor 0.2, i.e. every
+   ~1.5 M inserts, and between runs the newest rows carry no VM mark — which is precisely
+   the range a 7-day window reads.
+
+   Measured 2026-08-21: the table is 89.5 % VM-marked overall (501,384 / 559,953 pages),
+   but **46.4 % of the window's rows** (1,132,642 / 2,439,743) sit on pages inserted since
+   the last vacuum. So the index-only scan is capped at roughly half its potential today,
+   and — the part that actually bites — that cap **oscillates with the insert cycle**, from
+   near-0 % just after a vacuum to ~60 %+ just before the next. Consequences the tasks
+   enforce: every measurement records its position in the cycle (`n_ins_since_vacuum`,
+   `relallvisible`/`relpages`), because otherwise the same index measures anywhere between
+   excellent and mediocre depending on the hour. The available remedy —
+   `ALTER TABLE messages SET (autovacuum_vacuum_insert_scale_factor = 0.02)` — is a prod
+   DDL, so it is ac's call and is written as a task to *ask*, with numbers, not to do.
 
 6. **The fold is ~80 % of the query, and the design says so out loud.** Measured after
    the first draft of this document: the complete `healthz_journal` query takes 8,267 ms,
