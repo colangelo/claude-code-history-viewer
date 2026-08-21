@@ -84,14 +84,14 @@
       top-level Sort reports `rows=0.00`), so it is not "floor versus with-work". Candidates
       are `EXPLAIN ANALYZE` instrumentation and an hour of window drift between the two.
       Re-measure both ways in the same session before quoting either number.
-- [ ] 3.6 **Decide whether to ask ac for `autovacuum_vacuum_insert_scale_factor = 0.02`
+- [ ] 3.5 **Decide whether to ask ac for `autovacuum_vacuum_insert_scale_factor = 0.02`
       on `messages`** (~150 k inserts between vacuums instead of ~1.5 M, keeping the window
       mostly VM-marked). infra has named it and deliberately **not run it** — it is a prod
       DDL on their box and therefore ac's call. Only worth asking once 3.0–3.1 show the
       index's win is genuinely capped by `Heap Fetches` rather than by the planner ignoring
       the index. Verify: either a measured case put to ac with numbers, or a recorded
       decision that the uncapped win is already sufficient.
-- [ ] 3.5 Watch one heavy ingest after the build for write amplification on `messages`.
+- [ ] 3.6 Watch one heavy ingest after the build for write amplification on `messages`.
       Verify: ingest duration compared against a pre-build batch of comparable size; noted
       even if unchanged, so a later regression has a baseline.
 
