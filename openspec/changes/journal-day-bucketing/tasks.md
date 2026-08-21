@@ -48,6 +48,12 @@
 
 ## 7. Distiller
 
+> **Everything in this section is done in the repo and NOT RUNNING in production.**
+> `~/.local/bin/cchv-distill` is a **copy**, dated Jul 24, and the reinstall is §11.5.
+> The `[x]` below mean "written and tested", which is the only thing a checkbox in a
+> repo can honestly mean about a file that gets *copied* somewhere else to run. See
+> §12 for what that costs — it is not only the horizon anchor.
+
 - [x] 7.1 `Hub.session_messages(session_id, from=None, to=None)` — pass the window
       through as query params.
 - [x] 7.2 `build_transcript(hub, session_ids, entry_date)` — compute the day window
@@ -165,3 +171,46 @@ distiller used `date.today()`, the machine's **local calendar** date, so its "to
 - [ ] 11.6 No Gatus change is owed. `within_days=7` was never the wrong parameter — a
       config-side fix (`within_days=6`) would have been correct for four hours a day and
       wrong for the other twenty.
+
+## 12. The reinstall carries #35's content fix, not just the horizon anchor
+
+Found 2026-08-21 07:50Z, after §11.5 had already established that
+`~/.local/bin/cchv-distill` is a stale Jul-24 copy. §11.5 reads the consequence as the
+nightly false stale, and calls the reinstall "distiller-only for the fix that matters".
+That undersells it, and the undersell is the dangerous part: it invites the reinstall
+to be scheduled as a monitoring nicety.
+
+**The stale copy also means task 7.2 has never run.** Verified in the installed file,
+not inferred: `build_transcript(hub, session_ids)` takes no `entry_date` and
+`session_messages(self, session_id)` takes no window, so every group is still
+summarised from **whole sessions** — and `truncate()` keeps the tail 40%, which is the
+newest content. That is the exact mechanism of #35.
+
+So the fix has landed in two halves and only one of them is live:
+
+| half | what it fixes | state |
+|---|---|---|
+| hub grouping (§2–§5) | *which* sessions belong to a day; the missing next-day entries | **live** since `cchv-v0.19.0`, verified |
+| distiller windowing (§7) | *which messages* reach a day's prompt — the wrong-day text the user reported | **not deployed** |
+
+Consequence for anything already verified: every journal entry generated so far —
+including the 2026-08-20 entries confirmed at 07:47Z, and the re-distilled 2026-08-19
+`infra` entry — was produced by the **old whole-session** distiller. Their
+`session_ids` are correct because the hub computed them. Their **prose is not
+established** to be free of neighbouring-day content, and any read of it that says
+otherwise is reading LLM variance.
+
+- [ ] 12.1 Re-state the ask to infra so the reinstall is not scheduled as a monitoring
+      nicety: it is the deployment of #35's content fix. (§11.5 stays the mechanism.)
+- [ ] 12.2 After the reinstall, re-distil 2026-08-19 and 2026-08-20 for
+      `/Users/ac/_sync/dev/infra` and diff the prose against today's. That, not the
+      session-id count, is the before/after #35 should be closed on.
+- [ ] 12.3 Make the copy self-evident: either install by symlink, or have the distiller
+      log its own version/commit at tick start so a stale copy is visible in the log it
+      already writes. Today nothing running says which build it is.
+
+**The transferable half.** §11.5 already wrote the rule — *"an installed script is a
+copy, so nothing about a green `main` says anything about what is running"* — and then
+applied it to one task. The rule is about the **install boundary**, so it applies to
+every task on the far side of it at once. When a deploy gap is found, re-check the whole
+section it sits in, not the task that surfaced it.
