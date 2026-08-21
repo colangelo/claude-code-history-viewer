@@ -32,20 +32,20 @@
 
 ## 3. Distiller identity (#40, script half)
 
-- [ ] 3.1 `scripts/cchv-distill.py` — add `DISTILL_VERSION = "<current>"  # sync-version`
+- [x] 3.1 `scripts/cchv-distill.py` — add `DISTILL_VERSION = "<current>"  # sync-version`
       near the top, and `script_blob_id() -> str` = git blob sha1 of
       `Path(__file__).read_bytes()`. Verify: `test_cchv_distill.py` —
       `script_blob_id()` equals `git hash-object scripts/cchv-distill.py` (subprocess),
       and `DISTILL_VERSION` equals `package.json`'s `version`.
-- [ ] 3.2 `main()` — first log line, before secrets resolution:
+- [x] 3.2 `main()` — first log line, before secrets resolution:
       `cchv-distill {DISTILL_VERSION} blob={blob[:12]} mode={forward|backfill|dry-run}`.
       Verify: a test capturing `log()` sees that line first in `--dry-run`, and the
       existing `test_dry_run_records_no_tick` still passes.
-- [ ] 3.3 `Hub.record_tick` — payload gains `distiller_version` and `distiller_blob`
+- [x] 3.3 `Hub.record_tick` — payload gains `distiller_version` and `distiller_blob`
       (full 40 hex). Verify: `test_tick_record_states_its_mode_and_work_list_size`
       extended to assert both fields; `test_a_failed_tick_record_never_costs_the_run`
       unchanged and green.
-- [ ] 3.4 `uv run scripts/test_cchv_distill.py` (or the repo's invocation) green. Verify:
+- [x] 3.4 `uv run scripts/test_cchv_distill.py` (or the repo's invocation) green. Verify:
       exit code.
 
 ## 4. Release tooling: the fifth sync-version target

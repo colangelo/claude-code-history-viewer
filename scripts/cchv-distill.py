@@ -45,6 +45,12 @@ from pathlib import Path
 
 import requests
 
+# The release this script was cut at. A `just sync-version` target (like
+# Cargo.toml and tauri.conf.json) — never bump it by hand: the forgotten bump
+# is the exact failure #40 exists to make visible. The trailing marker is what
+# scripts/sync-version.cjs anchors on, and test_cchv_distill.py pins its form.
+DISTILL_VERSION = "0.20.1"  # sync-version
+
 # --- config -----------------------------------------------------------------
 
 DEFAULT_HUB_URL = "http://127.0.0.1:8790"  # hub is loopback-bound on m4m
@@ -106,6 +112,24 @@ HTTP_TIMEOUT_SECS = 30
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[cchv-distill {ts}] {msg}", file=sys.stderr)
+
+
+def script_blob_id() -> str:
+    """Git blob id of the file that is actually running.
+
+    `~/.local/bin/cchv-distill` is an installed COPY of this script (deliberately
+    — the worktree it would symlink into is Syncthing-shared, and a symlink would
+    put a peer's in-flight edit into production on the next tick). A copy that
+    announces nothing let a Jul-24 build run for hours behind a green `main`
+    (2026-08-21, #40). This is `git hash-object` over our own bytes, so the value
+    in the log and on the tick record compares directly against
+    `git rev-parse <rev>:scripts/cchv-distill.py` — the installed-script-is-a-copy
+    check, readable without an ssh.
+    """
+    import hashlib
+
+    data = Path(__file__).resolve().read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def non_interactive() -> bool:
@@ -333,7 +357,15 @@ class Hub:
         def attempt() -> None:
             r = self.session.post(
                 f"{self.url}/v1/journal/ticks",
-                json={"mode": mode, "groups_pending": groups_pending},
+                json={
+                    "mode": mode,
+                    "groups_pending": groups_pending,
+                    # Which copy is ticking (#40) — the hub reports these next
+                    # to its own version, so "did both halves of the release
+                    # land" is one GET on /v1/healthz/journal.
+                    "distiller_version": DISTILL_VERSION,
+                    "distiller_blob": script_blob_id(),
+                },
                 timeout=HTTP_TIMEOUT_SECS,
             )
             if r.status_code >= 400:
@@ -715,6 +747,12 @@ def main() -> int:
         ap.error("--from requires --backfill")
     if args.from_date:
         date.fromisoformat(args.from_date)  # fail fast on bad input
+
+    # Identity first, before any secret is resolved or any host is reached: a
+    # run that dies on bao/op still says which copy it was. The version is the
+    # release this script was cut at; the blob is the exact file (#40).
+    mode = "dry-run" if args.dry_run else ("backfill" if args.backfill else "forward")
+    log(f"cchv-distill {DISTILL_VERSION} blob={script_blob_id()[:12]} mode={mode}")
 
     if args.backfill:
         from_date, limit = args.from_date, args.limit or 20

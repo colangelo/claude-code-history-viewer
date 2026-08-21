@@ -254,8 +254,22 @@ def test_tick_record_states_its_mode_and_work_list_size() -> None:
     hub.post_tick("backfill", 12)
 
     assert [s["url"] for s in sent] == ["http://stub/v1/journal/ticks"] * 2
-    assert sent[0]["body"] == {"mode": "forward", "groups_pending": 0}
-    assert sent[1]["body"] == {"mode": "backfill", "groups_pending": 12}
+    # #40: the record also says WHICH distiller copy ticked — the release its
+    # script was cut at and the blob id of the file that ran — so the hub can
+    # report it and a reader need not ssh in and `cmp`.
+    blob = d.script_blob_id()
+    assert sent[0]["body"] == {
+        "mode": "forward",
+        "groups_pending": 0,
+        "distiller_version": d.DISTILL_VERSION,
+        "distiller_blob": blob,
+    }
+    assert sent[1]["body"] == {
+        "mode": "backfill",
+        "groups_pending": 12,
+        "distiller_version": d.DISTILL_VERSION,
+        "distiller_blob": blob,
+    }
 
 
 def test_dry_run_records_no_tick() -> None:
@@ -272,6 +286,70 @@ def test_dry_run_records_no_tick() -> None:
         "main() must guard the tick record with `if not args.dry_run:` — "
         "without it a --dry-run reports a tick that drained nothing"
     )
+
+
+# ---------------------------------------------------------------------------
+# identity (#40): an installed script is a COPY, and a copy that says nothing
+# about itself let a Jul-24 build run for hours behind a green main.
+# ---------------------------------------------------------------------------
+
+
+def test_script_blob_id_is_the_git_blob_id() -> None:
+    """`script_blob_id()` must equal `git hash-object` on the same file.
+
+    That equality is the whole value: the logged id can be compared against
+    `git rev-parse <rev>:scripts/cchv-distill.py` by anyone with the repo,
+    without touching the host. sha256 would be just as exact and comparable to
+    nothing git prints.
+    """
+    import subprocess
+
+    path = REPO / "scripts" / "cchv-distill.py"
+    expected = subprocess.run(
+        ["git", "hash-object", str(path)], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    got = d.script_blob_id()
+    assert re.fullmatch(r"[0-9a-f]{40}", got), got
+    assert got == expected
+
+
+def test_distill_version_is_the_release_version() -> None:
+    """`DISTILL_VERSION` is a `just sync-version` target, not a hand-bumped
+    constant: it must equal package.json's version or the release recipe has
+    drifted (this is the check that fails BEFORE the release does)."""
+    import json as _json
+
+    pkg = _json.loads((REPO / "package.json").read_text(encoding="utf-8"))
+    assert d.DISTILL_VERSION == pkg["version"]
+    # The marker sync-version.cjs anchors on. Reformat it and the sync silently
+    # stops — so the marker itself is pinned here.
+    src = (REPO / "scripts" / "cchv-distill.py").read_text(encoding="utf-8")
+    assert re.search(
+        r'^DISTILL_VERSION = "\d+\.\d+\.\d+"  # sync-version$', src, re.M
+    ), "DISTILL_VERSION line must keep the exact `# sync-version` marker form"
+
+
+def test_first_log_line_names_the_running_copy(monkeypatch, capsys) -> None:
+    """Before any hub call, in any mode, the log names version + blob + mode.
+
+    Pinned on --dry-run specifically: a run that dies on secrets resolution
+    must still have said who it was, so the line comes before resolve_token().
+    """
+    # Make every later step fail fast and loudly if reached, so the assertion
+    # is about ORDER: identity first, secrets second.
+    def boom(*a, **k):
+        raise RuntimeError("reached secrets before announcing identity")
+
+    monkeypatch.setattr(d, "resolve_token", boom)
+    monkeypatch.setattr(d, "resolve_aiproxy_key", boom)
+    monkeypatch.setattr(sys, "argv", ["cchv-distill", "--dry-run", "--backend", "claude"])
+    with pytest.raises(RuntimeError):
+        d.main()
+    lines = [l for l in capsys.readouterr().err.splitlines() if "[cchv-distill " in l]
+    assert lines, "nothing logged"
+    first = lines[0]
+    blob12 = d.script_blob_id()[:12]
+    assert f"cchv-distill {d.DISTILL_VERSION} blob={blob12} mode=dry-run" in first, first
 
 
 if __name__ == "__main__":  # pragma: no cover
