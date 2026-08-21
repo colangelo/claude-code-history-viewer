@@ -476,6 +476,18 @@ fallback when no release asset exists. Relay the deploy to home-network (infra)
 # NB: bare `gh` defaults to the UPSTREAM repo (jhlee0409) — always -R the fork
 # for our cchv-v* line, or you'll query upstream's v1.x releases and see nothing.
 FORK=colangelo/claude-code-history-viewer
+
+# Check EVERY workflow on the TAG's sha, not just the release build. "CI green"
+# scoped to server-release.yml was wrong twice on 2026-08-21, the same way both
+# times: the release workflow was green and the TAG was not. It is easy to cut a
+# tag minutes before an unrelated fix lands on main, and then main is green while
+# the tag stays red forever — a red the next reader has to re-triage.
+TAGSHA=$(git rev-list -n1 cchv-vX.Y.Z)
+gh run list -R "$FORK" --commit "$TAGSHA" --json workflowName,conclusion \
+  --jq '.[] | "\(.conclusion // "running")  \(.workflowName)"'
+# Anything not `success` is either fixed BEFORE the tag or stated explicitly in
+# the relay with the evidence that it does not reach the artifact. Do not report
+# "CI green" from one workflow — say which.
 gh run list -R "$FORK" --workflow=server-release.yml --limit=1
 gh release view cchv-v0.13.0 -R "$FORK"   # expect 3 assets: hub bin + .sha256 + webapp
 ```
