@@ -100,14 +100,26 @@
       7 to **9** sessions, and the 19th's feed grew from 4 project entries to **10**.
       Both named sessions are in the set
       `[1195339,1199483,1228471,1228541,1228616,1228726,1231594,1233018,1233156]`.
-- [ ] 9.3c Still not checkable, and correctly reported as such rather than as
+- [x] 9.3c **DONE, verified 2026-08-21 07:47Z: the 2026-08-20 entries exist** — 20 of
+      them, `/Users/ac/_sync/dev/infra` carrying 15 sessions, a day that had none at
+      all before. Sessions 1231594 and 1233018 are under BOTH the 19th and the 20th,
+      and the 20/8 headline names the vik launch the 19/8 entry used to claim.
+      That is the reported bug, structurally fixed. Superseded text below:
+      ~~Still not checkable, and correctly reported as such rather than as~~
       "missing": 2026-08-20 is an OPEN logical day until 04:00Z, so `pending` lists no
       08-20 group by design. **Proven from the other direction meanwhile** — through
       the new windowed endpoint, sessions 1231594 and 1233018 each return messages in
       BOTH the 19th's and the 20th's day windows, while control 1233156 returns
       messages on the 19th and **0** on the 20th. That is the midnight-spanning attach
       working; what remains is only the entry itself, after 04:00Z.
-- [ ] 9.3d `/v1/healthz/journal` still 503 and legitimately so: the re-grouping left
+- [x] 9.3d **DONE: green at 07:44Z and again at 09:5xZ** — `status:"ok"`, 10 groups,
+      0 stale. The backlog drained as predicted; no intervention was needed.
+      ⚠ **But it now answers in 10.0 s** (measured 09:5xZ), worse than the 6.9 s that
+      produced the 01:29Z 502 — the live hub still runs the two-pass query, and the
+      single-pass fix (3.7 s, `b073deba`) is on `main` awaiting a swap. This is not
+      "bundle it whenever": at 10 s it is past most monitor timeouts and will flap
+      again. Superseded text below:
+      ~~`/v1/healthz/journal` still 503 and legitimately so:~~ the re-grouping left
       64 groups undrained, the one forward tick took its 50-group batch, 45 pending at
       last report and still draining. `status:"stale"` **with a groups list** is the
       tell that it is a backlog, not a stall. Live alongside it: `healthz` 200,
@@ -200,7 +212,7 @@ including the 2026-08-20 entries confirmed at 07:47Z, and the re-distilled 2026-
 established** to be free of neighbouring-day content, and any read of it that says
 otherwise is reading LLM variance.
 
-- [ ] 12.1 Re-state the ask to infra so the reinstall is not scheduled as a monitoring
+- [x] 12.1 Re-stated to infra (relay `484d61a9`, thread `576c10a3`). Re-state the ask to infra so the reinstall is not scheduled as a monitoring
       nicety: it is the deployment of #35's content fix. (§11.5 stays the mechanism.)
 - [ ] 12.2 After the reinstall, re-distil 2026-08-19 and 2026-08-20 for
       `/Users/ac/_sync/dev/infra` and diff the prose against today's. That, not the
