@@ -401,27 +401,48 @@ git for-each-ref --format='%(refname)' | grep -i conflict   # expect: nothing un
 git push internal main && git push internal cchv-v0.6.0
 git push origin  main && git push origin  cchv-v0.6.0
 
-# Positive proof the tag actually left this Mac. `.git` here is Syncthing-shared,
-# so a peer session can rewind your ref — and then `git push` prints "Everything
-# up-to-date", byte-identical to a genuine no-op, while `git log -1` agrees with it
-# (the ref and reflog are what got replaced). Never read the absence of a push error
-# as publication. CONTEXT `PATTERNS/git.md` § the push-side twin of the reflog census.
-git ls-remote --tags internal cchv-v0.6.0    # empty ⇒ the tag never left this Mac
-git ls-remote --tags origin  cchv-v0.6.0     # empty ⇒ CI never fires; Phase 4 will look "stuck"
-
-# The tag check above queries the hub BY NAME, so no local ref can answer for it —
-# but it says nothing about `main`. A swap landing mid-release still carries your
-# objects with the tag, so the tag verifies green while the hub's `main` is missing
-# the release commit. Assert the branch separately, by the sha you MEANT:
-git fetch origin main -q && git merge-base --is-ancestor "${SHA}" origin/main \
-  && echo "main published: ${SHA}"
-# Asserting `origin` ALONE is sufficient only because `origin` is pushed LAST: a swap
-# landing anywhere before that push leaves `origin/main` short of ${SHA}, so this check
-# fails. Reorder the two push lines and the coverage inverts silently — a swap landing
-# between them would put `internal/main` on the peer's commit while `origin` went green
-# and nothing asked about `internal`. The push order is load-bearing, not cosmetic: if
-# you reorder, assert the remote you push LAST, or assert both.
+# Positive proof the release actually left this Mac, on EVERY remote you pushed.
+# `.git` here is Syncthing-shared, so a peer session can rewind your ref — and then
+# `git push` prints "Everything up-to-date", byte-identical to a genuine no-op, while
+# `git log -1` agrees with it (the ref and reflog are what got replaced). Never read
+# the absence of a push error as publication.
+# CONTEXT `PATTERNS/git.md` § the push-side twin of the reflog census.
+#
+# Two assertions per remote, because they cover different failures. The tag check
+# queries the hub BY NAME, so no local ref can answer for it — but it says nothing
+# about `main`: a swap landing mid-release still carries your objects with the tag, so
+# the tag verifies green while the hub's `main` lacks the release commit. Assert the
+# branch separately, by the sha you MEANT.
+for R in internal origin; do
+  git ls-remote --tags "$R" cchv-v0.6.0 | grep -q . \
+    || { echo "tag NOT published on $R"; exit 1; }      # empty ⇒ nothing was published
+  git fetch "$R" main -q && git merge-base --is-ancestor "${SHA}" "$R"/main \
+    || { echo "main NOT published on $R"; exit 1; }
+  echo "published on $R: ${SHA}"
+done
 ```
+
+**Assert both remotes — the push ORDER is not what holds this up.** This block used to
+assert `origin` alone, on the argument that `origin` is pushed last so a swap landing
+anywhere earlier leaves `origin/main` short of `${SHA}`. That argument is true and it is
+not enough, because **it assumes both pushes succeed.** The four push statements above
+are separate commands with no `set -e`: a failed `internal` tag push does not stop the
+`origin` line, `origin` goes green, and nothing ever asks about `internal`. Ordering can
+cover a *swap*; it cannot cover a *failure*. So assert each remote you pushed, and the
+order becomes free. Generally: a single-remote publication proof is sound only when it
+names the remote you push **last** *and* nothing between the pushes can fail.
+
+This correction came from the `cchv-deploy` skill, which is the **other copy of this
+recipe** — and the two have drifted in both directions, alternating: `af2c3128` fixed
+explicit staging in *this block* after the skill had it; the `cargo check -q -p hub`
+line above went the other way (the skill carried it first, this block picked it up);
+and the both-remotes proof went the skill's way again. **Which half is behind does not
+carry over**, so when either changes, diff them as whole documents rather than
+spot-checking the line that just burned you — and check the claim you are about to
+write against the file in front of you, not against the skill's account of it. The
+skill still says this block "had never carried" the `cargo check` line; line 317 says
+otherwise, which is the same staleness one document keeping notes on another always
+develops.
 
 **Assert `${SHA}`, never `HEAD`.** `HEAD` is a symref *through* `refs/heads/main` —
 the exact file a peer's branch swap renames aside — so after a swap it resolves to
