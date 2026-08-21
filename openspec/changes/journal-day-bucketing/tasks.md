@@ -89,13 +89,25 @@
       `X-Total-Count` 64402 vs 67889 unwindowed on session 1231594; malformed bound
       400; `/v1/healthz` ok. `pending` lists 2026-08-19 `infra` with the corrected
       9 sessions (7 stored).
-- [ ] 9.3b Awaiting the 01:09Z distiller tick: the 2026-08-19 `infra` entry
-      re-distilled to 9 sessions.
-- [ ] 9.3c Awaiting ~04:30–05:00Z (the 20th closes at 04:00Z): a 2026-08-20 entry
-      exists carrying sessions 1231594 and 1233018. **This is the actual proof of the
-      reported bug being fixed.**
-- [ ] 9.3d `/v1/healthz/journal` back to 200 (503 now: 64 pending, 53 stale — the
-      expected consequence of drift-as-dirty; est. green ~03:30Z).
+- [x] 9.3b **Done** (infra, one forward tick kickstarted 2026-08-21 ~00:4xZ — bare
+      `cchv-distill`, no `--backfill`): the 2026-08-19 `infra` entry re-distilled from
+      7 to **9** sessions, and the 19th's feed grew from 4 project entries to **10**.
+      Both named sessions are in the set
+      `[1195339,1199483,1228471,1228541,1228616,1228726,1231594,1233018,1233156]`.
+- [ ] 9.3c Still not checkable, and correctly reported as such rather than as
+      "missing": 2026-08-20 is an OPEN logical day until 04:00Z, so `pending` lists no
+      08-20 group by design. **Proven from the other direction meanwhile** — through
+      the new windowed endpoint, sessions 1231594 and 1233018 each return messages in
+      BOTH the 19th's and the 20th's day windows, while control 1233156 returns
+      messages on the 19th and **0** on the 20th. That is the midnight-spanning attach
+      working; what remains is only the entry itself, after 04:00Z.
+- [ ] 9.3d `/v1/healthz/journal` still 503 and legitimately so: the re-grouping left
+      64 groups undrained, the one forward tick took its 50-group batch, 45 pending at
+      last report and still draining. `status:"stale"` **with a groups list** is the
+      tell that it is a backlog, not a stall. Live alongside it: `healthz` 200,
+      `ingest?exclude=ac-mbp` 200, `stats` 200.
+      ⚠ 6 of those groups (dated 2026-08-13) were **not drainable by any forward
+      tick** — see §11.
 
 ## 10. Rollout
 
@@ -107,3 +119,39 @@
       172 drifted), 20 per tick by default. Operator's call, not automatic.
 - [ ] 10.3 Close `ac/claude-code-history-viewer#35` with the measured before/after —
       **after 9.3c**, which is the before/after worth quoting.
+
+## 11. Horizon anchor — the off-by-one the deploy found
+
+Reported by infra 2026-08-21 (thread `576c10a3`): the forward tick computed
+`from=2026-08-14` while `/v1/healthz/journal?within_days=7` — the URL Gatus actually
+polls — counted 6 groups dated **2026-08-13**. Neither number is wrong on its own; the
+two windows simply disagreed by a day, and 6 groups sat inside the check's window and
+outside the tick's, counted stale with nothing able to drain them. Not a rollback
+trigger, and not cosmetic either: those groups age out undistilled.
+
+The disagreement is the anchor, not the width. The hub folds by `DAY_START_HOUR` before
+subtracting (`health.rs::horizon_from`), so at 00:46Z its "today" was still 08-20; the
+distiller used `date.today()`, the machine's **local calendar** date, so its "today" was
+08-21. Two defects in one expression — the fold, and local-vs-UTC.
+
+- [x] 11.1 Fixed on the distiller side, which is the half that deviated from the spec
+      (`journal-health` already says "of the current logical day"):
+      `scripts/cchv-distill.py::journal_today()` folds by `DAY_START_HOUR` in UTC, and
+      the forward `from` is measured from it.
+- [x] 11.2 Hub side: extracted `health.rs::horizon_from(now, day_start_hour,
+      within_days)` — same expression, now a named function with unit tests over the
+      00:46Z / 03:59:59Z / 04:00Z boundary instead of an inline expression in a handler
+      no test could reach.
+- [x] 11.3 Pinned across the language boundary, the way `DAY_START_HOUR` already is:
+      `test_forward_horizon_anchor_matches_the_hub` reads `horizon_from`'s body out of
+      `health.rs` and fails if the anchor drifts, naming the consequence.
+- [x] 11.4 Spec delta: the `Distiller job` requirement now states the anchor and carries
+      a scenario pinning the 00:46Z case.
+- [ ] 11.5 Deploy: **distiller-only for the fix that matters** (`scripts/cchv-distill.py`
+      on m4m, no hub swap needed — `horizon_from` is a refactor, byte-equivalent in
+      behaviour). Until it lands, the nightly 00:00–04:00Z window keeps producing the
+      same false stale. The 6 groups dated 2026-08-13 have almost certainly aged out of
+      both windows by now and need the §10.2 backfill, not a tick.
+- [ ] 11.6 No Gatus change is owed. `within_days=7` was never the wrong parameter — a
+      config-side fix (`within_days=6`) would have been correct for four hours a day and
+      wrong for the other twenty.

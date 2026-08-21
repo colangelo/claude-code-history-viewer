@@ -141,6 +141,13 @@ automatically process groups older than its configured forward horizon — histo
 backfill happens only via an explicit `--backfill` invocation with date/limit bounds,
 newest-first. A `--dry-run` mode SHALL produce and validate an entry without writing.
 
+That forward horizon SHALL be measured from the **current logical day** — the same
+`day_start_hour` fold the hub applies, in UTC — and not from the machine's local
+calendar date. The two windows this bounds are the tick's own work list and the one
+`GET /v1/healthz/journal` evaluates, and they MUST be the same window: anchoring them
+differently makes the check page for groups no forward tick will ever pick up, every
+night between 00:00 UTC and `day_start_hour`.
+
 The job SHALL be scheduled as frequent idempotent ticks (fixed interval ≤1h,
 `StartInterval`, plus run-at-load) rather than a calendar-time daily run, so that no
 tick's wall-clock position relative to the 04:00 UTC logical-day close — under any DST
@@ -156,6 +163,14 @@ gives up; a failed tick recovers at the next interval, never at +24h.
   horizon
 - **THEN** each group results in exactly one upserted entry or skip row, and a re-run
   with no new data finds nothing pending
+
+#### Scenario: The tick's horizon and the health check's window are the same window
+
+- **WHEN** a forward tick runs at 00:46 UTC on 2026-08-21 with `--horizon-days 7`
+  and `day_start_hour` is 04:00 (so the current logical day is still 2026-08-20)
+- **THEN** its date lower bound is 2026-08-13 — the same bound
+  `GET /v1/healthz/journal?within_days=7` evaluates — and no group is counted stale
+  that the tick excludes
 
 #### Scenario: Only the group's day reaches the prompt
 

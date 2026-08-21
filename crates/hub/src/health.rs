@@ -238,6 +238,24 @@ pub struct JournalHealthResponse {
     pub groups: Vec<JournalStaleGroup>,
 }
 
+/// The inclusive lower bound of the evaluated window: `within_days` before the
+/// **current logical day**, not before the current calendar date.
+///
+/// The anchor is the whole point. This check exists to page when the distiller
+/// is behind, so its window must be the window the distiller's forward tick
+/// actually covers — and the distiller measures its `--horizon-days` from the
+/// same logical day (`scripts/cchv-distill.py::journal_today`, asserted against
+/// this function in `scripts/test_cchv_distill.py`). Anchoring one of them on
+/// the calendar date instead puts the two out of step between 00:00 and
+/// `DAY_START_HOUR` UTC every night: the check counts a day the tick will never
+/// pick up, so it reports stale for work nothing will ever do. Measured on m4m
+/// 2026-08-21 at 00:46Z, where 6 groups dated 2026-08-13 were counted stale
+/// while the tick's own bound was 2026-08-14.
+fn horizon_from(now: DateTime<Utc>, day_start_hour: i32, within_days: i32) -> NaiveDate {
+    (now - chrono::Duration::hours(i64::from(day_start_hour))).date_naive()
+        - chrono::Duration::days(i64::from(within_days))
+}
+
 /// Parse an optional positive-integer query param, or fall back to `default`.
 /// Non-numeric / non-positive input becomes a `400` naming the parameter —
 /// same contract as `parse_stale_after_secs`.
@@ -302,9 +320,7 @@ pub async fn healthz_journal(
     // computed one, or a session's ingest xid is invisible in the row's snapshot
     // (committed after the entry was generated) — commit-order exact, identical
     // to `journal::pending`.
-    let horizon_from = (Utc::now() - chrono::Duration::hours(i64::from(day_start_hour)))
-        .date_naive()
-        - chrono::Duration::days(i64::from(within_days));
+    let horizon_from = horizon_from(Utc::now(), day_start_hour, within_days);
     let rows = sqlx::query_as::<_, JournalGroupRow>(&format!(
         r"
         WITH {session_days},
@@ -580,6 +596,50 @@ mod tests {
     fn parse_positive_rejects_zero_and_negative() {
         assert!(parse_positive(Some("0"), "grace_secs", 7200).is_err());
         assert!(parse_positive(Some("-1"), "within_days", 7).is_err());
+    }
+
+    /// Between midnight and the fold hour, the logical day is still yesterday —
+    /// so the window reaches one day further back than a calendar-anchored bound
+    /// would. This is the half that agrees with the distiller's forward tick;
+    /// the day it drops is the day the tick has also stopped covering.
+    #[test]
+    fn horizon_is_anchored_on_the_logical_day() {
+        let before_fold = "2026-08-21T00:46:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            horizon_from(before_fold, 4, 7),
+            NaiveDate::from_ymd_opt(2026, 8, 13).unwrap(),
+            "00:46Z is still the 20th logically, so the bound is the 20th − 7"
+        );
+
+        let after_fold = "2026-08-21T04:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            horizon_from(after_fold, 4, 7),
+            NaiveDate::from_ymd_opt(2026, 8, 14).unwrap(),
+            "the fold hour opens the 21st, and the window slides with it"
+        );
+
+        // One second earlier is still the previous logical day: the boundary is
+        // half-open at `DAY_START_HOUR`, like `journal::day_bounds`.
+        let edge = "2026-08-21T03:59:59Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            horizon_from(edge, 4, 7),
+            NaiveDate::from_ymd_opt(2026, 8, 13).unwrap()
+        );
+    }
+
+    #[test]
+    fn horizon_scales_with_within_days_and_fold_hour() {
+        let now = "2026-08-21T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            horizon_from(now, 4, 1),
+            NaiveDate::from_ymd_opt(2026, 8, 20).unwrap()
+        );
+        // A zero fold hour degenerates to the calendar date — the behaviour this
+        // function exists to *not* have at the default hour.
+        assert_eq!(
+            horizon_from("2026-08-21T00:46:00Z".parse().unwrap(), 0, 7),
+            NaiveDate::from_ymd_opt(2026, 8, 14).unwrap()
+        );
     }
 
     #[test]

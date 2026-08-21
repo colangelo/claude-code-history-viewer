@@ -429,6 +429,24 @@ def day_window(entry_date: str) -> tuple[str, str]:
     )
 
 
+def journal_today(now: datetime | None = None) -> date:
+    """Today in *logical* days: the hub's fold hour applied in UTC.
+
+    The forward horizon is measured from this, not from `date.today()`, and the
+    difference is not cosmetic. `date.today()` is the machine's **local**
+    calendar date, so it disagreed with the hub twice: by the local UTC offset,
+    and — every night between 00:00 and `DAY_START_HOUR` UTC — by the fold
+    itself. In that window the health check
+    (`crates/hub/src/health.rs::horizon_from`, which anchors on the logical day)
+    counted a day this tick's own bound excluded, so `/v1/healthz/journal`
+    reported stale for groups no forward tick would ever pick up. Measured on
+    m4m 2026-08-21 at 00:46Z: 6 groups dated 2026-08-13 counted stale, tick
+    bound 2026-08-14. Asserted against the hub in the test suite.
+    """
+    now = now or datetime.now(timezone.utc)
+    return (now - timedelta(hours=DAY_START_HOUR)).date()
+
+
 def build_transcript(hub: Hub, session_ids: list[int], entry_date: str) -> str:
     per_session = max(PROMPT_BUDGET_CHARS // max(len(session_ids), 1), 4_000)
     window = day_window(entry_date)
@@ -663,7 +681,7 @@ def main() -> int:
     if args.backfill:
         from_date, limit = args.from_date, args.limit or 20
     else:
-        from_date = (date.today() - timedelta(days=args.horizon_days)).isoformat()
+        from_date = (journal_today() - timedelta(days=args.horizon_days)).isoformat()
         limit = args.limit or 50
 
     llm = LLM(backend=args.backend, model=args.model, effort=args.effort,

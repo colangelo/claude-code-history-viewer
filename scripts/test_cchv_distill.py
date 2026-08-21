@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,45 @@ def test_day_start_hour_matches_the_hub() -> None:
     m = re.search(r"pub\(crate\) const DAY_START_HOUR: i32 = (\d+);", src)
     assert m, "DAY_START_HOUR not found in journal.rs — did it move or get renamed?"
     assert d.DAY_START_HOUR == int(m.group(1))
+
+
+def test_journal_today_folds_the_way_the_hub_does() -> None:
+    """The forward horizon is measured from the logical day, not the calendar.
+
+    Between midnight and the fold hour these differ, and that is exactly when
+    the nightly tick runs.
+    """
+    def at(stamp: str) -> datetime:
+        return datetime.fromisoformat(stamp).replace(tzinfo=timezone.utc)
+
+    assert d.journal_today(at("2026-08-21T00:46:00")).isoformat() == "2026-08-20"
+    assert d.journal_today(at("2026-08-21T03:59:59")).isoformat() == "2026-08-20"
+    assert d.journal_today(at("2026-08-21T04:00:00")).isoformat() == "2026-08-21"
+    assert d.journal_today(at("2026-08-21T23:30:00")).isoformat() == "2026-08-21"
+
+
+def test_forward_horizon_anchor_matches_the_hub() -> None:
+    """The tick's window and the health check's window must be the same window.
+
+    `/v1/healthz/journal` pages when in-horizon groups sit undrained. If its
+    anchor and this script's anchor disagree, it pages for groups the tick will
+    never pick up — silently, since both halves still "work". So the hub's
+    anchor is asserted against its source, like `DAY_START_HOUR` above.
+    """
+    src = (REPO / "crates" / "hub" / "src" / "health.rs").read_text()
+    m = re.search(
+        r"fn horizon_from\([^)]*\) -> NaiveDate \{(.*?)\n\}", src, re.DOTALL
+    )
+    assert m, "horizon_from not found in health.rs — did it move or get renamed?"
+    body = " ".join(m.group(1).split())
+    assert body == (
+        "(now - chrono::Duration::hours(i64::from(day_start_hour))).date_naive() "
+        "- chrono::Duration::days(i64::from(within_days))"
+    ), (
+        "the hub's journal-health horizon anchor changed. If it no longer folds "
+        "by DAY_START_HOUR before subtracting the window, it disagrees with "
+        f"journal_today() here and the check pages for undoable work. Body: {body!r}"
+    )
 
 
 def test_day_window_is_half_open_and_shifted() -> None:
