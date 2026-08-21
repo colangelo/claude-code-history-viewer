@@ -81,10 +81,10 @@
 
 ## 6. Release + deploy (`cchv-deploy` skill)
 
-- [ ] 6.1 Quality gate per `AGENTS.md` Phase 1 (pnpm tsc/vitest/lint, cargo test/clippy/
+- [x] 6.1 Quality gate per `AGENTS.md` Phase 1 (pnpm tsc/vitest/lint, cargo test/clippy/
       fmt, i18n validate). Verify: all exit 0 (Rust via CI if this Mac's toolchain
       cannot — see memory `local-clippy-cannot-reproduce-ci`).
-- [ ] 6.2 Cut `cchv-v0.21.0` per Phase 3 — bump, `just sync-version`, `cargo check -q
+- [x] 6.2 Cut `cchv-v0.21.0` per Phase 3 — bump, `just sync-version`, `cargo check -q
       -p hub`, both censuses, explicit `git add` (five bump targets now), Guards 1+2,
       commit, tag, push both remotes, publication proof by `${SHA}` with `case` on rc.
       Verify: the proof prints `published on internal` and `published on origin`.
