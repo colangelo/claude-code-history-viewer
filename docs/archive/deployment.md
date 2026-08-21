@@ -2335,12 +2335,34 @@ equivalently.
   after both halves are live and verified**.
 
   That replay also retires a reading of our own. The 4 h 15 m standstill of
-  2026-08-21 — the one that refuted three separate all-clears — is **not in the
-  top five gaps of the 13-day record** (7h56m, 7h46m, 7h41m, 7h23m and 6h22m all
-  beat it). The alarm was not wrong because the gap was unusual; it was wrong
-  because a wall-clock deadline was laid over a distribution whose ordinary tail
-  is ~8 h. That is the case for `ticks_last_24h` being the instrument, stated
-  more strongly than we managed at the time.
+  2026-08-21 — the one that refuted three separate all-clears — sits **above the
+  p90 (2 h 41 m) and well below the max (7 h 41 m)**: an ordinary upper-tail gap,
+  not an anomaly. The alarm was not wrong because the gap was unusual; it was
+  wrong because a wall-clock deadline was laid over a long-tailed distribution.
+  That is the case for `ticks_last_24h` being the instrument, stated more
+  strongly than we managed at the time.
+
+  **Withdrawn: the specific ranking this paragraph used to carry** — *"not in the
+  top five gaps (7h56m, 7h46m, 7h41m, 7h23m, 6h22m)"*. Those five come from the
+  superseded series built on `grep -c 'done:'` = **194 completions**, when the job
+  had **started 204** times: ten runs died mid-flight without printing a
+  completion line, and the missing lines merged adjacent gaps into longer fake
+  ones. On the corrected 204-start series the distribution is 15.38 ticks/day,
+  median 68 m, **p90 2 h 41 m, max 7 h 41 m** — so a top-five ranking cannot be
+  quoted from the old numbers at all. `43200` is unaffected: 8 h has zero headroom
+  on either series, and 12 h is the first value with any.
+
+  **Two things this cost, both worth more than the numbers.** *Count a scheduled
+  job's STARTS, not its completions* — a run that records its tick before doing
+  the work (which is exactly what `de327b1b` made the distiller do) is a tick even
+  when it dies, so counting completions drops precisely the runs the alarm exists
+  to notice, and drops them hardest on the nights the host is least reliable.
+  `launchctl print … runs` is the free cross-check and matched the start count
+  exactly. And *a partial correction leaves a worse artifact than no correction*:
+  the max in the paragraph above had already been fixed to 7 h 41 m while this
+  ranking, derived from the old series, had not — so the passage read as corrected
+  because its headline number was. Correct every figure derived from a number you
+  fix, not just the number.
 
 ## 3d. Project identity (cchv-v0.10.0): rollout order
 
