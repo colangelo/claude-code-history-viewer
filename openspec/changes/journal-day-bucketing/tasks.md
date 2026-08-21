@@ -88,7 +88,7 @@
       2026-08-19 from 7 stored sessions to 9.
 - [x] 9.2b Post-deploy (2026-08-21 00:29Z): `messages_session_timestamp_idx` present on
       pg1, `indisvalid = t`, 215 MB.
-- [ ] 9.2c Still open: confirm the windowed fetch *plans* onto the new index, and
+- [ ] 9.2c Still open (tracked as **#36**, with numbers): confirm the windowed fetch *plans* onto the new index, and
       re-measure the pending query now that it exists (design.md's numbers predate it).
 - [x] 9.3a Post-deploy API verification (2026-08-21 00:28Z, **on m4m** — not an
       independent cross-machine check): windowed read 200 with
@@ -142,8 +142,10 @@
 - [ ] 10.2 After the first forward tick drains, run the bounded historical repair:
       `cchv-distill --backfill --from 2026-07-04` — 459 groups (287 never distilled,
       172 drifted), 20 per tick by default. Operator's call, not automatic.
-- [ ] 10.3 Close `ac/claude-code-history-viewer#35` with the measured before/after —
-      **after 9.3c**, which is the before/after worth quoting.
+- [x] 10.3 **#35 closed** on the prose diff: the vik board moved from the 2026-08-19
+      entry to 2026-08-20 where it happened, and the 08-19 entry greps clean for every
+      08-20-only subject. Both entries generated after the 08:15Z distiller reinstall,
+      so both came from windowed transcripts.
 
 ## 11. Horizon anchor — the off-by-one the deploy found
 
@@ -200,7 +202,10 @@ distiller used `date.today()`, the machine's **local calendar** date, so its "to
       with neither `journal_today` nor `DAY_START_HOUR` anywhere in the file — an
       installed script is a *copy*, so nothing about a green `main` says anything about
       what is running.
-- [ ] 11.6 No Gatus change is owed. `within_days=7` was never the wrong parameter — a
+- [x] 11.6 Confirmed by the outcome — no Gatus *condition* change was made or needed.
+      (Infra did later disable the ntfy **page** on that one endpoint as a bounded,
+      tracked suppression under `ac/infra#118` while #37 was open; the check itself was
+      never changed, and re-enabling is part of that issue.) Original: No Gatus change is owed. `within_days=7` was never the wrong parameter — a
       config-side fix (`within_days=6`) would have been correct for four hours a day and
       wrong for the other twenty.
 
@@ -246,7 +251,10 @@ otherwise is reading LLM variance.
 
 - [x] 12.1 Re-stated to infra (relay `484d61a9`, thread `576c10a3`). Re-state the ask to infra so the reinstall is not scheduled as a monitoring
       nicety: it is the deployment of #35's content fix. (§11.5 stays the mechanism.)
-- [ ] 12.2 After the reinstall, re-distil 2026-08-19 and 2026-08-20 for
+- [x] 12.2 **DONE** — both days were re-distilled by the 08:49Z and 09:52Z ticks, i.e.
+      after the 08:15Z reinstall, so both used windowed transcripts. The prose diff is
+      on #35: the vik board moved from the 19th to the 20th, and the 19th greps clean
+      for every 20th-only subject. Superseded: After the reinstall, re-distil 2026-08-19 and 2026-08-20 for
       `/Users/ac/_sync/dev/infra` and diff the prose against today's. That, not the
       session-id count, is the before/after #35 should be closed on.
 
@@ -313,7 +321,14 @@ project re-dirtied on four separate frozen days.
       pending; on the fix only the day that gained a message is.
 - [x] 13.5 Spec delta: the pending requirement now states the day scoping and carries a
       scenario for it.
-- [ ] 13.6 Release + deploy. Infra is holding for it and has silenced the `cchv-journal`
+- [x] 13.6 Released `cchv-v0.20.1` (`ac3945ec`), swapped by infra 2026-08-21. Migration
+      0008 executed in **13 ms** (metadata-only, against 0006's 6.66 s with its index
+      build). `healthz/journal` 503/3 groups → **200/ok/0 groups**, and it cleared **at
+      the migration, not at a tick** — NULL-reads-visible empties the dirty set the
+      moment the column exists. Verified under live load: 2,983 messages ingested for
+      cchv in ten minutes with `pending` empty, i.e. the session that caused the bug
+      proved it fixed while writing.
+      ORIGINAL TEXT: Release + deploy. Infra is holding for it and has silenced the `cchv-journal`
       **page** (not the check) under `ac/infra#118`, which names this fix as the expiry
       condition. **Closing that issue is part of this deploy, not a follow-up.**
 
