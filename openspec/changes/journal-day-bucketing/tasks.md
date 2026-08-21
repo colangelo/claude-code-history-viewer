@@ -116,9 +116,16 @@
       0 stale. The backlog drained as predicted; no intervention was needed.
       ⚠ **But it now answers in 10.0 s** (measured 09:5xZ), worse than the 6.9 s that
       produced the 01:29Z 502 — the live hub still runs the two-pass query, and the
-      single-pass fix (3.7 s, `b073deba`) is on `main` awaiting a swap. This is not
+      single-pass fix (3.7 s, `c31d31bd`) is on `main` awaiting a swap. This is not
       "bundle it whenever": at 10 s it is past most monitor timeouts and will flap
-      again. Superseded text below:
+      again. Infra reproduced the pre-swap cost independently: `within_days=7`
+      measured **6.73 s** at 08:19Z on the deployed binary (200, 2 groups, 0 stale).
+      **`b073deba` was the wrong ref** (infra, 2026-08-21) — it touches this file and
+      no `.rs` at all. `c31d31bd` is *both* the single-pass health query and the
+      `clippy::doc_markdown` backtick fix for the un-backticked `DarkWake` that
+      `b448d83c` introduced into `health.rs`. So they are one commit, not two: a
+      cherry-pick or a bisect that took `b073deba` for either would get neither.
+      Superseded text below:
       ~~`/v1/healthz/journal` still 503 and legitimately so:~~ the re-grouping left
       64 groups undrained, the one forward tick took its 50-group batch, 45 pending at
       last report and still draining. `status:"stale"` **with a groups list** is the
@@ -165,19 +172,32 @@ distiller used `date.today()`, the machine's **local calendar** date, so its "to
       `health.rs` and fails if the anchor drifts, naming the consequence.
 - [x] 11.4 Spec delta: the `Distiller job` requirement now states the anchor and carries
       a scenario pinning the 00:46Z case.
-- [ ] 11.5 Deploy: **distiller-only for the fix that matters** (`scripts/cchv-distill.py`
-      on m4m, no hub swap needed — `horizon_from` is a refactor, byte-equivalent in
-      behaviour). Until it lands, the nightly 00:00–04:00Z window keeps producing the
-      same false stale. The 6 groups dated 2026-08-13 have almost certainly aged out of
-      both windows by now and need the §10.2 backfill, not a tick.
+- [x] 11.5 **DONE — reinstalled by infra 2026-08-21, verified on run 206.** Deploy was
+      **distiller-only for the fix that matters** (`scripts/cchv-distill.py` on m4m, no
+      hub swap needed — `horizon_from` is a refactor, byte-equivalent in behaviour).
+      The 6 groups dated 2026-08-13 have aged out of both windows and need the §10.2
+      backfill, not a tick.
 
-      **Still owed, re-verified 2026-08-21 rather than assumed** — by infra on the hub
-      machine at 06:04Z and independently here: `~/.local/bin/cchv-distill` line 588 is
-      still `(date.today() - timedelta(days=args.horizon_days)).isoformat()`, and
-      neither `journal_today` nor `DAY_START_HOUR` appears anywhere in the installed
-      file (the repo has them at lines 100 / 468 / 720). Infra has their tracking issue
-      blocked on this reinstall, and will take it in the same pass as the
-      `distiller-tick-observability` hub swap. The stale copy is dated Jul 24 — an
+      Landed as `install -m 755` from main `08604fbd`, blob `c1d4a4ce`, extracted with
+      `git cat-file blob` rather than copied from the worktree — that tree is
+      Syncthing-shared, so a peer write mid-copy would not have shown up. Installed copy
+      `cmp`-identical to the blob. The Jul-24 predecessor (`b69f78a4…`) is kept at
+      `~/.config/cchv/staging/cchv-distill.preswap-2026-08-21` as the rollback point.
+      The plist diff was comment-only (every functional key byte-identical), so infra
+      deliberately did **not** reload — `bootstrap` fires `RunAtLoad`, and an
+      unrequested prod journal write is ac's call.
+
+      **Run 206, 08:45:52Z**: `backend=aiproxy model=gpt-5.6-sol effort=low`, then
+      `27 group(s) pending (from=2026-08-14, limit=50)`, straight into distilling.
+      `from=2026-08-14` is `journal_today()` and matches healthz — though *not* the
+      discriminating case, since at 08:45Z `date.today()` would also have said 08-14.
+      The discriminating window is 00:00–04:00Z, which is what `ac/infra#116` stays open
+      on. Same run is n=164 for the exit-timer rule: it opened at exactly run 205's
+      `done:` + 3600 s.
+
+      What was true until then, and is the transferable half: `~/.local/bin/cchv-distill`
+      line 588 was still `(date.today() - timedelta(days=args.horizon_days)).isoformat()`
+      with neither `journal_today` nor `DAY_START_HOUR` anywhere in the file — an
       installed script is a *copy*, so nothing about a green `main` says anything about
       what is running.
 - [ ] 11.6 No Gatus change is owed. `within_days=7` was never the wrong parameter — a
@@ -203,7 +223,19 @@ So the fix has landed in two halves and only one of them is live:
 | half | what it fixes | state |
 |---|---|---|
 | hub grouping (§2–§5) | *which* sessions belong to a day; the missing next-day entries | **live** since `cchv-v0.19.0`, verified |
-| distiller windowing (§7) | *which messages* reach a day's prompt — the wrong-day text the user reported | **not deployed** |
+| distiller windowing (§7) | *which messages* reach a day's prompt — the wrong-day text the user reported | ~~not deployed~~ → **live** since the §11.5 reinstall, 2026-08-21 |
+
+**The §7 half needed no hub swap, and we did not claim that** (infra, 2026-08-21).
+`from`/`to` on `GET /v1/sessions/{id}/messages` shipped in `d7d561be` — the *same*
+commit as the grouping fix, and an ancestor of `cchv-v0.19.0` — so the hub end of the
+windowing has been live since that release and only the installed script was stale.
+Measured against the deployed hub on session 1231594: unwindowed `X-Total-Count`
+**67889**, `[08-19T04:00Z, 08-20T04:00Z)` → **3487**, `[08-20T04:00Z, 08-21T04:00Z)` →
+**64402**, and 3487 + 64402 = 67889 exactly, so the two logical-day windows partition
+the session with no overlap and no gap. The reinstall therefore closed #35's second
+half on its own. Worth generalising: *"which halves are deployed"* is a question about
+artifacts, not about sections — one commit here spanned both, and reading the section
+numbering as the deploy boundary understated what was already live.
 
 Consequence for anything already verified: every journal entry generated so far —
 including the 2026-08-20 entries confirmed at 07:47Z, and the re-distilled 2026-08-19
@@ -217,6 +249,32 @@ otherwise is reading LLM variance.
 - [ ] 12.2 After the reinstall, re-distil 2026-08-19 and 2026-08-20 for
       `/Users/ac/_sync/dev/infra` and diff the prose against today's. That, not the
       session-id count, is the before/after #35 should be closed on.
+
+      ⚠ **This plan has no lever, and that is by design** (infra, 2026-08-21).
+      `journal.rs::pending` makes a group pending on three *data-derived* conditions —
+      no row, `session_ids` drift, `ingest_xid` not visible in `generated_snapshot` —
+      and a distiller-side windowing change moves none of them. Our own docstring is
+      the reason: dirtiness comes "from the data, not from an operator remembering to
+      pass a flag". So a re-distil is a **side effect of unrelated ingest**, not
+      something this change can cause. Do not plan a before/after that assumes it can.
+
+      Where the two days actually stand (infra measured both, and retracted a first
+      reading that said neither could fire — 28 minutes falsified it):
+      - **2026-08-19 `/Users/ac/_sync/dev/infra`** — old entry `generated_at`
+        `2026-08-21T04:50:43Z` (run 203); not pending at 08:19Z, **pending at 08:47Z**
+        after ongoing ingest dirtied it (the work list went 2 → 27 groups in that
+        window). It re-distils on a forthcoming tick, free.
+      - **2026-08-20 `/Users/ac/_sync/dev/infra`** — old entry `07:41:03Z` (run 205);
+        still not pending. Deleting its `journal_entries` row is the only lever the
+        schema offers, and that is an operator action, not a code path.
+
+      The "before" prose is **perishable and was captured first** — both entries in
+      full at `~/.config/cchv/staging/journal-prose-before-windowing-2026-08-21.json`
+      **on m4m** (infra's filesystem, not ours). The 19th going pending makes that
+      load-bearing rather than precautionary: it is queued to be overwritten.
+      Suggestive already, though the diff is ours to do: the **19th's** topics include
+      "Vikunja project board", "measurement and timezone corrections" and "handoff
+      verification" — which is the 20th–21st's work.
 - [ ] 12.3 Make the copy self-evident: either install by symlink, or have the distiller
       log its own version/commit at tick start so a stale copy is visible in the log it
       already writes. Today nothing running says which build it is.

@@ -70,9 +70,20 @@
 
 - [ ] 8.1 Release + hub swap **and** `cchv-distill` reinstall on the hub machine —
       one relay carrying both halves (`docs/archive/deployment.md` §2b, §3c). Order
-      does not matter: new-distiller/old-hub swallows a 404 with a WARN, and
-      new-hub/old-distiller reports `null` and alerts nobody. The distiller
-      reinstall also carries `journal-day-bucketing` §11.5, which is still owed.
+      does not matter: new-distiller/old-hub swallows a **405** with a WARN, and
+      new-hub/old-distiller reports `null` and alerts nobody. **Distiller half DONE**
+      2026-08-21 (infra took it early rather than waiting for the swap; it also
+      carried `journal-day-bucketing` §11.5). Hub half still owed — it needs a
+      release past `cchv-v0.19.0`.
+
+      **The warning is a `405`, not a `404`** (infra's correction of their own probe,
+      2026-08-21, and the reason it is worth the line): they read `GET
+      /v1/journal/ticks` → 404 as "route absent, since a POST-only route would answer
+      405" — then run 206 logged `POST /v1/journal/ticks 405`. The control settles it:
+      the certainly-absent `/v1/journal/zzznope` answers GET 404 / POST 405, identical
+      to `ticks`, so on this router **405 discriminates nothing** about whether a route
+      exists. Verdict (old hub, route absent) unchanged; the status code in the log is
+      405. Both are 4xx, so neither is retried and distillation is untouched either way.
 - [ ] 8.2 Verify live: `last_tick_at` advances after a tick; `ticks_last_24h`
       sits well under 24 — infra measured **15.38 ticks/day** on this host. It is
       *not* the wake count (40–106 sleep cycles/day), but not because DarkWakes

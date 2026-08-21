@@ -2026,18 +2026,39 @@ equivalently.
 >
 > **The two halves deploy in either order**, which is worth knowing because they
 > live in different artifacts (hub binary, `~/.local/bin/cchv-distill`). New
-> distiller against an old hub: the POST 404s, which is a 4xx, so it is not
-> retried and is swallowed with a `WARN: tick record failed (continuing)` — the
-> distillation itself is untouched. New hub against an old distiller: nothing
-> ever posts, so the tick fields read `null` / `0`, which is honest and alerts
-> nobody while `max_tick_age_secs` is unset. **Set `max_tick_age_secs` on the
-> Gatus check only after both halves are live**, or the check pages on a
-> distiller that is running fine and simply cannot say so.
+> distiller against an old hub: **the POST 405s** (not 404 — see below), which is
+> a 4xx, so it is not retried and is swallowed with a
+> `WARN: tick record failed (continuing)` — the distillation itself is untouched.
+> New hub against an old distiller: nothing ever posts, so the tick fields read
+> `null` / `0`, which is honest and alerts nobody while `max_tick_age_secs` is
+> unset. **Set `max_tick_age_secs` on the Gatus check only after both halves are
+> live**, or the check pages on a distiller that is running fine and simply
+> cannot say so.
+>
+> **405, and it discriminates nothing.** This said 404 until 2026-08-21, from a
+> probe of `GET /v1/journal/ticks` → 404 reasoned as "route absent, since a
+> POST-only route would answer 405". Run 206 of the reinstalled distiller then
+> logged `POST /v1/journal/ticks 405` against the pre-swap hub, and the control
+> nobody had run explains both: the certainly-absent `/v1/journal/zzznope`
+> answers **GET 404 / POST 405**, identical to `ticks`. On this router 405 is
+> simply what a non-`GET` gets on an absent path, so it is evidence about the
+> *method*, never about whether the route exists. Use `GET /v1/journal/entries`
+> → 200 as the positive control when you need to prove the router is up at all.
+>
+> **This is the live state as of 2026-08-21**, since the distiller half landed
+> first: each tick on the pre-swap hub logs one swallowed 405 per run. Expected,
+> not a regression; it clears with the hub swap.
 
 - **Install** (on m4m):
 
   ```bash
-  install -m 755 scripts/cchv-distill.py ~/.local/bin/cchv-distill
+  # Install from the BLOB, not the worktree file: this tree is Syncthing-shared, so a
+  # peer write landing mid-copy is invisible to the copy AND to a later `git status`.
+  # Name the commit you mean, then prove the installed copy is what you named.
+  git cat-file blob 08604fbd:scripts/cchv-distill.py > /tmp/cchv-distill.staged
+  cp ~/.local/bin/cchv-distill ~/.config/cchv/staging/cchv-distill.preswap-$(date +%F)  # rollback point
+  install -m 755 /tmp/cchv-distill.staged ~/.local/bin/cchv-distill
+  cmp /tmp/cchv-distill.staged ~/.local/bin/cchv-distill && echo "installed == blob"
   cp scripts/dev.cchv.distiller.plist ~/Library/LaunchAgents/
   # first install:
   launchctl load ~/Library/LaunchAgents/dev.cchv.distiller.plist
@@ -2045,6 +2066,13 @@ equivalently.
   launchctl bootout  gui/$(id -u)/dev.cchv.distiller 2>/dev/null || true
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.distiller.plist
   ```
+
+  **Do not reload for a comment-only plist change.** `bootstrap` fires `RunAtLoad`,
+  i.e. an immediate unscheduled distill that writes prod journal entries — ac's call,
+  not a side effect of syncing a file whose functional keys are byte-identical. Diff
+  the plist and reload only if a key actually changed. The script itself needs no
+  reload: `launchd` re-execs it at the next `StartInterval` tick, which is how the
+  2026-08-21 reinstall was verified on run 206 without touching the job.
 
   Requires `uv` on PATH (PEP 723 script). **LLM backend (default `aiproxy`):**
   an OpenAI-compatible HTTP call to infra's CLIProxyAPI node
