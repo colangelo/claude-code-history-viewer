@@ -59,6 +59,16 @@
       on when you look. A single reading without its cycle position is not a measurement of
       the index; it is a measurement of the day. Verify: every arm's readings carry both
       numbers.
+
+      **And know which way the current position biases the result before believing it.**
+      The cycle position on 2026-08-21 was **75 %** (`n_ins_since_vacuum` 1,135,443 of
+      1,516,440), i.e. near the *pessimistic* end: a run taken then maximises `Heap
+      Fetches` and **understates** the index. That is the dangerous direction, because it
+      is the one that gets a correct change rejected — a flattering reading invites a
+      second look, an unflattering one usually does not. So either take each arm **twice,
+      at both ends of the cycle** (just after an insert-triggered VACUUM and just before
+      the next), or take it once and state explicitly which end it came from and which way
+      it biases. A result quoted without that is not interpretable.
 - [ ] 3.1 Re-run 1.1's two `EXPLAIN (ANALYZE, BUFFERS)` and diff against `baseline.txt`.
       Verify: node is `Index Only Scan using messages_journal_fold_idx`; `Heap Fetches` is
       small relative to rows returned; `shared read+hit` drops by roughly an order of
