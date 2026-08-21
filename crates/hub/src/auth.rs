@@ -7,6 +7,8 @@
 //! - [`Authenticated`] only proves the caller holds a valid token — used by the
 //!   read endpoints, which span all machines in the archive.
 
+use std::future::{ready, Future};
+
 use axum::extract::FromRequestParts;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
@@ -38,11 +40,16 @@ pub struct AuthedMachine(pub Uuid);
 impl FromRequestParts<AppState> for AuthedMachine {
     type Rejection = HubError;
 
-    async fn from_request_parts(
+    // Not an `async fn`: both extractors resolve synchronously — a header read
+    // plus a map lookup, no I/O — so they hand back an already-complete future
+    // instead of a future that never awaits (`clippy::unused_async_trait_impl`,
+    // which is `-D warnings` in CI). The decision itself stays in the plain
+    // functions above, which is where it is readable and testable.
+    fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        Ok(AuthedMachine(resolve_machine(parts, state)?))
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        ready(resolve_machine(parts, state).map(AuthedMachine))
     }
 }
 
@@ -80,19 +87,26 @@ fn trusted_tailscale_identity(parts: &Parts, state: &AppState) -> Option<String>
 /// for audit trails on the few read-principal writes (identity aliases).
 pub struct Authenticated(pub String);
 
+/// Resolve the caller's read principal: a valid bearer token first, then a
+/// trusted Tailscale identity header, else 401.
+fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticated, HubError> {
+    if let Ok(machine) = resolve_machine(parts, state) {
+        return Ok(Authenticated(format!("machine:{machine}")));
+    }
+    if let Some(login) = trusted_tailscale_identity(parts, state) {
+        return Ok(Authenticated(format!("tailscale:{login}")));
+    }
+    Err(HubError::Unauthorized)
+}
+
 impl FromRequestParts<AppState> for Authenticated {
     type Rejection = HubError;
 
-    async fn from_request_parts(
+    // Synchronous, like `AuthedMachine` above — see the note there.
+    fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        if let Ok(machine) = resolve_machine(parts, state) {
-            return Ok(Authenticated(format!("machine:{machine}")));
-        }
-        if let Some(login) = trusted_tailscale_identity(parts, state) {
-            return Ok(Authenticated(format!("tailscale:{login}")));
-        }
-        Err(HubError::Unauthorized)
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        ready(resolve_read_principal(parts, state))
     }
 }
