@@ -74,7 +74,7 @@
       next tick**, and that a version-only skew shows as a one-line
       `git diff <old> <new> -- scripts/cchv-distill.py`. Verify: both sections name
       the exact commands.
-- [ ] 5.2 Note for the `cchv-deploy` skill (CONTEXT repo — not edited from here): its
+- [x] 5.2 Note for the `cchv-deploy` skill (CONTEXT repo — not edited from here): its
       § swap-proof probe should prefer the `version` field from this release on; its
       Phase 2 staging list gains the script. Verify: the note is in the release relay
       and recorded as a comment on #39 so it has an owner.
