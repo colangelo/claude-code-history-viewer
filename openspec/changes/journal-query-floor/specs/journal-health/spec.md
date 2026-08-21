@@ -1,5 +1,9 @@
 # journal-health (delta)
 
+> Rebuilt on top of `build-identity-surfaces` (archived
+> 2026-08-21): a MODIFIED block replaces the whole requirement, so this text must carry
+> that change's identity fields and scenarios as well as its own additions.
+
 ## MODIFIED Requirements
 
 ### Requirement: Journal staleness health endpoint
@@ -41,6 +45,20 @@ group list, so that "a backlog is draining" and "no distiller has run" are
 distinguishable from one another rather than being the same 503: `last_tick_at`,
 `last_tick_age_secs`, `last_tick_mode` and `last_tick_groups_pending` (all null
 when no tick has ever been recorded), and `ticks_last_24h`.
+
+The response SHALL also carry identity next to liveness: `hub_version` (the hub's own
+release version, the same value `GET /v1/healthz` reports) and, from the most recent
+recorded tick, `last_tick_distiller_version` and `last_tick_distiller_blob` — the
+release version the distiller script was cut at and the git blob id of the file that
+actually ran. Both are `null` when no tick has been recorded or when the last tick was
+posted by a distiller that predates this field, which is itself the reading "an old
+distiller is ticking". A release deploys in two halves through different hands — a
+hub swap and a distiller reinstall — and this is the one read that says whether both
+landed: a `hub_version` ahead of `last_tick_distiller_version` after a tick means the
+distiller half is still the old copy. The blob id is the exact identity: it equals
+`git rev-parse <rev>:scripts/cchv-distill.py` for whichever revision the installed copy
+matches, so a reader with the repo can name the commit the copy came from — or show that
+it matches none.
 
 The endpoint is monitor-polled, so its cost is part of its contract. Evaluating it SHALL
 NOT require reading message payloads: the fold it runs needs only each message's timestamp,
@@ -130,6 +148,27 @@ error path.
 - **WHEN** `max_tick_age_secs` is supplied and exceeded while in-window groups
   are also stale
 - **THEN** the endpoint returns 503 with status `"no_tick"`
+
+#### Scenario: Both halves of a release are visible in one read
+
+- **WHEN** the hub has been swapped to release `X.Y.Z` and a distiller cut at the same
+  release has since ticked
+- **THEN** the response carries `hub_version` `X.Y.Z`, `last_tick_distiller_version`
+  `X.Y.Z`, and a 40-hex `last_tick_distiller_blob`
+
+#### Scenario: A stale distiller copy is visible without touching the host
+
+- **WHEN** the hub is at release `X.Y.Z` but the last tick was posted by a distiller
+  whose script was cut at an earlier release
+- **THEN** `last_tick_distiller_version` reports the earlier release and
+  `last_tick_distiller_blob` the blob of the file that ran, and the verdict
+  (`ok` / `stale` / `no_tick`) is unaffected — identity is reported, never alerted on
+
+#### Scenario: A pre-identity distiller reads as null
+
+- **WHEN** the last recorded tick carried no identity fields
+- **THEN** `last_tick_distiller_version` and `last_tick_distiller_blob` are `null`
+  while `last_tick_at` and the other tick fields are populated as before
 
 #### Scenario: The check does not read what it does not use
 

@@ -250,6 +250,18 @@ contract of never writing. The record asserts only that a distiller reached the 
 obtained a work list — whether that work then got done is what the pending list and the
 staleness check already answer.
 
+The distiller SHALL announce its own identity as the first thing it logs on every
+invocation, and SHALL carry the same identity on the tick record: the release version
+its script was cut at, and the git blob id of the file that is actually running —
+computed at start from the bytes of that file, not read from any side channel, so that
+an installed copy and the repository's copy can be compared from the log alone. The
+installed distiller is a copy, not a symlink, and that stays so: the working tree it
+would point into is shared by a replicator, and a symlink would put a peer's in-flight
+edit into production on the next tick with no deploy boundary. The identity line exists
+because a copy that says nothing about itself let a stale build run for hours behind a
+green `main` (2026-08-21); the remedy is not to make staleness impossible but to make it
+visible where someone already looks.
+
 #### Scenario: Normal run drains pending
 
 - **WHEN** the distiller runs and the pending list has closed groups within the forward
@@ -331,6 +343,19 @@ staleness check already answer.
 - **THEN** it has recorded the tick with the hub, so the absence of work is
   distinguishable from the absence of a distiller
 
+#### Scenario: The first log line names the running copy
+
+- **WHEN** the distiller starts, in any mode including `--dry-run`
+- **THEN** before any hub call it logs its release version and the git blob id of its
+  own file, and `git rev-parse <rev>:scripts/cchv-distill.py` for the revision the copy
+  was installed from equals that blob id
+
+#### Scenario: The tick record carries the same identity
+
+- **WHEN** a tick is recorded
+- **THEN** the record carries the version and blob id the log line announced, so the
+  hub can report which copy ticked
+
 #### Scenario: A dry run is not a tick
 
 - **WHEN** the distiller is invoked with `--dry-run`
@@ -359,6 +384,14 @@ empty work list from one that has not run at all. Tick liveness MUST NOT be infe
 from `journal_entries.generated_at`, which moves only when a tick both had work and
 succeeded at it.
 
+The record MAY additionally carry `distiller_version` (a release version string) and
+`distiller_blob` (a git blob id: exactly 40 lowercase hexadecimal characters). Both are
+optional so that a distiller predating them keeps ticking unchanged; when absent they
+are stored as null. When `distiller_blob` is present but not 40 lowercase hex, the
+record SHALL be rejected with a 400 naming the field and no write — a malformed
+identity is worse than none, because it reads as one. The most recent record's
+identity fields SHALL be reported by `GET /v1/healthz/journal`.
+
 #### Scenario: A tick is recorded
 
 - **WHEN** a distiller POSTs a tick record with a valid mode and pending count
@@ -376,6 +409,23 @@ succeeded at it.
 - **WHEN** the tick record is posted without a valid machine token
 - **THEN** the hub rejects it unauthenticated, like the entry upsert
 
+#### Scenario: A tick with identity is stored with it
+
+- **WHEN** a distiller POSTs a tick record carrying `distiller_version` and a 40-hex
+  `distiller_blob`
+- **THEN** the hub stores both and `GET /v1/healthz/journal` reports them as the last
+  tick's identity
+
+#### Scenario: A tick without identity is still a tick
+
+- **WHEN** a distiller POSTs a tick record with neither identity field
+- **THEN** the hub stores the tick with null identity and liveness is reported exactly
+  as before
+
+#### Scenario: A malformed blob id is rejected
+
+- **WHEN** `distiller_blob` is present and is not exactly 40 lowercase hex characters
+- **THEN** the hub returns 400 naming `distiller_blob` and writes nothing
 ### Requirement: Identity-scoped journal reads
 
 `GET /v1/journal/entries` and journal search SHALL accept the
