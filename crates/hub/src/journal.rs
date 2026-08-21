@@ -56,19 +56,34 @@ pub(crate) const DAY_START_HOUR: i32 = 4;
 /// `entry_date`, so a bounded call does not scan the archive's whole history.
 /// The two are exactly equivalent — `entry_date >= F` iff `ts >= F 00:00 UTC + H`
 /// — because the fold is a constant shift.
+///
+/// `latest_arrival` rides along because `healthz_journal` needs it and the
+/// grouping is already being done: it is a `max()` over rows this CTE groups
+/// anyway, so it is free here and a second full pass over `messages` anywhere
+/// else. Health used to take that second pass and it cost **6.9 s** against
+/// **3.7 s** for the single-pass form, measured on the live archive — enough that
+/// the endpoint intermittently timed out at the proxy and answered `502`.
+///
+/// It is also the more correct number. Computed from the group's *sessions*, a
+/// midnight-spanning session hands the 19th an arrival timestamp belonging to the
+/// 20th's data — the same misattribution this whole change exists to remove,
+/// surviving in the one column nobody looked at. Computed here it is the latest
+/// arrival of data **for that day**.
 pub(crate) const SESSION_DAYS_CTE: &str = r#"
     msg_days AS (
-        SELECT DISTINCT
+        SELECT
             ((m."timestamp" - make_interval(hours => $1::int))
                 AT TIME ZONE 'UTC')::date  AS entry_date,
             s.project_id                   AS project_id,
-            m.session_id                   AS session_id
+            m.session_id                   AS session_id,
+            max(m.created_at)              AS latest_arrival
         FROM messages m
         JOIN sessions s ON m.session_id = s.id
         WHERE m."timestamp" IS NOT NULL
           AND ($2::date IS NULL
                OR m."timestamp" >= (($2::date + make_interval(hours => $1::int))
                                        AT TIME ZONE 'UTC'))
+        GROUP BY 1, 2, 3
     )
 "#;
 

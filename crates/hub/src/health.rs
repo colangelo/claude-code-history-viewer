@@ -270,7 +270,7 @@ pub struct JournalHealthResponse {
     /// It is **not** a wake count, and a reader who treats it as one is wrong in
     /// both directions. Measured on the hub machine over 13 days (2026-08-21):
     /// 14.62 ticks/day, per-UTC-day range 10–18, against 40–106 sleep cycles a
-    /// day on that same host — most of those are DarkWakes, and a DarkWake does
+    /// day on that same host — most of those are `DarkWake`s, and a `DarkWake` does
     /// not run a `StartInterval` agent.
     pub ticks_last_24h: i64,
     pub max_tick_age_secs: Option<i64>,
@@ -387,20 +387,29 @@ pub async fn healthz_journal(
     // `now()`, where it does matter.
     //
     // `sess_win` bounds the days; `grp` carries the per-session ingest xids for
-    // the dirty check, `arrivals` the latest arrival. A group is pending when it
-    // has no journal row, or its stored session set has drifted from the
-    // computed one, or a session's ingest xid is invisible in the row's snapshot
-    // (committed after the entry was generated) — commit-order exact, identical
-    // to `journal::pending`.
+    // the dirty check and rolls up the arrival. A group is pending when it has no
+    // journal row, or its stored session set has drifted from the computed one,
+    // or a session's ingest xid is invisible in the row's snapshot (committed
+    // after the entry was generated) — commit-order exact, identical to
+    // `journal::pending`.
+    //
+    // There is no `arrivals` CTE any more. It re-joined `messages` purely to get
+    // `max(created_at)`, which meant this endpoint scanned the window twice:
+    // 6.9 s against 3.7 s for the single-pass form, measured on the live archive.
+    // At 6.9 s it intermittently timed out at the proxy and answered 502 — a
+    // health check that flaps is worse than a slow one, because the flap is what
+    // gets investigated. `SESSION_DAYS_CTE` now carries the arrival, which is
+    // both free there and the more correct number (see its doc comment).
     let horizon_from = horizon_from(Utc::now(), day_start_hour, within_days);
     let rows = sqlx::query_as::<_, JournalGroupRow>(&format!(
         r"
         WITH {session_days},
         sess_win AS (
-            SELECT d.session_id   AS session_id,
-                   d.entry_date   AS entry_date,
-                   p.project_path AS project_path,
-                   s.ingest_xid   AS ingest_xid
+            SELECT d.session_id     AS session_id,
+                   d.entry_date     AS entry_date,
+                   p.project_path   AS project_path,
+                   s.ingest_xid     AS ingest_xid,
+                   d.latest_arrival AS latest_arrival
             FROM msg_days d
             JOIN projects p ON d.project_id = p.id
             JOIN sessions s ON s.id = d.session_id
@@ -410,21 +419,13 @@ pub async fn healthz_journal(
         grp AS (
             SELECT entry_date, project_path,
                    array_agg(session_id ORDER BY session_id) AS session_ids,
-                   array_agg(ingest_xid)                     AS ingest_xids
+                   array_agg(ingest_xid)                     AS ingest_xids,
+                   max(latest_arrival)                       AS latest_arrival
             FROM sess_win
             GROUP BY entry_date, project_path
-        ),
-        arrivals AS (
-            SELECT sw.entry_date, sw.project_path,
-                   max(m.created_at) AS latest_arrival
-            FROM sess_win sw
-            JOIN messages m ON m.session_id = sw.session_id
-            GROUP BY sw.entry_date, sw.project_path
         )
-        SELECT g.entry_date, g.project_path, a.latest_arrival
+        SELECT g.entry_date, g.project_path, g.latest_arrival
         FROM grp g
-        JOIN arrivals a
-            ON a.entry_date = g.entry_date AND a.project_path = g.project_path
         LEFT JOIN journal_entries j
             ON j.entry_date = g.entry_date AND j.project_path = g.project_path
         WHERE j.id IS NULL

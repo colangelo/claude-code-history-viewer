@@ -185,17 +185,30 @@ async fn get(hub: &TestHub, path: &str, query: &[(&str, &str)]) -> reqwest::Resp
 
 /// The pending groups for `project`, as `(entry_date, session_ids)`.
 async fn pending_for(hub: &TestHub, project: &str, from: &str) -> Vec<(String, Vec<i64>)> {
+    const LIMIT: usize = 200;
     let resp = get(
         hub,
         "/v1/journal/pending",
-        &[("from", from), ("limit", "500")],
+        &[("from", from), ("limit", &LIMIT.to_string())],
     )
     .await;
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    body.as_array()
-        .unwrap()
-        .iter()
+    let all = body.as_array().unwrap();
+    // A FULL page means "the newest LIMIT groups", not "all of them", so every
+    // absence assertion built on one is unsound — the row may be on page two.
+    // Not hypothetical: this silently broke
+    // `idle_day_inside_a_session_span_is_not_a_group` once the shared database
+    // held 322 groups in the window, and it failed by accusing the PRODUCT.
+    // Refuse to answer rather than answer unsoundly.
+    assert!(
+        all.len() < LIMIT,
+        "pending returned a FULL page ({LIMIT}) for from={from}: this test's groups \
+         may be past the page boundary, so neither presence nor absence can be \
+         concluded. The shared test database has accumulated too much data — drop \
+         and recreate it (CI runs against a fresh one). Refusing to assert."
+    );
+    all.iter()
         .filter(|g| g["project_path"] == Value::String(project.to_string()))
         .map(|g| {
             (
@@ -556,4 +569,89 @@ async fn message_window_bounds_stand_alone_and_reject_garbage() {
         let resp = get(&hub, &format!("/v1/sessions/{sid}/messages"), &[bad]).await;
         assert_eq!(resp.status(), 400, "bound {bad:?} must 400");
     }
+}
+
+// ---------------------------------------------------------------------------
+// arrival attribution
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn each_day_reports_its_own_arrival_not_the_session_s() {
+    // `healthz_journal` decides staleness from "when did this group's data last
+    // arrive". Derived from the group's *sessions* — as it was until the arrival
+    // moved into the shared fold — a midnight-spanning session hands the earlier
+    // day an arrival timestamp belonging to the later day's data. That is the same
+    // misattribution the day fold exists to remove, surviving in the one column
+    // nobody was looking at, and it hides a genuinely stale day behind fresh data
+    // that belongs to the next one.
+    let hub = spawn().await;
+    let project = format!("/w/jd-arrival-{}", hub.hostname);
+    seed(
+        &hub,
+        &project,
+        &[("s-span", vec![at(2, 10, 0, 0), at(1, 10, 0, 0)])],
+    )
+    .await;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&test_db_url())
+        .await
+        .unwrap();
+    // The earlier day's message arrived long ago; the later day's just now. One
+    // session, so a session-level max() would report "just now" for both.
+    sqlx::query(
+        r#"UPDATE messages SET created_at = now() - interval '3 days'
+           WHERE machine_id = $1 AND "timestamp" < $2"#,
+    )
+    .bind(hub.machine_id)
+    .bind(
+        chrono::NaiveDate::parse_from_str(&day(1).to_string(), "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(4, 0, 0)
+            .unwrap()
+            .and_utc(),
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let body: Value = reqwest::Client::new()
+        .get(format!("{}/v1/healthz/journal", hub.base))
+        .query(&[("within_days", "10")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let mine: Vec<&Value> = body["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["project_path"] == Value::String(project.clone()))
+        .collect();
+    assert_eq!(mine.len(), 2, "both days evaluated, got {mine:?}");
+
+    let earlier = mine
+        .iter()
+        .find(|g| g["entry_date"] == Value::String(day(2).to_string()))
+        .expect("earlier day present");
+    let later = mine
+        .iter()
+        .find(|g| g["entry_date"] == Value::String(day(1).to_string()))
+        .expect("later day present");
+
+    assert_eq!(
+        earlier["stale"],
+        Value::Bool(true),
+        "the earlier day's data arrived 3 days ago and must read stale, not be \
+         masked by the later day's arrival on the same session: {earlier:?}"
+    );
+    assert_eq!(
+        later["stale"],
+        Value::Bool(false),
+        "the later day's data just arrived: {later:?}"
+    );
 }
