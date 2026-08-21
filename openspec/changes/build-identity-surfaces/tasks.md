@@ -92,7 +92,7 @@
       $TAGSHA` shows every workflow `success` (Security Audit included: this is the
       first tag after `ac3945ec`, so a red here is new and real); release has 3 assets.
       Verify: the listing and `gh release view`.
-- [ ] 6.4 Relay the deploy to infra: hub swap from the release asset **and** distiller
+- [x] 6.4 Relay the deploy to infra: hub swap from the release asset **and** distiller
       reinstall from `git cat-file cchv-v0.21.0:scripts/cchv-distill.py`; swap proof
       `GET /v1/healthz .version == "0.21.0"`; both-halves proof after the first tick;
       expected non-200s: none; migration 0009 is an instant `ADD COLUMN`; Gatus must not
