@@ -569,6 +569,14 @@ it. A relay handing off a rev marker should carry both counts, new **and** old.
 > embedded version) and because the family's shape — a check that reads as strict
 > while answering a different question — recurs far beyond this file. What it no
 > longer governs is the case it was written for.
+>
+> **One moment it does not cover, and infra caught this on the v0.21.0 deploy: step 6b,
+> the probe of the *live path* taken BEFORE the restart.** The version field is served by
+> the running process, so it cannot answer for a binary copied into place but not yet
+> started — precisely the moment step 6b exists to check. A `strings` marker measured
+> **both ways** still does that job (they used `last_tick_distiller_version`: 2 in the
+> new asset, 0 in the outgoing one). So the two proofs cover **different moments** rather
+> than one replacing the other: marker before the restart, version field after it.
 
 **2026-08-21, `cchv-v0.20.1` → `cchv-v0.21.0` (release `9b0633cb`) — all three
 steps landed and verified.** The release whose whole purpose was to make this
@@ -588,9 +596,14 @@ section's central question answerable: *which build is running?*
   `archive-zcC8x53V.js` (2× `cchv-v0.21.0`, and the *only* `cchv-v*` semver in
   that chunk); the old chunk 404s.
 - Migration `0009` (two nullable columns on `distiller_ticks`) was **measured
-  before the relay rather than estimated**: 0.93 ms against a local table of
-  prod's exact shape, prod holding 16 rows. Contrast `0006`'s 6.66 s, which is
-  why that one needed a startup window planned around it.
+  before the relay rather than estimated**: **7.15 ms measured on prod** by infra
+  during the deploy. Quote that figure, not the 0.93 ms we measured beforehand
+  against a local table of prod's exact shape — prod is **7.7× slower** than the
+  local stand-in, and someone will eventually extrapolate one of these to a bigger
+  table. The conclusion is unchanged either way: nothing like `0006`'s 6.66 s, no
+  startup window to plan around. The general form: a local table of the right
+  *shape* predicts the right *order of magnitude* and nothing finer — publish the
+  number from the machine that will run it.
 - Predicted and held: **no behavioural non-200.** The v0.20.0 deploy flipped
   `/v1/healthz/journal` 200 → 503 by changing the predicate the check evaluates
   and the relay did not say so, leaving infra to judge mid-deploy whether a 503
@@ -2137,7 +2150,14 @@ equivalently.
   # peer write landing mid-copy is invisible to the copy AND to a later `git status`.
   # Name the commit you mean, then prove the installed copy is what you named.
   git cat-file blob 08604fbd:scripts/cchv-distill.py > /tmp/cchv-distill.staged
-  cp ~/.local/bin/cchv-distill ~/.config/cchv/staging/cchv-distill.preswap-$(date +%F)  # rollback point
+  # Timestamped, NOT `$(date +%F)`. A date-stamped backup is only safe if you deploy at
+  # most once a day, which nothing else in this ceremony imposes — and 2026-08-21 is
+  # exactly the day it bit: the 08:15Z install had already created
+  # `cchv-distill.preswap-2026-08-21` holding the Jul-24 original, so the 16:30Z install
+  # running the date-stamped line verbatim would have silently overwritten the only copy
+  # of the very thing being rolled back from. `cp` warns about nothing. (infra, on the
+  # v0.21.0 deploy; both backups survive under the timestamped form.)
+  cp ~/.local/bin/cchv-distill ~/.config/cchv/staging/cchv-distill.preswap-$(date +%Y%m%d-%H%M)  # rollback point
   install -m 755 /tmp/cchv-distill.staged ~/.local/bin/cchv-distill
   cmp /tmp/cchv-distill.staged ~/.local/bin/cchv-distill && echo "installed == blob"
   cp scripts/dev.cchv.distiller.plist ~/Library/LaunchAgents/
