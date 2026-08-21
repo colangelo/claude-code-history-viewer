@@ -88,7 +88,7 @@
       2026-08-19 from 7 stored sessions to 9.
 - [x] 9.2b Post-deploy (2026-08-21 00:29Z): `messages_session_timestamp_idx` present on
       pg1, `indisvalid = t`, 215 MB.
-- [ ] 9.2c Still open (tracked as **#36**, with numbers): confirm the windowed fetch *plans* onto the new index, and
+- [x] 9.2c **Deferred to #36** (not abandoned — the issue carries the measurements): confirm the windowed fetch *plans* onto the new index, and
       re-measure the pending query now that it exists (design.md's numbers predate it).
 - [x] 9.3a Post-deploy API verification (2026-08-21 00:28Z, **on m4m** — not an
       independent cross-machine check): windowed read 200 with
@@ -139,9 +139,21 @@
 - [x] 10.1 Released `cchv-v0.19.0` (`91df7b8e`), relayed `576c10a3`, swapped by infra
       and verified live at 00:27:31Z. Follow-ups `e4615da0` (the expected 503) and
       `6cba8c6e` (corrected clear-by time).
-- [ ] 10.2 After the first forward tick drains, run the bounded historical repair:
-      `cchv-distill --backfill --from 2026-07-04` — 459 groups (287 never distilled,
-      172 drifted), 20 per tick by default. Operator's call, not automatic.
+- [x] 10.2 **DONE 2026-08-21 13:24Z — historical repair complete, 100% coverage.**
+      `cchv-distill --backfill --from 2026-07-04`, batches of 50, **401 groups, 0 failed**:
+      **199 entries + 202 skips**. Final state `0` never-distilled, `0` wrong-session-set,
+      **562 correct**; `pending` empty and `healthz/journal` `ok`. Coverage now runs
+      2026-07-04 → 2026-08-20, 568 entries (350 substantive). Measured throughput ~7 s per
+      group, ~50 min wall clock — not the ~20 s/group the estimate assumed.
+
+      **The ~50 % skip rate is correct, and it needed checking to know that.** A group
+      showing 12,869 messages in its day came back `skip`, which looked like silent data
+      loss; the backfill was stopped mid-run to investigate. It held 3 real user messages
+      and 12,864 Claude Code **state records** (`permission-mode`, `agent-color`,
+      `worktree-state`, …) with `content IS NULL`. Skip was right. Archive-wide that is
+      **91.1 % of claude rows** — filed as **#41**, because it silently inflates every
+      count in this change's own documentation by ~11×.
+
 - [x] 10.3 **#35 closed** on the prose diff: the vik board moved from the 2026-08-19
       entry to 2026-08-20 where it happened, and the 08-19 entry greps clean for every
       08-20-only subject. Both entries generated after the 08:15Z distiller reinstall,
@@ -283,7 +295,10 @@ otherwise is reading LLM variance.
       Suggestive already, though the diff is ours to do: the **19th's** topics include
       "Vikunja project board", "measurement and timezone corrections" and "handoff
       verification" — which is the 20th–21st's work.
-- [ ] 12.3 Make the copy self-evident: either install by symlink, or have the distiller
+- [x] 12.3 **Deferred to #40**, with a recommendation recorded there (log the version at
+      tick start; NOT a symlink, because this worktree is Syncthing-shared and a peer's
+      in-flight edit would go live on the next tick with no review step). Original ask:
+      Make the copy self-evident: either install by symlink, or have the distiller
       log its own version/commit at tick start so a stale copy is visible in the log it
       already writes. Today nothing running says which build it is.
 
