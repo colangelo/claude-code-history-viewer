@@ -65,7 +65,7 @@
 
 ## 5. Docs and deploy contract
 
-- [ ] 5.1 `docs/archive/deployment.md` §2b — the swap proof is now
+- [x] 5.1 `docs/archive/deployment.md` §2b — the swap proof is now
       `curl -s $HUB/v1/healthz | jq -r .version` == released version (exact string
       compare), replacing route archaeology; §3c — after a distiller reinstall, the
       first tick's log line and `GET /v1/healthz/journal` `last_tick_distiller_blob`

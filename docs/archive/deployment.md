@@ -327,6 +327,37 @@ semantic leg fell back to keyword.
 
 ## 2b. House deployment: swapping the m4m hub binary
 
+> **Swap proof, from `cchv-v0.21.0` on: read the version off the running hub.**
+> `GET /v1/healthz` carries `"version"` (`build-identity-surfaces`, #39), so the
+> proof that a swap took is one unauthenticated GET, for every release, including
+> ones that add no route:
+>
+> ```bash
+> REL=0.21.0   # the tag minus `cchv-v`
+> got=$(curl -fsS "$HUB/v1/healthz" | jq -r .version)
+> [ "$got" = "$REL" ] && echo "swap proven: $got" || { echo "NOT swapped: running $got, expected $REL"; exit 1; }
+> ```
+>
+> Compare with `=`, never a prefix/substring match (`0.18.1` is a prefix of
+> `0.18.10`). A pre-0.21 hub answers with **no** `version` key (`jq` prints
+> `null`), which the `=` test correctly reads as "not swapped". Everything below
+> about route probes, header probes and 405-vs-404 is the history of how this
+> was proven **before** the field existed; keep it for the record and for a hub
+> older than 0.21, not as the procedure. Never re-hash the installed binary
+> against the release `.sha256` — §2b's ad-hoc `codesign --force --sign -`
+> guarantees the mismatch, so it proves nothing either way. **Gatus may report
+> the field; it MUST NOT pin it** — infra's widen-before/narrow-after rule
+> (`ac/infra`): a `== 0.21.0` condition nobody widens turns the next release
+> into a false alarm.
+>
+> **Both halves, one read.** `GET /v1/healthz/journal` reports `hub_version`
+> next to `last_tick_distiller_version` / `last_tick_distiller_blob` (#40). A
+> release has two halves — this swap and the §3c distiller reinstall — and
+> after the **first tick following both**, the two versions agree. Right after
+> the hub swap and before that tick, a skew is expected and says nothing; a
+> skew that persists past a tick means the distiller half is still the old
+> copy. A `null` distiller identity means a pre-0.21 distiller is ticking.
+>
 > **Ship the binary as a release asset with a `.sha256` — that is the default
 > path for a tagged release.** (Was: "not deployed from the GitHub Release";
 > that is now false for tagged releases. Established on the v0.11.2 deploy,
@@ -2066,6 +2097,37 @@ equivalently.
   launchctl bootout  gui/$(id -u)/dev.cchv.distiller 2>/dev/null || true
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.distiller.plist
   ```
+
+  **Verify the installed copy from the log or the API, not only with `cmp`**
+  (from `cchv-v0.21.0` on — `build-identity-surfaces`, #40). The script announces
+  itself as the first line of every run, before any secret is resolved:
+
+  ```
+  [cchv-distill 2026-08-21T14:00:03Z] cchv-distill 0.21.0 blob=3f9c2a7b1e4d mode=forward
+  ```
+
+  and posts the same identity on its tick record, so after the first tick:
+
+  ```bash
+  TAG=cchv-v0.21.0
+  want=$(git rev-parse "$TAG:scripts/cchv-distill.py")        # the blob you meant to install
+  curl -fsS "$HUB/v1/healthz/journal" | jq -r '[.hub_version, .last_tick_distiller_version, .last_tick_distiller_blob] | @tsv'
+  # expect: 0.21.0  0.21.0  <want>   — both halves landed, and the exact file is the tag's
+  ```
+
+  The blob is `git hash-object` over the running file, so it equals
+  `git rev-parse <rev>:scripts/cchv-distill.py` for whichever revision the copy
+  matches — `git log --all --find-object=<blob> -- scripts/cchv-distill.py` names
+  the commits that carried it, or nothing if the copy matches no commit (an
+  edited or half-written install). Two readings that look like staleness and are
+  not: (1) right after a **hub** swap, before the next tick, `hub_version` is
+  ahead of `last_tick_distiller_version` — wait one tick; (2) after a release
+  that did not touch the distiller, `DISTILL_VERSION` is **still** one line
+  behind, because it is a `just sync-version` target and every release rewrites
+  it — `git diff <old-tag> <new-tag> -- scripts/cchv-distill.py` showing only
+  that line is the tell, and a reinstall clears it. `cmp` against the blob (the
+  recipe above) remains the proof at install time; the log line and the API are
+  what make the same fact readable later, from anywhere, by anyone.
 
   **Do not reload for a comment-only plist change.** `bootstrap` fires `RunAtLoad`,
   i.e. an immediate unscheduled distill that writes prod journal entries — ac's call,
