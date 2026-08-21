@@ -14,9 +14,12 @@ so a plain HTTP monitor can consume it.
 The hub SHALL expose an unauthenticated `GET /v1/healthz/journal` endpoint,
 consumable by HTTP monitors that read only status code and body (Gatus). The
 endpoint SHALL derive pending groups for closed logical days using the same
-logical-day fold and pending semantics as `GET /v1/journal/pending`, and for
-each group compute its latest data arrival (`max(messages.created_at)` over
-the group's sessions).
+logical-day fold and pending semantics as `GET /v1/journal/pending` — including
+membership by message date, so a session that spans midnight is evaluated under both
+days, and including provenance drift as a pending condition — and for each group
+compute its latest data arrival (`max(messages.created_at)` over the group's sessions).
+The fold MUST come from the shared definition the pending endpoint uses, not a
+re-derivation, so the two cannot disagree about which sessions belong to a day.
 
 Evaluation SHALL be bounded to the distiller's forward horizon: only groups
 whose `entry_date` is within `within_days` (query param; default 7, matching
@@ -39,6 +42,12 @@ SHALL return 400 via the standard error path.
   more than `grace_secs` ago and no distiller has drained them
 - **THEN** the endpoint returns 503 with status `"stale"` and the offending
   groups in the body
+
+#### Scenario: Health agrees with pending about a midnight-spanning session
+
+- **WHEN** a session has messages on two consecutive closed logical days
+- **THEN** both days appear as groups in the health evaluation, matching the groups
+  `GET /v1/journal/pending` reports for the same window
 
 #### Scenario: Freshly dirtied day stays green within grace
 

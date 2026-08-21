@@ -5,7 +5,9 @@
 The hub's read API: full-text search and browse/query endpoints over the
 archive, reachable (with a bearer token) from any machine, plus an unauthenticated
 health endpoint for liveness checks.
+
 ## Requirements
+
 ### Requirement: Full-text search endpoint
 
 The hub SHALL expose a `GET /v1/search` endpoint that performs Postgres full-text search over archived messages and returns ranked matches, each carrying enough session and project context to locate it. The endpoint MUST support filtering by provider, machine, project, and time range, and MUST support a free-text query.
@@ -33,6 +35,13 @@ The messages endpoint SHALL accept either the hub's surrogate session id or a pr
 
 Messages SHALL be returned in chronological order (timestamp first, with seq and row id as tiebreaks; records without timestamps last). Ordering MUST NOT be seq-major: one archived session can aggregate several transcript files (subagent transcripts carry the parent session id), each with its own seq numbering from 0.
 
+The messages endpoint SHALL additionally accept optional `from` and `to` timestamp
+bounds, parsed as RFC 3339 with the same validation and error text as the search
+endpoint's time filters, selecting the half-open window `[from, to)`. Either bound may
+be given alone. When a bound is supplied, the `X-Total-Count` header MUST report the
+count **within the window**, so that paging over a filtered result set is correct.
+Records without timestamps fall outside any bounded window.
+
 #### Scenario: List projects across machines
 
 - **WHEN** an authenticated client requests the projects list
@@ -42,6 +51,18 @@ Messages SHALL be returned in chronological order (timestamp first, with seq and
 
 - **WHEN** an authenticated client requests the messages of a known session
 - **THEN** the hub returns that session's messages in stable conversational order
+
+#### Scenario: Retrieve one day of a long session
+
+- **WHEN** a session spanning two days is requested with `from` and `to` bounding one
+  logical day
+- **THEN** only that day's messages are returned, and `X-Total-Count` reports the
+  windowed count rather than the session total
+
+#### Scenario: Malformed window bound is refused
+
+- **WHEN** `from` or `to` is not a valid RFC 3339 timestamp
+- **THEN** the hub responds `400` with the same error text the search endpoint uses
 
 #### Scenario: Retrieve messages by provider session id
 
