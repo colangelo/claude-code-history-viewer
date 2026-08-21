@@ -36,6 +36,30 @@ groups (entry date, project path, latest arrival, stale flag) for
 observability. A non-numeric or non-positive `grace_secs` or `within_days`
 SHALL return 400 via the standard error path.
 
+Because grace is measured from each group's `latest_arrival` and not from the
+day close, a logical day that closes with groups whose data arrived more than
+`grace_secs` earlier is stale the instant it closes. A day close can therefore
+only add stale groups on net, never remove them: **only a distiller tick clears
+this check, never the passage of time**. No wall-clock recovery time may be
+inferred from a 503.
+
+The response SHALL additionally report distiller-tick liveness alongside the
+group list, so that "a backlog is draining" and "no distiller has run" are
+distinguishable from one another rather than being the same 503: `last_tick_at`,
+`last_tick_age_secs`, `last_tick_mode` and `last_tick_groups_pending` (all null
+when no tick has ever been recorded), and `ticks_last_24h`.
+
+Tick age SHALL NOT contribute to the verdict unless a `max_tick_age_secs` query
+param is supplied. Absent, tick liveness is reported and never alerts — the host
+running the distiller sleeps many times a day, so any default threshold would be
+an assumption about that host's wake schedule rather than a property of the
+archive. When `max_tick_age_secs` is supplied and either no tick has ever been
+recorded or `now − last_tick_at` exceeds it, the endpoint SHALL return 503 with
+status `"no_tick"`, which takes precedence over `"stale"` — when both conditions
+hold, the absent tick is the cause and the stale groups are its symptom. A
+non-numeric or non-positive `max_tick_age_secs` SHALL return 400 via the standard
+error path.
+
 #### Scenario: Undrained closed day pages
 
 - **WHEN** a closed logical day has pending groups whose latest data arrived
@@ -53,8 +77,15 @@ SHALL return 400 via the standard error path.
 
 - **WHEN** a late-waking machine ingests sessions that re-pend an
   already-distilled day, and the data arrived less than `grace_secs` ago
-- **THEN** the endpoint returns 200 with status `"ok"` (the hourly tick still
-  has time to drain it)
+- **THEN** the endpoint returns 200 with status `"ok"` (the next tick still has
+  time to drain it)
+
+#### Scenario: A closing day admits groups that are already stale
+
+- **WHEN** a logical day closes carrying pending groups whose latest data
+  arrived more than `grace_secs` before the close
+- **THEN** those groups are stale immediately, with no grace remaining, and the
+  endpoint returns 503 — the close is not a recovery event
 
 #### Scenario: Open day never pages
 
@@ -74,8 +105,27 @@ SHALL return 400 via the standard error path.
 - **WHEN** no pending groups exist for closed logical days
 - **THEN** the endpoint returns 200 with status `"ok"` and an empty group list
 
+#### Scenario: A recorded tick is visible to the monitor
+
+- **WHEN** a distiller records a tick and the endpoint is then polled
+- **THEN** the response carries that tick's timestamp, mode and pending count,
+  a `last_tick_age_secs` derived from it, and a `ticks_last_24h` that counts it
+
+#### Scenario: Tick age never alerts unless asked
+
+- **WHEN** no tick has ever been recorded, or the last one is long past, and no
+  `max_tick_age_secs` is supplied
+- **THEN** the verdict is decided by stale groups alone, exactly as before
+
+#### Scenario: An absent tick outranks a stale backlog
+
+- **WHEN** `max_tick_age_secs` is supplied and exceeded while in-window groups
+  are also stale
+- **THEN** the endpoint returns 503 with status `"no_tick"`
+
 #### Scenario: Invalid parameters
 
-- **WHEN** `?grace_secs=abc`, `?grace_secs=0`, or `?within_days=-1` is supplied
+- **WHEN** `?grace_secs=abc`, `?grace_secs=0`, `?within_days=-1`, or
+  `?max_tick_age_secs=0` is supplied
 - **THEN** the endpoint returns 400 with a message naming the offending
   parameter

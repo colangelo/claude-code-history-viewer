@@ -68,7 +68,7 @@
 
 ## 8. Rollout
 
-- [ ] 8.1 Release + hub swap **and** `cchv-distill` reinstall on the hub machine —
+- [x] 8.1 Release + hub swap **and** `cchv-distill` reinstall on the hub machine —
       one relay carrying both halves (`docs/archive/deployment.md` §2b, §3c). Order
       does not matter: new-distiller/old-hub swallows a **405** with a WARN, and
       new-hub/old-distiller reports `null` and alerts nobody. **Distiller half DONE**
@@ -109,12 +109,14 @@
       to `ticks`, so on this router **405 discriminates nothing** about whether a route
       exists. Verdict (old hub, route absent) unchanged; the status code in the log is
       405. Both are 4xx, so neither is retried and distillation is untouched either way.
-- [ ] 8.2 Verify live: `last_tick_at` advances after a tick; `ticks_last_24h`
+      **Hub half DONE 2026-08-21 09:28–09:32Z** — infra swapped `cchv-v0.20.0`; migration 0007 applied 09:29:32Z (`_sqlx_migrations`). Superseded the same day by `cchv-v0.20.1` (10:10Z, migration 0008).
+- [x] 8.2 Verify live: `last_tick_at` advances after a tick; `ticks_last_24h`
       sits well under 24 — infra measured **15.38 ticks/day** on this host. It is
       *not* the wake count (40–106 sleep cycles/day), but not because DarkWakes
       run no `StartInterval` agent — they do, and that claim was retracted
       2026-08-21. The cap is the interval re-arming at each run's **exit**
       (≈21.7/day awake) plus sleep coalescing missed intervals into one catch-up.
+      **Verified 2026-08-21 ~13:50Z** (successor session, on m4m): `distiller_ticks` holds 15 rows since 0007, `tick_at` strictly advancing (ids 12→15: 13:11, 13:18, 13:22, 13:24Z); `/v1/healthz/journal` reports `last_tick_at` = row 15, `ticks_last_24h` = 15 — under 24, but inflated by the day's backfill runs, not an hourly-cadence reading.
 - [x] 8.3 Infra's call whether the `cchv-journal` Gatus check sets
       `max_tick_age_secs`, and to what. **Answered 2026-08-21: `43200` (12 h)**,
       from a 13-day replay — median gap 68 m, p90 2 h 41 m, max 7 h 41 m (values
