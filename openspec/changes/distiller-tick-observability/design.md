@@ -71,12 +71,16 @@ chances to tick shows 2 — without the hub knowing anything about power
 management.
 
 That is a discrimination *equivalent* to a wake count, not an equality with one,
-and the difference is measurable: infra's 13-day sample (2026-08-21) puts this
-host at 14.62 ticks/day, range 10–18, while it turns over 40–106 sleep cycles a
-day. Most of those are DarkWakes, which run no `StartInterval` agent. Placement
-was the right call for a second reason we did not have at the time: "wake" has no
-crisp definition on this host, so a hub-side wake counter would have had to pick
-one.
+and the difference is measurable: infra's 13-day sample (2026-08-21, corrected
+same day from 194 completions to 204 starts) puts this host at 15.38 ticks/day
+while it turns over 40–106 sleep cycles a day. The gap is **not** that DarkWakes
+run no `StartInterval` agent — they do, and the claim that they do not was
+retracted the same day; it is that the interval re-arms at exit (capping an awake
+day near 21.7) and that sleep coalesces missed intervals into one catch-up.
+Placement was the right call for a second reason we did not have at the time:
+"wake" has no crisp definition on this host — DarkWake, full wake and
+thermal-emergency wake all behave differently — so a hub-side wake counter would
+have had to pick one, and would have picked wrong.
 
 Status precedence when the param **is** set: `no_tick` outranks `stale`, because
 when both fire the tick is the cause and the stale groups are the symptom.
@@ -139,10 +143,10 @@ direction. A scenario and an integration test cost less than the third round.
 2. Release, swap the hub binary, reinstall `cchv-distill` on the hub machine
    (`docs/archive/deployment.md` §2b, §3c) — one relay, both halves.
 3. Verify: `GET /v1/healthz/journal` shows a `last_tick_at` that advances after a
-   tick, and a `ticks_last_24h` that sits well under 24 — expect **10–18** on
-   this host, not the 40–106 sleep cycles it turns over (§3c).
+   tick, and a `ticks_last_24h` that sits well under 24 — this host averages
+   **15.38/day**, not the 40–106 sleep cycles it turns over (§3c).
 4. Infra chooses a `max_tick_age_secs` for the `cchv-journal` check, if any. On
    this host the honest first value is generous — it is a "the job is gone"
    detector, not a latency SLO. **Chosen 2026-08-21: `43200` (12 h)**, from a
-   13-day replay whose observed max gap is 7 h 56 m (`ac/infra#117`; the working
+   13-day replay whose observed max gap is 7 h 41 m (`ac/infra#117`; the working
    and the threshold table are in `docs/archive/deployment.md` §3c).

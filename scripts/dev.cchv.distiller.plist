@@ -9,11 +9,19 @@
      under CEST — before the close — so it never saw yesterday), and a failed tick
      retries at the next tick instead of +24h.
 
-     STALENESS IS BOUNDED IN WAKES, NOT HOURS, and on this host those are very different
-     units. launchd does NOT fire StartInterval while the machine is asleep; a DarkWake
-     is not a wake; and the whole run of missed intervals is coalesced into ONE catch-up
-     at the next full wake rather than replayed. Measured 2026-08-21: 3h45m with zero
-     ticks and `state = not running`, across a Sleep<->DarkWake cycle. This host sleeps
+     STALENESS IS BOUNDED IN TICKS, NOT HOURS, and on this host those are very different
+     units. Two reasons, and only the second is about sleep. (1) StartInterval re-arms at
+     the previous run's EXIT, not at its launch, so the awake cadence is 3600s + duration
+     and 24 ticks/day is unreachable for any job that takes real time — measured
+     2026-08-21 over 13.3d, 164 run pairs fit prev_exit+3600s (+/-5s) and ZERO fit
+     prev_start+3600s; `man 5 launchd.plist` describes the opposite model and is refuted
+     here 163 times. (2) launchd does NOT fire StartInterval while the machine is asleep,
+     and the whole run of missed intervals is coalesced into ONE catch-up rather than
+     replayed; the catch-up then lags the box coming up by 28s to 40min (n=11).
+     A DarkWake DOES fire one — an earlier version of this comment said it does not, and
+     that was retracted 2026-08-21 (3 of 11 correlated catch-ups fired in a DarkWake, the
+     tightest in a 45-SECOND window). Still unexplained: a measured 3h45m with zero ticks
+     and `state = not running` across a Sleep<->DarkWake cycle. This host sleeps
      40-106x/day, so "N groups / 50 per hourly tick" is a FLOOR on the drain time, never
      an estimate — never predict a clear-by time from the interval. RunAtLoad adds
      login/boot catch-up. Each tick records itself via POST /v1/journal/ticks, which is

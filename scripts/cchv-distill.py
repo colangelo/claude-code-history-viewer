@@ -251,8 +251,9 @@ def resolve_aiproxy_key() -> str:
 
 # Transient-failure retry for hub calls. The distiller ticks on an interval
 # (launchd StartInterval), so a tick that gives up is retried at the NEXT TICK —
-# which on a sleeping host is the next wake, not an hour from now (launchd skips
-# intervals while asleep and coalesces the missed ones into a single catch-up).
+# which is never "an hour from now": the interval re-arms at this run's EXIT, and
+# on a sleeping host the missed intervals coalesce into a single catch-up that
+# then lags the box coming up by anywhere from 28s to 40min.
 # That is exactly why a bounded in-tick retry earns its keep: it rides out the
 # sub-second-to-minute flakes (pg connection resets, a hub restart mid-swap,
 # tailnet DNS blips) that would otherwise abort a whole run and cost a wake
@@ -318,10 +319,11 @@ class Hub:
         Without it a tick is invisible: the only other hub call a tick with no
         work makes is the pending GET, which writes nothing, so "ticking hourly
         into an empty list" and "has not run since Tuesday" leave the same trace.
-        `/v1/healthz/journal` returned the same 503 for both, and on a host that
-        sleeps — launchd does not fire `StartInterval` while asleep, and coalesces
-        the missed run into one catch-up at the next wake — the elapsed hours
-        cannot break the tie either.
+        `/v1/healthz/journal` returned the same 503 for both, and elapsed hours
+        cannot break the tie: `StartInterval` re-arms at the previous run's exit
+        rather than on a fixed grid, and on a host that sleeps the missed
+        intervals coalesce into one delayed catch-up. An hour on the clock is not
+        an hour of ticks.
 
         Recorded before any LLM call, so it claims only that a distiller reached
         the hub and got a work list. A failure here loses one datapoint in a

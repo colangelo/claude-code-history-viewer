@@ -74,14 +74,16 @@
       new-hub/old-distiller reports `null` and alerts nobody. The distiller
       reinstall also carries `journal-day-bucketing` §11.5, which is still owed.
 - [ ] 8.2 Verify live: `last_tick_at` advances after a tick; `ticks_last_24h`
-      sits well under 24 — expect **10–18** on this host. It is *not* the wake
-      count: infra measured 14.62 ticks/day against 40–106 sleep cycles/day,
-      because most of those are DarkWakes and a DarkWake runs no `StartInterval`
-      agent.
+      sits well under 24 — infra measured **15.38 ticks/day** on this host. It is
+      *not* the wake count (40–106 sleep cycles/day), but not because DarkWakes
+      run no `StartInterval` agent — they do, and that claim was retracted
+      2026-08-21. The cap is the interval re-arming at each run's **exit**
+      (≈21.7/day awake) plus sleep coalescing missed intervals into one catch-up.
 - [x] 8.3 Infra's call whether the `cchv-journal` Gatus check sets
       `max_tick_age_secs`, and to what. **Answered 2026-08-21: `43200` (12 h)**,
-      from a 13-day replay — median gap 68 m, p90 3 h 07 m, max 7 h 56 m; 8 h is
-      the tightest zero-flap value and has no headroom, our ~3 h 30 m would have
-      fired 17×. Tracked `ac/infra#117`, and it goes on the URL only after 8.1
+      from a 13-day replay — median gap 68 m, p90 2 h 41 m, max 7 h 41 m (values
+      corrected the same day, when the replay was re-run on tick *starts* rather
+      than completions); 8 h is the tightest zero-flap value and has no headroom,
+      our ~3 h 30 m would have fired 16×. Tracked `ac/infra#117`, and it goes on the URL only after 8.1
       and 8.2. Table + caveats: `docs/archive/deployment.md` §3c. Related: the
       monitoring decision on `ac/infra#94`.

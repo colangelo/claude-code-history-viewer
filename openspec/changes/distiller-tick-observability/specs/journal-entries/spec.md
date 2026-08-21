@@ -33,11 +33,12 @@ The job SHALL be scheduled as frequent idempotent ticks (fixed interval ≤1h,
 tick's wall-clock position relative to the 04:00 UTC logical-day close — under any DST
 offset — determines whether a closed day is seen: the **first tick after the close**
 picks it up, whichever tick that is. The interval bounds staleness in ticks, not in
-hours, and on a machine that sleeps those are different units: launchd does not fire
-`StartInterval` while the host is asleep, a DarkWake is not a wake, and the whole run of
-missed intervals is coalesced into a single catch-up at the next full wake rather than
-replayed. No requirement here, and no operational prediction drawn from it, may assume
-a tick has occurred merely because an interval has elapsed. A tick that finds nothing
+hours, and those are different units on any real host: `StartInterval` re-arms at the
+previous run's **exit** rather than on a fixed grid, so a day holds at most
+`86400 / (interval + run duration)` ticks even fully awake, and a host that sleeps skips
+intervals outright and coalesces the missed ones into a single, delayed catch-up. No
+requirement here, and no operational prediction drawn from it, may assume a tick has
+occurred merely because an interval has elapsed. A tick that finds nothing
 pending SHALL exit without making any LLM call. Hub HTTP calls (pending query, message
 fetches, entry POST) SHALL be retried on transient failures (connection errors, 5xx)
 with a bounded backoff before the tick gives up; a failed tick recovers at the next
@@ -92,21 +93,27 @@ staleness check already answer.
 
 #### Scenario: Closed day is distilled within an hour regardless of DST
 
+> The scenario name is kept from the original spec because a MODIFIED block may not
+> drop or rename a scenario the main spec still carries. **"Within an hour" is the
+> part this change corrects** — read the THEN.
+
 - **WHEN** a logical day closes at 04:00 UTC, the machine's local timezone is in
   either its standard or DST offset, **and the host stays awake across the
   following interval**
-- **THEN** the tick within that hour queries pending, sees the closed day's
+- **THEN** the first tick after the close queries pending, sees the closed day's
   groups, and distills them — no tick's local wall-clock position can put it
   systematically before the close, which is the property the interval schedule
-  exists for. The awake precondition is not decoration: see the next scenario for
-  what the same schedule guarantees when it does not hold.
+  exists for. That tick is **not** guaranteed to fall within an hour of the close
+  even under the awake precondition, because the interval is measured from the
+  previous run's exit; and the awake precondition is not decoration — see the next
+  scenario for what the same schedule guarantees when it does not hold.
 
 #### Scenario: A sleeping host delays the tick, and elapsed hours do not prove one ran
 
 - **WHEN** the host sleeps across several `StartInterval` periods
-- **THEN** the missed intervals are coalesced into one catch-up tick at the next full
-  wake, so closed days stay pending until that wake, and the elapsed wall-clock time
-  is not evidence of any tick having run
+- **THEN** the missed intervals are coalesced into one catch-up tick rather than
+  replayed, so closed days stay pending until the host is back up and that tick has
+  run, and the elapsed wall-clock time is not evidence of any tick having run
 
 #### Scenario: Transient hub failure costs one tick at most
 

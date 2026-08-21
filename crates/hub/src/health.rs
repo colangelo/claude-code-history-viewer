@@ -260,18 +260,29 @@ pub struct JournalHealthResponse {
     /// Groups that tick found pending when it started — the size of its work
     /// list, not of the work it finished.
     pub last_tick_groups_pending: Option<i32>,
-    /// **This is why a last-tick timestamp alone is not enough.** On a host that
-    /// sleeps, `StartInterval 3600` does not mean 24 ticks a day — launchd
-    /// coalesces every interval missed while asleep into a single catch-up at the
-    /// next full wake. A count here well under 24 is the drain rate actually on
-    /// offer, and it is what turns "the backlog should clear in N hours" into a
-    /// question about ticks rather than clocks.
+    /// **This is why a last-tick timestamp alone is not enough.**
+    /// `StartInterval 3600` does not mean 24 ticks a day, for two reasons that
+    /// compound. The interval re-arms at the previous run's **exit**, so even an
+    /// always-awake host is capped at `86400 / (3600 + duration)` — ≈21.7/day at
+    /// the hub machine's median run. And on a host that sleeps, launchd
+    /// coalesces every interval missed while asleep into a single catch-up. A
+    /// count here well under 24 is the drain rate actually on offer, and it is
+    /// what turns "the backlog should clear in N hours" into a question about
+    /// ticks rather than clocks.
     ///
     /// It is **not** a wake count, and a reader who treats it as one is wrong in
     /// both directions. Measured on the hub machine over 13 days (2026-08-21):
-    /// 14.62 ticks/day, per-UTC-day range 10–18, against 40–106 sleep cycles a
-    /// day on that same host — most of those are `DarkWake`s, and a `DarkWake` does
-    /// not run a `StartInterval` agent.
+    /// 15.38 ticks/day against 40–106 sleep cycles a day on that same host. Most
+    /// of those are `DarkWake`s — which *do* run a `StartInterval` agent, an
+    /// earlier version of this comment said otherwise and was wrong; what gates a
+    /// catch-up is a delay of 28 s to 40 min after the box comes up, not the kind
+    /// of wake.
+    ///
+    /// This counts tick **starts**, not completions: the record is written before
+    /// any LLM call, so a run killed mid-flight still appears here. That is
+    /// deliberate — a completion count drops exactly the runs an alarm exists to
+    /// notice — but it makes this series incomparable with any figure derived by
+    /// counting `done:` lines in the distiller log.
     pub ticks_last_24h: i64,
     pub max_tick_age_secs: Option<i64>,
     pub groups: Vec<JournalStaleGroup>,

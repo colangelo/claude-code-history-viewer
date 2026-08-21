@@ -151,9 +151,12 @@ night between 00:00 UTC and `day_start_hour`.
 The job SHALL be scheduled as frequent idempotent ticks (fixed interval ≤1h,
 `StartInterval`, plus run-at-load) rather than a calendar-time daily run, so that no
 tick's wall-clock position relative to the 04:00 UTC logical-day close — under any DST
-offset — determines whether a closed day is seen: some tick within the hour after close
-MUST pick it up. A tick that finds nothing pending SHALL exit without making any LLM
-call. Hub HTTP calls (pending query, message fetches, entry POST) SHALL be retried on
+offset — determines whether a closed day is seen: the **first tick after the close**
+MUST pick it up, whichever tick that is. (Not "some tick within the hour": the interval
+re-arms at the previous run's exit, and a sleeping host skips intervals outright.
+`distiller-tick-observability`, which archives after this change, restates this
+requirement with the measurement behind it.) A tick that finds nothing pending SHALL
+exit without making any LLM call. Hub HTTP calls (pending query, message fetches, entry POST) SHALL be retried on
 transient failures (connection errors, 5xx) with a bounded backoff before the tick
 gives up; a failed tick recovers at the next interval, never at +24h.
 

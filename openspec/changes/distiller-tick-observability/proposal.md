@@ -18,13 +18,28 @@ and two separate derivations — one on each side of the relay — used the hour
 
 Two facts came out of that measurement, and both are load-bearing:
 
-**1. `StartInterval 3600` is not hourly on a machine that sleeps.** launchd does
-not fire intervals while asleep, a DarkWake is not a wake, and the whole run of
-missed intervals is coalesced into **one** catch-up at the next full wake — not
-replayed. The hub machine idle-slept at 01:29Z and cycled Sleep↔DarkWake through
-02:26Z; the ~01:51Z tick never fired. That host sleeps 40–106×/day. So "N groups
-÷ 50 per hourly tick" is a **floor, not an estimate**: the drain rate is set by
-the wake schedule, not by the interval.
+**1. `StartInterval 3600` is not hourly.** It is not hourly even awake: the
+interval re-arms at the previous run's **exit**, so the cadence is
+`3600 s + run duration` and a fully awake day tops out near 21.7 ticks rather
+than 24. And a machine that sleeps skips intervals outright, coalescing the whole
+missed run into **one** catch-up rather than replaying it — the catch-up then
+lagging the box coming up by 28 s to 40 min. The hub machine idle-slept at 01:29Z
+and cycled Sleep↔DarkWake through 02:26Z; the ~01:51Z tick never fired, and
+3 h 45 m passed with zero ticks and `state = not running`. That host sleeps
+40–106×/day. So "N groups ÷ 50 per hourly tick" is a **floor, not an estimate**:
+the drain rate is set by the schedule the host actually offers, not by the
+interval.
+
+> **Retraction, 2026-08-21 (relay thread `86e2918c`).** This section originally
+> read "a DarkWake is not a wake", and attributed the 3 h 45 m standstill to that.
+> Infra measured it and retracted: correlating all 30 missed-fire catch-ups
+> against `pmset -g log`, **three of the 11 inside the pmset window fired during a
+> DarkWake**, the tightest in a 45-second one. A DarkWake does run a
+> `StartInterval` job. The standstill is therefore **unexplained**, not explained;
+> the exit-timer rule above was confirmed separately at n=163 and is what replaces
+> it. Everything the change does still follows — elapsed time was never evidence a
+> tick ran, which is the whole reason for recording ticks — but the mechanism in
+> the original text was wrong and is not to be quoted.
 
 Our own docs assert the opposite in four places — `dev.cchv.distiller.plist`
 ("late laptop-wake data is drained within the hour"), `docs/archive/deployment.md`

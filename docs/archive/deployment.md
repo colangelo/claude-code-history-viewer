@@ -1337,6 +1337,13 @@ byte-identical CSS run on their side will ever stand in for the line.
 > tailnet ingress via `tailscale serve` on `:8788` (https) and `:8787` (http).
 > A failing loopback `:8787` probe is therefore *not* an outage.
 >
+> **And it does not fail in a way that announces itself.** A naive
+> `curl localhost:8787/v1/healthz/journal` from m4m answers
+> `401 Missing Authorization header … honcho-key` — that is **workerd's** auth
+> error, a different service's, and it reads exactly like "the hub wants a
+> token". Re-flagged by infra 2026-08-21 as the trap for whoever probes next from
+> that box. On the loopback, the hub is `127.0.0.1:8790`.
+>
 > **Never verify a read route over the loopback bind — probe the tailnet front,
 > even from m4m itself.** Read-auth is `trust_tailscale_identity`, so a request
 > arriving on `127.0.0.1:8790` has no tailnet identity and every read route
@@ -1936,37 +1943,81 @@ equivalently.
 > re-raised at once), so a pg or DNS blip costs seconds not a whole run, and a
 > failed tick recovers at the next tick, never +24h.
 >
-> ⚠ **The interval bounds staleness in *wakes*, not hours — this section used to
-> claim "~1h" and that is false on this host.** launchd does not fire
-> `StartInterval` while the machine is asleep, a DarkWake is not a wake, and the
-> whole run of missed intervals is coalesced into **one** catch-up at the next
-> full wake rather than replayed. Measured by infra on the hub machine
-> 2026-08-21: **3 h 45 m with zero ticks**, `launchctl print` reporting
-> `state = not running`, across a Sleep↔DarkWake cycle from 01:29Z. The host
-> sleeps 40–106×/day. So `N groups ÷ 50 per tick` is a **floor on the drain time,
-> never an estimate**, and no clear-by time may be predicted from the interval —
-> two separate derivations have now done exactly that and been wrong. The
-> archived `distiller-self-healing` design listed this risk and dismissed it
-> ("m4m is always-on; … still ≤1h after wake"); the first clause is false and the
-> second measures from the wrong event.
+> ⚠ **The interval bounds staleness in *ticks*, not hours — this section used to
+> claim "~1h" and that is false on this host.** Two mechanisms put a tick where
+> the clock does not, and only the second one involves sleep at all.
 >
-> **What a tick costs, and what lets one fire — measured here 2026-08-21, on the
-> two runs that cleared that stall.** Run 203 opened 04:45:16Z and drained
-> **41 groups in 15 m 06 s**; run 204 opened 06:00:23Z and drained **15 in
-> 4 m 50 s** — ≈19–22 s/group either way. Per-group cost tracks the group's
-> session count rather than sitting at a constant (the same log's 00:09:27Z run
-> spent 10 m 51 s on **7** groups, ≈93 s/group), so a rate quoted from one run is
-> a sample, not a budget. Neither run was the binding constraint; the wake
-> schedule was, and both fall inside a **single continuous awake stretch** —
-> `pmset -g log` records no Sleep of any kind after the 04:38:51Z DarkWake
-> (checked 06:20Z, 1 h 40 m and counting), while the 3 h 45 m of Sleep↔DarkWake
-> cycling before it produced zero ticks. The discriminator is therefore the box
-> **staying up**, not the DarkWake instant. A full wake and an active session
-> coincided here, so this does not separate those two; it does rule out DarkWake
-> alone. One suggestive reading, not a law: run 204 opened one second past an
-> exact hour from run 203's **exit** (05:00:22Z + 3600 s), i.e. the interval
-> looks re-armed at exit rather than at launch — a long catch-up would then push
-> the next tick a full hour past its *end*.
+> 1. **The interval re-arms at *exit*, not at launch**, so awake cadence is
+>    `3600 s + run duration` and **24 ticks/day is unreachable on any host where
+>    the job takes real time**. Confirmed by infra 2026-08-21 over 13.3 d of
+>    `/tmp/cchv-distiller.err`: **164** consecutive run pairs fit
+>    `prev_exit + 3600 s` (±5 s) and *not* `prev_start + 3600 s`, **zero** fit the
+>    alternative, 5 were indistinguishable (run < 5 s), 34 are missed-fire gaps.
+>    Measured off the previous run's `done:` line the interval lands at 3600 s
+>    ×52, 3601 s ×102, 3602 s ×8, 3605 s ×1 — 0–2 s of jitter, which is a timer,
+>    not two runs happening to sit near a wake. `man 5 launchd.plist` describes
+>    the *opposite* model — a fixed grid whose firings are missed while the job
+>    runs, i.e. `start + 3600·k` — and it is refuted here 163 times, so **take the
+>    cadence from the job's log, not from the plist and not from the man page**.
+>    At this host's median run (357 s) the awake ceiling is ≈**21.7 ticks/day**,
+>    and the longest run followed by an on-time fire (3270 s) pushed the next tick
+>    to **114 min**.
+> 2. **Sleep skips intervals, and the missed run is coalesced into one catch-up
+>    rather than replayed** — but the catch-up does not land the instant the box
+>    comes up. Across the 11 catch-ups infra correlated against `pmset -g log`,
+>    the lag from the box coming up to the run starting was **28 s min / 6 m 20 s
+>    median / 40 min max**.
+>
+> ❌ **A DarkWake *does* fire a `StartInterval` job.** An earlier version of this
+> section said it does not; infra retracted that 2026-08-21 after correlating all
+> 30 missed-fire catch-ups against `pmset -g log`. Of the 11 inside the 8-day
+> pmset window, **three fired during a DarkWake**, the tightest in a **45-second**
+> window — `pmset` logs `DarkWake` at 2026-08-18 03:38:22Z, the distiller's
+> `backend=` line is 03:38:50Z, and it was still logging at 03:40:28Z, straight
+> through the 03:39:07Z `Sleep`. What gates a catch-up is the *delay* in (2), not
+> the kind of wake: a short window catches a fire only when the draw is small.
+>
+> **So the 3 h 45 m standstill is no longer explained**, and that is better said
+> than papered over with a second mechanism. What is measured: **3 h 45 m with
+> zero ticks**, `launchctl print` reporting `state = not running`, across a
+> Sleep↔DarkWake cycle from 01:29Z on 2026-08-21; its 14 DarkWake windows ran
+> 45 s – 2 m 34 s, and 45 s sufficed on 08-18, so "the windows were too short" is
+> not sufficient either. Recorded as a lead and nothing more: every sleep in that
+> stretch was a `Maintenance Sleep` or a **`Dark Wake Thermal Emergency`**.
+>
+> **The operational conclusion is untouched — it was right for the wrong reason**,
+> which is worth knowing before anyone quotes the mechanism. This host sleeps
+> 40–106×/day, so `N groups ÷ 50 per tick` is a **floor on the drain time, never
+> an estimate**, and no clear-by time may be predicted from the interval — two
+> separate derivations have now done exactly that and been wrong. The archived
+> `distiller-self-healing` design listed this risk and dismissed it ("m4m is
+> always-on; … still ≤1h after wake"); the first clause is false and the second
+> measures from the wrong event.
+>
+> **What a tick costs — measured here 2026-08-21, on the two runs that cleared
+> that stall.** Run 203 opened 04:45:16Z and drained **41 groups in 15 m 06 s**;
+> run 204 opened **06:00:22Z** and drained **15 in 4 m 50 s** — ≈19–22 s/group
+> either way. Per-group cost tracks the group's session count rather than sitting
+> at a constant (the same log's 00:09:27Z run spent 10 m 51 s on **7** groups,
+> ≈93 s/group), so a rate quoted from one run is a sample, not a budget. Neither
+> run was the binding constraint; the schedule was. Run 204 is also the pair that
+> first suggested the exit-timer rule above, and it is worth having exact: its
+> `backend=` line is 06:00:22Z, i.e. **exactly** run 203's `done:` (05:00:22Z)
+> + 3600 s. An earlier reading here said "one second past" — that 06:00:23Z was
+> the *next* log line (`15 group(s) pending`). Exactness is the evidence: a
+> one-second slip reads as "close to an hour", where 3600.0 reads as a timer.
+>
+> **What lets a catch-up fire is still not fully separated.** Both of those runs
+> fall inside a single continuous awake stretch (`pmset -g log` records no Sleep
+> of any kind after the 04:38:51Z DarkWake, checked 06:20Z), and a full wake and
+> an active session coincided — as they did again on the next sample infra took.
+> Run 205 (07:40:19Z): run 204 exited 06:05:13Z so the tick was due 07:05:13Z, the
+> box slept 06:54:59Z, DarkWakes at 07:10:21Z and 07:23:18Z — **both after the due
+> time — ran nothing**, a full `Wake` came at 07:33:49Z, and the run opened
+> **+6 m 30 s** later, against run 203's +6 m 20 s. So the delay reproduces, and
+> whether a *full* wake or an *active session* is what carries it is still open:
+> the session is what woke the box both times, and this host probably cannot
+> answer it without someone deliberately waking it with no session attached.
 >
 > Since `distiller-tick-observability`, each tick records itself
 > (`POST /v1/journal/ticks`, machine-token) so the *absence* of ticks is visible
@@ -2199,11 +2250,24 @@ equivalently.
 
      **It is not the wake count, and reading it as one is wrong in both
      directions.** Measured by infra on the hub machine over 13 days
-     (2026-08-21): 194 ticks / 318.4 h = **14.62 ticks/day**, per-UTC-day range
-     **10–18** — against the 40–106 sleep cycles that host turns over daily.
-     Most of those are DarkWakes, and a DarkWake does not run a `StartInterval`
-     agent. So 10–18 is the honest expectation band here; anything downstream
-     that expects `ticks_last_24h` ≈ wakes will be wrong.
+     (2026-08-21, corrected same day): 204 ticks / 318.4 h = **15.38 ticks/day**
+     — against the 40–106 sleep cycles that host turns over daily. The gap is
+     not that DarkWakes run no tick (they do — see §3c), but that a tick's own
+     interval re-arms at **exit**, capping an always-awake day at ≈21.7, and that
+     sleep coalesces every missed interval into one catch-up. The per-UTC-day
+     range **10–18** was derived from the earlier completion series and has not
+     been re-derived from starts, so treat its edges as soft; what is firm is
+     that anything downstream expecting `ticks_last_24h` ≈ wakes will be wrong.
+
+     **Count `backend=` lines, not `done:` lines, if you ever re-derive this from
+     the log.** The 194 first published here was `grep -c 'done:'`, which reads
+     as right because it is exactly 194 — but 10 runs started and were killed
+     before printing one. `grep -c 'backend='` is **204**, and launchd's own
+     counter agrees exactly (`runs = 204`). It is also the wrong *series* for
+     this field: a tick record is written before any LLM call, so
+     `ticks_last_24h` counts **starts**, and counting completions drops precisely
+     the runs the alarm exists to notice — hardest on the nights the host is
+     least reliable.
 
   Alerting on tick age is **opt-in**: `max_tick_age_secs` is absent by default
   and then never contributes to the verdict (the `max_lag_rows` rule from
@@ -2216,22 +2280,25 @@ equivalently.
 
   **The value infra chose, and the replay behind it** (2026-08-21, relay thread
   `15ec026f`; their `hosts/m4m.md` at `f4f39c5` carries the working). Candidate
-  thresholds replayed against 193 gaps between 194 tick starts spanning
-  2026-08-07 23:36Z → 2026-08-21 06:00Z — median gap **68 m**, p90 **3 h 07 m**,
-  max **7 h 56 m**:
+  thresholds replayed against **203 gaps between 204 tick starts** spanning
+  2026-08-07 23:36Z → 2026-08-21 06:00Z — median gap **68 m**, p90 **2 h 41 m**,
+  max **7 h 41 m**. (Infra's first pass ran this on the completion series, and
+  re-ran it on starts the same day; the numbers below are the corrected ones.
+  The old max of 7 h 56 m spanned a start the count had missed.)
 
   | threshold | firings / 13 days | red time |
   |---|---|---|
-  | 3 h 30 m | 17 | 36.1 h |
-  | 4 h | 15 | 28.1 h |
-  | 6 h | 5 | 7.2 h |
+  | 3 h 30 m | 16 | 28.3 h |
+  | 4 h | 14 | 20.8 h |
+  | 6 h | 3 | 2.8 h |
   | 8 h · 12 h · 24 h | 0 | — |
 
-  They chose **`43200` (12 h)**: zero firings across the period, 1.51× the
-  observed max, and still catches a dead job within half a day. 8 h is the
-  tightest zero-flap value and has **no headroom** — the observed max is 7 h
-  56 m, so one longer lie-in fires it. The ~3 h 30 m we had proposed sits at 17
-  firings, which is the nightly flap predicted when the param was made opt-in.
+  They chose **`43200` (12 h)**, and the correction does not move it: zero
+  firings across the period, **1.56×** the observed max, and it still catches a
+  dead job within half a day. 8 h is the tightest zero-flap value and has **no
+  headroom** — the observed max is 7 h 41 m, so one longer lie-in fires it. The
+  ~3 h 30 m we had proposed sits at 16 firings, which is the nightly flap
+  predicted when the param was made opt-in.
   Caveat infra flagged themselves: `/tmp/cchv-distiller.err` is reboot-volatile,
   so 13 days is what survived, the window contains **no reboot**, and the real
   tail may be longer — to be re-derived from `ticks_last_24h` once this endpoint
