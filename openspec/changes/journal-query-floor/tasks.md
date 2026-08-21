@@ -12,7 +12,19 @@
 - [ ] 1.2 Record `pg_stat_user_tables` for `messages`: `last_autovacuum`, `last_autoanalyze`,
       `n_dead_tup`, `n_live_tup`. Verify: values captured in the same file. This is the
       visibility-map baseline decision 5 depends on; an index-only scan degrades silently
-      without it.
+      without it. **Measured 2026-08-21: `last_autovacuum` 2026-08-19, `last_autoanalyze`
+      2026-08-20, `n_mod_since_analyze` 647,856** — i.e. autovacuum is two days behind on
+      the table whose visibility map the index-only scan depends on. Treat that as a
+      finding, not a footnote: it may cap `Heap Fetches` improvements before the index is
+      even judged.
+- [ ] 1.3 **Capture 1.2 BEFORE any `pg_stat_reset()`.** A clean per-day temp rate wants the
+      counters reset (`stats_reset` on `cchv_archive` is NULL, so the 3,781 GB / 295,895
+      temp files are lifetime totals and no rate can be derived from them — infra's point).
+      But `pg_stat_reset()` is database-wide and clears `pg_stat_user_tables` too, which is
+      exactly where 1.2's `last_autovacuum` lives. Verify: 1.2's values are written down
+      first; only then reset, and only if the four-arm plan actually needs a rate rather
+      than a per-request delta. Per-request `pg_stat_database` deltas around one call —
+      what infra used — need no reset at all and are the cheaper instrument.
 
 ## 2. The index
 
@@ -42,12 +54,18 @@
       before deciding. Verify: whichever way it goes, the reading is on #36 — a slow
       endpoint left slow silently is the outcome this task exists to prevent.
 - [ ] 3.4 Measure `SET LOCAL work_mem` **separately from the index**, so neither is
-      credited with the other's win: re-run the two queries with work_mem raised (start
-      from the ~130 MB of temp I/O the baseline reports and size from pg1's memory, not a
-      guess), with and without the index. Verify: four readings recorded — baseline,
-      index only, work_mem only, both — and `temp read/written` drops to ~0 in the
-      work_mem arms. It is complementary, not an alternative: the index removes bytes
-      read, work_mem removes bytes written.
+      credited with the other's win: re-run the two queries with work_mem raised, with and
+      without the index. Verify: four readings recorded — baseline, index only, work_mem
+      only, both — and `temp read/written` drops to ~0 in the work_mem arms. Complementary,
+      not alternative: the index removes bytes read, work_mem removes bytes written.
+      **Sizing, measured on prod by infra 2026-08-21:** one request spills **88.4 MB across
+      3 temp files** (≈22× the 4 MB `work_mem`, one file per parallel process) and takes
+      4.04 s; at Gatus's 300 s cadence that alone is **~24.9 GB/day of temp writes**. Our
+      own `EXPLAIN` reading was 16,701 blocks ≈ 136.8 MB. **The gap is unexplained and must
+      not be papered over:** both readings were taken with *zero* pending groups (our plan's
+      top-level Sort reports `rows=0.00`), so it is not "floor versus with-work". Candidates
+      are `EXPLAIN ANALYZE` instrumentation and an hour of window drift between the two.
+      Re-measure both ways in the same session before quoting either number.
 - [ ] 3.5 Watch one heavy ingest after the build for write amplification on `messages`.
       Verify: ingest duration compared against a pre-build batch of comparable size; noted
       even if unchanged, so a later regression has a baseline.
