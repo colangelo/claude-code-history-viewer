@@ -85,6 +85,42 @@ Three things that outlive the ack:
   the FQDN — but a future script that shortens it would break only when run
   unattended.
 
+### pg1 journal-day index (`0006`) — ships with `cchv-v0.19.0`, runs at hub startup
+
+`migrations/0006_messages_session_timestamp.sql` adds one btree,
+`messages (session_id, "timestamp")`. Additive, no rewrite, `IF NOT EXISTS`.
+
+**What it costs on deploy: hub startup latency, and nothing else.** sqlx applies
+pending migrations before the listener binds, so the first start after the §2b
+swap builds the index before answering anything. Over the 7.22 M rows pg1 held on
+2026-08-21 that is **an estimate, not a measurement** — call it under two minutes,
+calibrated against a full parallel seq scan of the same table at 5.4 s. It is
+deliberately unmeasured: measuring it means building the index on prod, which is
+the deploy. **Do not read a longer-than-usual connection-refused window after this
+particular swap as a failed bootstrap.**
+
+**The `SHARE` lock it takes cannot bite here, and it is worth knowing why**, since
+`0005` above needed real care about exactly this. `CREATE INDEX` blocks writers on
+`messages` for the build. During a §2b swap the hub is stopped, and the hub is the
+only writer — every daemon and the distiller reach Postgres *through* it — so the
+lock is uncontended. And unlike `0005` no deadlock cycle is possible: this
+migration touches one table and takes one lock, so there is no second lock for
+ingest to be holding. Hence no `lock_timeout` / `LOCK TABLE` preamble, and none
+should be added: an unbounded wait is the better failure mode here, because a
+clean abort would crash-loop the hub under `KeepAlive` until the writer finished.
+
+If a future deploy ever *does* run it against live writers, pre-build it out of
+band instead — `CREATE INDEX CONCURRENTLY messages_session_timestamp_idx ON
+messages (session_id, "timestamp")`, then confirm `pg_index.indisvalid`, and the
+migration's `IF NOT EXISTS` turns into a no-op. **Check validity before relying on
+that**: a failed concurrent build leaves an `INVALID` index that `IF NOT EXISTS`
+happily skips, and queries cannot use it — the deploy would silently ship without
+the index.
+
+**The file is frozen now.** sqlx records a checksum per applied migration and
+refuses to start when one changes, so `0006` must not be edited — not even its
+comments — now that it has been applied anywhere. Corrections go in a `0007`.
+
 ### `backfill-analytics` and `mirror rebuild` travel together
 
 **Any run of `hub backfill-analytics` must be followed by `hub mirror rebuild`.**
