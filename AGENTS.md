@@ -415,10 +415,19 @@ git push origin  main && git push origin  cchv-v0.6.0
 # branch separately, by the sha you MEANT.
 for R in internal origin; do
   git ls-remote --tags "$R" cchv-v0.6.0 | grep -q . \
-    || { echo "tag NOT published on $R"; exit 1; }      # empty ⇒ nothing was published
-  git fetch "$R" main -q && git merge-base --is-ancestor "${SHA}" "$R"/main \
-    || { echo "main NOT published on $R"; exit 1; }
-  echo "published on $R: ${SHA}"
+    || { echo "tag NOT published on $R"; exit 1; }      # empty = nothing was published
+  git fetch "$R" main -q || { echo "fetch failed on $R — cannot answer"; exit 1; }
+  # `--is-ancestor` answers on the EXIT CODE, and non-zero carries two different
+  # answers: 1 = "no, not an ancestor", 128 = "I could not answer, that object does
+  # not exist". `||` and `2>/dev/null` collapse them, so a FABRICATED sha takes the
+  # same branch as a true negative and reads as a verified "not published". Measured
+  # 2026-08-21; it is how a sha that resolved to nothing became a published fact.
+  git merge-base --is-ancestor "${SHA}" "$R"/main; rc=$?
+  case $rc in
+    0) echo "published on $R: ${SHA}" ;;
+    1) echo "main NOT published on $R"; exit 1 ;;
+    *) echo "cannot answer on $R (git exit $rc — does ${SHA} exist?)"; exit 1 ;;
+  esac
 done
 ```
 
