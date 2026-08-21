@@ -1950,6 +1950,24 @@ equivalently.
 > ("m4m is always-on; … still ≤1h after wake"); the first clause is false and the
 > second measures from the wrong event.
 >
+> **What a tick costs, and what lets one fire — measured here 2026-08-21, on the
+> two runs that cleared that stall.** Run 203 opened 04:45:16Z and drained
+> **41 groups in 15 m 06 s**; run 204 opened 06:00:23Z and drained **15 in
+> 4 m 50 s** — ≈19–22 s/group either way. Per-group cost tracks the group's
+> session count rather than sitting at a constant (the same log's 00:09:27Z run
+> spent 10 m 51 s on **7** groups, ≈93 s/group), so a rate quoted from one run is
+> a sample, not a budget. Neither run was the binding constraint; the wake
+> schedule was, and both fall inside a **single continuous awake stretch** —
+> `pmset -g log` records no Sleep of any kind after the 04:38:51Z DarkWake
+> (checked 06:20Z, 1 h 40 m and counting), while the 3 h 45 m of Sleep↔DarkWake
+> cycling before it produced zero ticks. The discriminator is therefore the box
+> **staying up**, not the DarkWake instant. A full wake and an active session
+> coincided here, so this does not separate those two; it does rule out DarkWake
+> alone. One suggestive reading, not a law: run 204 opened one second past an
+> exact hour from run 203's **exit** (05:00:22Z + 3600 s), i.e. the interval
+> looks re-armed at exit rather than at launch — a long catch-up would then push
+> the next tick a full hour past its *end*.
+>
 > Since `distiller-tick-observability`, each tick records itself
 > (`POST /v1/journal/ticks`, machine-token) so the *absence* of ticks is visible
 > in `/v1/healthz/journal` rather than only in `/tmp/cchv-distiller.err`. A
