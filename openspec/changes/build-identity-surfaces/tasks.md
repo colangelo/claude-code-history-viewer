@@ -50,13 +50,13 @@
 
 ## 4. Release tooling: the fifth sync-version target
 
-- [ ] 4.1 `scripts/sync-version.cjs` — rewrite the `DISTILL_VERSION = "…"  # sync-version`
+- [x] 4.1 `scripts/sync-version.cjs` — rewrite the `DISTILL_VERSION = "…"  # sync-version`
       line in `scripts/cchv-distill.py`; **exit 1 with a clear message if the marker is
       not found**; update the header comment's target list. Verify: run it on a throwaway
       version, `git diff --stat` shows exactly three files changed (Cargo.toml,
       tauri.conf.json, cchv-distill.py); remove the marker in a scratch copy and confirm
       the non-zero exit; restore.
-- [ ] 4.2 `AGENTS.md` — § Version Management diagram and the `just sync-version`
+- [x] 4.2 `AGENTS.md` — § Version Management diagram and the `just sync-version`
       comments list the script as a target; § Release Process Phase 3 explicit `git add`
       line gains `scripts/cchv-distill.py` and its comment explains that Guard 1 is what
       catches a forgotten fifth target (this is the case the comment already describes

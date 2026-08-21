@@ -202,7 +202,7 @@ just lint           # Run ESLint
 just tauri-build    # Build production app (macOS universal binary, Linux native)
 just test           # Run vitest in watch mode
 just test-run       # Run tests once with verbose output
-just sync-version   # Sync version from package.json to Cargo.toml and tauri.conf.json
+just sync-version   # Sync version from package.json to Cargo.toml, tauri.conf.json, cchv-distill.py
 ```
 
 ### Alternative (using pnpm directly)
@@ -271,15 +271,27 @@ static webapp + hub static hosting · `v0.5.0` Tailscale-identity read-auth ·
 ### Single Source of Truth
 
 **`package.json`** `version` is the source of truth. `just sync-version`
-propagates it to the Rust workspace and Tauri config:
+propagates it to the Rust workspace, the Tauri config, and the distiller:
 
 ```
 package.json (version)
     ↓ just sync-version
 ├── Cargo.toml  [workspace.package] version   ← every crate inherits it
-│                                               (version.workspace = true)
-└── src-tauri/tauri.conf.json
+│                                               (version.workspace = true);
+│                                               the hub reports it on /v1/healthz
+├── src-tauri/tauri.conf.json
+└── scripts/cchv-distill.py  DISTILL_VERSION  ← the distiller announces it at every
+                                               tick (it is deployed as an installed
+                                               COPY — #40). Marker-anchored; a missing
+                                               marker aborts the sync before any write.
 ```
+
+Not a target: `Cargo.lock` — refreshed by a `cargo` invocation, guarded by Guard 2
+below. Consequence of the distiller target: **every release changes
+`scripts/cchv-distill.py` by one line**, so the installed copy reads one release
+behind until infra reinstalls it; a version-only skew shows as a one-line
+`git diff <old-tag> <new-tag> -- scripts/cchv-distill.py`, and the blob id the
+distiller also reports is the tie-breaker (`docs/archive/deployment.md` §3c).
 
 ### Version Bump Guide
 
@@ -368,16 +380,21 @@ pnpm tsc --build . && pnpm vitest run        # re-check after sync
 # routine signal for a class whose whole danger is going unnoticed. It is how infra sat
 # on a live 146 KB copy for five days with four checks reporting clean (infra 2d87f32).
 find . -path ./.git -prune -o -name "*.sync-conflict-*" -print   # expect: nothing
-# Exactly what a version bump touches — verified against `chore(release): cchv-v0.18.1`
-# (b8f69d3a), which changed these four files and nothing else. Anything else that belongs
-# in the release gets committed deliberately BEFORE this point, never swept in here.
-git add package.json Cargo.toml Cargo.lock src-tauri/tauri.conf.json
+# Exactly what a version bump touches — four files verified against `chore(release):
+# cchv-v0.18.1` (b8f69d3a), plus `scripts/cchv-distill.py` since build-identity-surfaces
+# (#40, 2026-08-21: the distiller's DISTILL_VERSION is sync-version's fifth target).
+# Anything else that belongs in the release gets committed deliberately BEFORE this
+# point, never swept in here.
+git add package.json Cargo.toml Cargo.lock src-tauri/tauri.conf.json scripts/cchv-distill.py
 
 # Explicit staging fails closed in the WRONG direction the day `sync-version` grows a
-# fifth target: the list silently drops it, and the worktree census above says nothing —
-# it hunts UNTRACKED strays. Two guards close that, and they are complements, not
-# alternatives: Guard 1 catches a bump target that CHANGED and went unstaged, Guard 2 one
-# that was never TOUCHED. Both compose with explicit staging; neither reaches for `-A`.
+# new target: the list silently drops it, and the worktree census above says nothing —
+# it hunts UNTRACKED strays. This is no longer hypothetical: the fifth target landed
+# 2026-08-21, and the line above grew with it in the same commit — which is the only
+# reason Guard 1 did not have to fire. Two guards close the case where it does not, and
+# they are complements, not alternatives: Guard 1 catches a bump target that CHANGED
+# and went unstaged, Guard 2 one that was never TOUCHED. Both compose with explicit
+# staging; neither reaches for `-A`.
 #
 # Guard 1 — infra's (measured by them, re-measured here 2026-08-16 in a throwaway repo:
 # 5 tracked targets / recipe stages 4 → rc=1 naming `fifth.json`; all 5 staged → rc=0; an
