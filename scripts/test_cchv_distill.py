@@ -199,5 +199,80 @@ def test_session_messages_pages_on_the_windowed_total() -> None:
     assert seen[0]["from"] == "A" and seen[0]["to"] == "B"
 
 
+def test_a_failed_tick_record_never_costs_the_run() -> None:
+    """The tick record is telemetry about the work, not the work.
+
+    A tick that reached the hub, got a work list, and then failed to record
+    itself must still distill. Losing one datapoint in a health endpoint is
+    strictly better than losing an hour — and on a sleeping host, a wake — of
+    journal entries.
+    """
+    import requests
+
+    class BrokenHub(d.Hub):
+        def __post_init__(self) -> None:
+            pass
+
+        def post_tick(self, mode, groups_pending):  # exercise the real body
+            self.session = _RaisingSession()
+            return d.Hub.post_tick(self, mode, groups_pending)
+
+    class _RaisingSession:
+        def post(self, *a, **k):
+            raise requests.ConnectionError("hub down")
+
+    hub = BrokenHub(url="http://stub", token="t")
+    # No exception escapes: the caller in main() is not guarded, by design.
+    hub.post_tick("forward", 3)
+
+
+def test_tick_record_states_its_mode_and_work_list_size() -> None:
+    """An idle tick is recorded too — it is the one whose absence must show.
+
+    `groups_pending` is captured before any LLM call, so it describes the work
+    list the tick picked up, not the work it finished.
+    """
+    sent: list[dict] = []
+
+    class Resp:
+        status_code = 200
+        text = "{}"
+
+    class RecordingSession:
+        headers: dict = {}
+
+        def post(self, url, json, timeout):
+            sent.append({"url": url, "body": json})
+            return Resp()
+
+    class FakeHub(d.Hub):
+        def __post_init__(self) -> None:
+            self.session = RecordingSession()
+
+    hub = FakeHub(url="http://stub", token="t")
+    hub.post_tick("forward", 0)
+    hub.post_tick("backfill", 12)
+
+    assert [s["url"] for s in sent] == ["http://stub/v1/journal/ticks"] * 2
+    assert sent[0]["body"] == {"mode": "forward", "groups_pending": 0}
+    assert sent[1]["body"] == {"mode": "backfill", "groups_pending": 12}
+
+
+def test_dry_run_records_no_tick() -> None:
+    """`--dry-run` writes nothing, and a dry run drains nothing.
+
+    Pinned by reading `main()`: the call is guarded, and the guard is the whole
+    reason a dry run cannot inflate the liveness signal.
+    """
+    src = (REPO / "scripts" / "cchv-distill.py").read_text(encoding="utf-8")
+    guard = re.search(
+        r"if not args\.dry_run:\s*\n\s*hub\.post_tick\(", src
+    )
+    assert guard, (
+        "main() must guard the tick record with `if not args.dry_run:` — "
+        "without it a --dry-run reports a tick that drained nothing"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

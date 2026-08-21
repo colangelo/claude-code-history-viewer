@@ -1925,16 +1925,45 @@ equivalently.
 > after the hub carries the journal endpoints** (migration
 > `0002_journal_entries.sql`).
 >
-> **Self-healing cadence (`distiller-self-healing`).** The job ticks hourly
-> (`StartInterval 3600`), *not* nightly. This is what bounds journal staleness
-> to ~1h: some tick always lands after the 04:00 UTC logical day-close whatever
-> the DST offset (the retired 05:30-*local* calendar run fired 03:30 UTC under
-> CEST — before the close — and so never saw the day that just ended, the root
-> cause of the 2026-07-22→24 stall). An idle tick is one loopback
-> `GET /v1/journal/pending` + exit, no LLM call. Hub calls retry transient
-> failures (connection errors / 5xx, 3× / 30s; 4xx re-raised at once), so a pg
-> or DNS blip costs seconds not a whole run, and a failed tick recovers at the
-> next hour, never +24h.
+> **Self-healing cadence (`distiller-self-healing`).** The job ticks on an
+> interval (`StartInterval 3600`), *not* nightly. That is what removes the
+> wall-clock race: the **first tick after** the 04:00 UTC logical day-close sees
+> the closed day whatever the DST offset (the retired 05:30-*local* calendar run
+> fired 03:30 UTC under CEST — before the close — and so never saw the day that
+> just ended, the root cause of the 2026-07-22→24 stall). An idle tick is one
+> loopback `GET /v1/journal/pending` + a tick record + exit, no LLM call. Hub
+> calls retry transient failures (connection errors / 5xx, 3× / 30s; 4xx
+> re-raised at once), so a pg or DNS blip costs seconds not a whole run, and a
+> failed tick recovers at the next tick, never +24h.
+>
+> ⚠ **The interval bounds staleness in *wakes*, not hours — this section used to
+> claim "~1h" and that is false on this host.** launchd does not fire
+> `StartInterval` while the machine is asleep, a DarkWake is not a wake, and the
+> whole run of missed intervals is coalesced into **one** catch-up at the next
+> full wake rather than replayed. Measured by infra on the hub machine
+> 2026-08-21: **3 h 45 m with zero ticks**, `launchctl print` reporting
+> `state = not running`, across a Sleep↔DarkWake cycle from 01:29Z. The host
+> sleeps 40–106×/day. So `N groups ÷ 50 per tick` is a **floor on the drain time,
+> never an estimate**, and no clear-by time may be predicted from the interval —
+> two separate derivations have now done exactly that and been wrong. The
+> archived `distiller-self-healing` design listed this risk and dismissed it
+> ("m4m is always-on; … still ≤1h after wake"); the first clause is false and the
+> second measures from the wrong event.
+>
+> Since `distiller-tick-observability`, each tick records itself
+> (`POST /v1/journal/ticks`, machine-token) so the *absence* of ticks is visible
+> in `/v1/healthz/journal` rather than only in `/tmp/cchv-distiller.err`. A
+> `--dry-run` records nothing.
+>
+> **The two halves deploy in either order**, which is worth knowing because they
+> live in different artifacts (hub binary, `~/.local/bin/cchv-distill`). New
+> distiller against an old hub: the POST 404s, which is a 4xx, so it is not
+> retried and is swallowed with a `WARN: tick record failed (continuing)` — the
+> distillation itself is untouched. New hub against an old distiller: nothing
+> ever posts, so the tick fields read `null` / `0`, which is honest and alerts
+> nobody while `max_tick_age_secs` is unset. **Set `max_tick_age_secs` on the
+> Gatus check only after both halves are live**, or the check pages on a
+> distiller that is running fine and simply cannot say so.
 
 - **Install** (on m4m):
 
@@ -2131,6 +2160,33 @@ equivalently.
   red forever). This catches *all* stall modes — including runs that succeed but
   distill nothing (the DST-race bug) — which a distiller-side dead-man ping
   cannot. Relay a `cchv-journal` Gatus check to infra alongside `cchv-ingest`.
+
+  **Two things the 503 does not tell you, and how to read it anyway.**
+
+  1. *It has no wall-clock recovery time.* `grace_secs` runs from each group's
+     `latest_arrival`, not from the day close, so a group whose data landed more
+     than `grace_secs` before its day closed is stale **the instant the day
+     closes**. A day close is therefore never a net drain: measured 2026-08-21,
+     the 04:00Z roll retired 6 stranded groups and admitted a newly closed day
+     carrying 20, twelve already past grace. **Only a tick clears this check; the
+     clock never does.**
+  2. *It could not distinguish "draining" from "not running".* Since
+     `distiller-tick-observability` the body also carries `last_tick_at`,
+     `last_tick_age_secs`, `last_tick_mode`, `last_tick_groups_pending` and
+     `ticks_last_24h`. Read the two together: **stale + a recent tick** is a real
+     stall (the distiller is running and not draining); **stale + no tick** is a
+     scheduler or host problem (asleep, job unloaded, plist not bootstrapped).
+     `ticks_last_24h` well under 24 is the normal, expected shape on a host that
+     sleeps — it is the drain rate actually on offer.
+
+  Alerting on tick age is **opt-in**: `max_tick_age_secs` is absent by default
+  and then never contributes to the verdict (the `max_lag_rows` rule from
+  `/v1/healthz/stats`). Any default would be an assumption about ac's wake
+  schedule dressed up as a health rule, and would flap nightly. When set and
+  exceeded — or when no tick has ever been recorded — the status is `"no_tick"`
+  and outranks `"stale"`. Whether the `cchv-journal` check sets it, and to what,
+  is infra's call; on this host the honest value is generous, because it is a
+  "the job is gone" detector rather than a latency SLO.
 
 ## 3d. Project identity (cchv-v0.10.0): rollout order
 

@@ -438,6 +438,91 @@ pub async fn create(
 }
 
 // ---------------------------------------------------------------------------
+// POST /v1/journal/ticks
+// ---------------------------------------------------------------------------
+
+/// How long tick records are kept. Long enough to answer "has this thing run
+/// this week", short enough that the table never becomes something anyone has to
+/// think about: at ~24 ticks/day this is a few hundred rows.
+const TICK_RETENTION_DAYS: i64 = 30;
+
+/// A distiller announcing that it ran.
+#[derive(Debug, Deserialize)]
+pub struct TickPayload {
+    /// `forward` (the scheduled job) or `backfill` (an operator's bounded
+    /// historical run).
+    pub mode: String,
+    /// Groups the tick found pending. Recorded before any LLM call, so it is the
+    /// size of the work list — not of the work completed.
+    pub groups_pending: i32,
+}
+
+/// Records one distiller tick. Machine-token auth, same model as the entry
+/// upsert: this is a write, and only the jobs that hold an ingest token have any
+/// business claiming a tick happened.
+///
+/// **Why the distiller has to tell us at all.** Its only other hub interaction
+/// per tick is `GET /v1/journal/pending`, which writes nothing, so an idle tick
+/// leaves no trace and "ticking hourly into an empty work list" is
+/// indistinguishable from "has not run since Tuesday". Deriving liveness from
+/// `journal_entries.generated_at` instead does not work: that moves only when a
+/// tick both had work *and* succeeded at it, which is the same ambiguity one
+/// level down.
+///
+/// Recorded at the *start* of the work, so it asserts exactly one thing — a
+/// distiller reached the hub and got a work list. Whether the work then got done
+/// is what `pending` and `/v1/healthz/journal` already answer; pairing the two
+/// signals is what separates "running but not draining" from "not running".
+pub async fn record_tick(
+    _machine: AuthedMachine,
+    State(state): State<AppState>,
+    Json(payload): Json<TickPayload>,
+) -> Result<Json<serde_json::Value>, HubError> {
+    if !matches!(payload.mode.as_str(), "forward" | "backfill") {
+        return Err(HubError::BadRequest(format!(
+            "unknown mode `{}` (expected `forward` or `backfill`)",
+            payload.mode
+        )));
+    }
+    if payload.groups_pending < 0 {
+        return Err(HubError::BadRequest(format!(
+            "groups_pending must be non-negative, got {}",
+            payload.groups_pending
+        )));
+    }
+
+    let tick_at: DateTime<Utc> = sqlx::query_scalar(
+        r"INSERT INTO distiller_ticks (mode, groups_pending)
+          VALUES ($1, $2)
+          RETURNING tick_at",
+    )
+    .bind(&payload.mode)
+    .bind(payload.groups_pending)
+    .fetch_one(&state.pool)
+    .await?;
+
+    // Prune inline rather than from a separate job, which would be one more
+    // thing to deploy and forget. Indexed, bounded, and one row per hour of
+    // arrivals to keep ahead of.
+    if let Err(e) = sqlx::query(
+        r"DELETE FROM distiller_ticks
+          WHERE tick_at < now() - make_interval(days => $1::int)",
+    )
+    .bind(i32::try_from(TICK_RETENTION_DAYS).unwrap_or(30))
+    .execute(&state.pool)
+    .await
+    {
+        // Never fail the record over housekeeping: the tick genuinely happened,
+        // and a table that is a few rows too long harms nobody.
+        tracing::warn!(error = %e, "distiller_ticks prune failed");
+    }
+
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "tick_at": tick_at }),
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/journal/entries (browse)
 // ---------------------------------------------------------------------------
 

@@ -4,7 +4,9 @@
 //! while `/v1/healthz` stays green.
 //! `GET /v1/healthz/journal` — unauthenticated journal-distillation staleness,
 //! so the same monitor can alert when closed days sit undrained (the pipeline
-//! stalled) even while both checks above stay green.
+//! stalled) even while both checks above stay green — **and distiller-tick
+//! liveness beside it**, because undrained work alone cannot say whether a
+//! distiller is behind or absent.
 //! `GET /v1/healthz/stats` — unauthenticated statistics-mirror readiness,
 //! staleness **and watermark lag**, because a mirror can be recently refreshed
 //! and still be missing rows.
@@ -207,6 +209,16 @@ pub struct JournalHealthParams {
     /// query-rejection. See [`parse_positive`].
     pub grace_secs: Option<String>,
     pub within_days: Option<String>,
+    /// Age past which the last distiller tick flips this check to `no_tick`.
+    /// **Absent by default, and then tick age is reported but never alerts** —
+    /// the same rule as `healthz_stats`'s `max_lag_rows`, and for a sharper
+    /// reason: the host running the distiller sleeps dozens of times a day, and
+    /// launchd does not fire `StartInterval` while it is asleep, so any default
+    /// threshold here would be an assumption about that host's wake schedule
+    /// dressed up as a property of the archive. Keeping it a query param leaves
+    /// the policy in the monitor's config, where it can be tuned without a hub
+    /// redeploy (same reasoning as `healthz_ingest`'s `exclude`).
+    pub max_tick_age_secs: Option<String>,
 }
 
 /// One in-window pending `(entry_date, project_path)` group, with its latest
@@ -232,10 +244,41 @@ struct JournalGroupRow {
 
 #[derive(Debug, Serialize)]
 pub struct JournalHealthResponse {
+    /// `ok` · `stale` (in-window groups undrained past grace) · `no_tick` (no
+    /// distiller tick within `max_tick_age_secs`, only reachable when that param
+    /// is supplied).
     pub status: &'static str,
     pub grace_secs: i64,
     pub within_days: i32,
+    /// When a distiller last told us it ran. `null` until one does — either
+    /// because none has, or because the deployed distiller predates
+    /// `POST /v1/journal/ticks`.
+    pub last_tick_at: Option<DateTime<Utc>>,
+    pub last_tick_age_secs: Option<i64>,
+    /// `forward` (the scheduled job) or `backfill` (a hand-run historical pass).
+    pub last_tick_mode: Option<String>,
+    /// Groups that tick found pending when it started — the size of its work
+    /// list, not of the work it finished.
+    pub last_tick_groups_pending: Option<i32>,
+    /// **This is why a last-tick timestamp alone is not enough.** On a host that
+    /// sleeps, `StartInterval 3600` does not mean 24 ticks a day — launchd
+    /// coalesces every interval missed while asleep into a single catch-up at the
+    /// next full wake. A count here well under 24 is the drain rate actually on
+    /// offer, and it is what turns "the backlog should clear in N hours" into a
+    /// question about wakes rather than clocks.
+    pub ticks_last_24h: i64,
+    pub max_tick_age_secs: Option<i64>,
     pub groups: Vec<JournalStaleGroup>,
+}
+
+/// The most recent row of `distiller_ticks`, plus how many landed in the last
+/// 24 h. One round trip; both halves come off `distiller_ticks_tick_at_idx`.
+#[derive(Debug, FromRow)]
+struct TickSummary {
+    last_tick_at: Option<DateTime<Utc>>,
+    last_tick_mode: Option<String>,
+    last_tick_groups_pending: Option<i32>,
+    ticks_last_24h: i64,
 }
 
 /// The inclusive lower bound of the evaluated window: `within_days` before the
@@ -278,6 +321,21 @@ fn parse_positive(raw: Option<&str>, name: &str, default: i64) -> Result<i64, Hu
 /// 503. The closed-day fold and pending semantics mirror
 /// [`crate::journal::pending`] exactly (same [`crate::journal::DAY_START_HOUR`]);
 /// the only addition is the per-group latest arrival and the horizon bound.
+///
+/// **A day close is never a net drain of this check, so it has no wall-clock
+/// recovery time.** Grace runs from each group's `latest_arrival`, not from the
+/// close, so anything that landed more than `grace_secs` before its day closed is
+/// stale the instant the day closes. Measured on the live archive 2026-08-21: the
+/// 04:00Z roll retired 6 stranded groups and admitted a newly closed day carrying
+/// 20, twelve of them already past grace on arrival. Only a distiller tick clears
+/// this; the clock never does. Two separate derivations have now predicted a
+/// clear-by time from this endpoint and been wrong — do not make a third.
+///
+/// The tick fields exist for the other half of that mistake. A 503 with a group
+/// list says work is undone; it cannot say whether a distiller is chewing through
+/// it or has not run at all, because an idle tick writes nothing here. Read
+/// together: stale + recent tick is a real stall, stale + no tick is a scheduler
+/// or host problem, and the difference decides who gets paged.
 pub async fn healthz_journal(
     State(state): State<AppState>,
     Query(params): Query<JournalHealthParams>,
@@ -295,6 +353,14 @@ pub async fn healthz_journal(
     let within_days = i32::try_from(within_days_i64).map_err(|_| {
         HubError::BadRequest(format!("within_days too large, got {within_days_i64}"))
     })?;
+    // `map` before `parse_positive`, not `parse_positive`'s own default path:
+    // absent must stay `None` (report, never alert), so there is no default to
+    // fall back to and the `0` below is unreachable.
+    let max_tick_age_secs = params
+        .max_tick_age_secs
+        .as_deref()
+        .map(|raw| parse_positive(Some(raw), "max_tick_age_secs", 0))
+        .transpose()?;
     let day_start_hour = crate::journal::DAY_START_HOUR;
 
     // Runtime query (not `query!`): the offline gate has no `.sqlx` metadata for
@@ -369,6 +435,34 @@ pub async fn healthz_journal(
     .fetch_all(&state.pool)
     .await?;
 
+    // Runtime query for the same reason as the one above. Both halves read
+    // `distiller_ticks_tick_at_idx`: one backwards probe for the newest row, one
+    // range scan for the count.
+    //
+    // The constant base row with a LATERAL join, rather than three scalar
+    // subqueries, is what makes "no tick has ever been recorded" a row of nulls
+    // instead of no row at all — the empty-table case is the one this endpoint
+    // most needs to be able to answer.
+    let ticks = sqlx::query_as::<_, TickSummary>(
+        r"
+        SELECT t.tick_at        AS last_tick_at,
+               t.mode           AS last_tick_mode,
+               t.groups_pending AS last_tick_groups_pending,
+               (SELECT count(*) FROM distiller_ticks
+                 WHERE tick_at > now() - interval '24 hours')::bigint
+                   AS ticks_last_24h
+        FROM (SELECT 1) AS base
+        LEFT JOIN LATERAL (
+            SELECT tick_at, mode, groups_pending
+            FROM distiller_ticks
+            ORDER BY tick_at DESC
+            LIMIT 1
+        ) t ON true
+        ",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+
     let now = Utc::now();
     let threshold = chrono::Duration::seconds(grace_secs);
     let mut any_stale = false;
@@ -386,17 +480,43 @@ pub async fn healthz_journal(
         })
         .collect();
 
-    let status = if any_stale {
-        StatusCode::SERVICE_UNAVAILABLE
+    let last_tick_age_secs = ticks.last_tick_at.map(|t| (now - t).num_seconds());
+    // Only a supplied threshold can make tick age a verdict. Absent, every
+    // branch below is byte-identical to what this endpoint returned before the
+    // fields existed — an existing monitor cannot start seeing a new status.
+    let tick_overdue = max_tick_age_secs.is_some_and(|limit| match last_tick_age_secs {
+        // Never having ticked is the strongest form of overdue, not an unknown:
+        // a monitor that asked for a tick-age budget is asking to be told.
+        None => true,
+        Some(age) => age > limit,
+    });
+
+    // `no_tick` outranks `stale`: when both hold, the absent tick is the cause
+    // and the undrained groups are its symptom.
+    let status = if tick_overdue {
+        "no_tick"
+    } else if any_stale {
+        "stale"
     } else {
+        "ok"
+    };
+    let code = if status == "ok" {
         StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
     };
     Ok((
-        status,
+        code,
         Json(JournalHealthResponse {
-            status: if any_stale { "stale" } else { "ok" },
+            status,
             grace_secs,
             within_days,
+            last_tick_at: ticks.last_tick_at,
+            last_tick_age_secs,
+            last_tick_mode: ticks.last_tick_mode,
+            last_tick_groups_pending: ticks.last_tick_groups_pending,
+            ticks_last_24h: ticks.ticks_last_24h,
+            max_tick_age_secs,
             groups,
         }),
     ))
@@ -640,6 +760,21 @@ mod tests {
             horizon_from("2026-08-21T00:46:00Z".parse().unwrap(), 0, 7),
             NaiveDate::from_ymd_opt(2026, 8, 14).unwrap()
         );
+    }
+
+    /// `max_tick_age_secs` goes through `parse_positive` like the other two, so
+    /// a typo in a monitor's URL is a 400 naming the parameter rather than a
+    /// silently-ignored threshold that never fires.
+    #[test]
+    fn max_tick_age_secs_is_validated_like_the_other_params() {
+        assert_eq!(
+            parse_positive(Some("3600"), "max_tick_age_secs", 0).unwrap(),
+            3600
+        );
+        for bad in ["0", "-1", "abc", ""] {
+            let err = parse_positive(Some(bad), "max_tick_age_secs", 0).unwrap_err();
+            assert!(matches!(err, HubError::BadRequest(m) if m.contains("max_tick_age_secs")));
+        }
     }
 
     #[test]

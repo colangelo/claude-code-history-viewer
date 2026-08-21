@@ -249,11 +249,14 @@ def resolve_aiproxy_key() -> str:
 
 # --- hub client ---------------------------------------------------------------
 
-# Transient-failure retry for hub calls. The distiller now ticks hourly
-# (launchd StartInterval), so a tick that gives up is retried within the hour —
-# but a bounded in-tick retry rides out the sub-second-to-minute flakes (pg
-# connection resets, a hub restart mid-swap, tailnet DNS blips) that used to
-# abort a whole run. Retries cover connection errors, timeouts, and 5xx only;
+# Transient-failure retry for hub calls. The distiller ticks on an interval
+# (launchd StartInterval), so a tick that gives up is retried at the NEXT TICK —
+# which on a sleeping host is the next wake, not an hour from now (launchd skips
+# intervals while asleep and coalesces the missed ones into a single catch-up).
+# That is exactly why a bounded in-tick retry earns its keep: it rides out the
+# sub-second-to-minute flakes (pg connection resets, a hub restart mid-swap,
+# tailnet DNS blips) that would otherwise abort a whole run and cost a wake
+# rather than an hour. Retries cover connection errors, timeouts, and 5xx only;
 # a 4xx is a client error that a retry can't fix (e.g. a hub validation reject),
 # so it propagates immediately.
 RETRY_ATTEMPTS = 3
@@ -308,6 +311,39 @@ class Hub:
         )
         r.raise_for_status()
         return r
+
+    def post_tick(self, mode: str, groups_pending: int) -> None:
+        """Tell the hub this tick happened. Best-effort; never fails the run.
+
+        Without it a tick is invisible: the only other hub call a tick with no
+        work makes is the pending GET, which writes nothing, so "ticking hourly
+        into an empty list" and "has not run since Tuesday" leave the same trace.
+        `/v1/healthz/journal` returned the same 503 for both, and on a host that
+        sleeps — launchd does not fire `StartInterval` while asleep, and coalesces
+        the missed run into one catch-up at the next wake — the elapsed hours
+        cannot break the tie either.
+
+        Recorded before any LLM call, so it claims only that a distiller reached
+        the hub and got a work list. A failure here loses one datapoint in a
+        health endpoint; failing the run over that would trade the work for the
+        telemetry about the work.
+        """
+        def attempt() -> None:
+            r = self.session.post(
+                f"{self.url}/v1/journal/ticks",
+                json={"mode": mode, "groups_pending": groups_pending},
+                timeout=HTTP_TIMEOUT_SECS,
+            )
+            if r.status_code >= 400:
+                raise requests.HTTPError(
+                    f"POST /v1/journal/ticks {r.status_code}: {r.text[:200]}",
+                    response=r,
+                )
+
+        try:
+            _with_retry("post tick", attempt)
+        except (requests.RequestException, RuntimeError) as e:
+            log(f"WARN: tick record failed (continuing): {e}")
 
     def pending(self, from_date: str | None, limit: int) -> list[dict]:
         return _with_retry(
@@ -697,6 +733,14 @@ def main() -> int:
     except requests.RequestException as e:
         log(f"FATAL: pending query failed: {e}")
         return 1
+
+    # Record the tick before deciding whether there is anything to do: an idle
+    # tick is exactly the one that would otherwise leave no trace, and it is the
+    # one whose absence we need to be able to see. `--dry-run` records nothing —
+    # that flag's contract is that it never writes, and a dry run drains nothing,
+    # so counting it as a tick would overstate liveness.
+    if not args.dry_run:
+        hub.post_tick("backfill" if args.backfill else "forward", len(groups))
 
     if not groups:
         log("nothing pending")

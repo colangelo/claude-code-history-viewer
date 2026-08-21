@@ -1100,8 +1100,224 @@ async fn journal_health_rejects_bad_params() {
         ("grace_secs", "0"),
         ("within_days", "-1"),
         ("within_days", "notanumber"),
+        ("max_tick_age_secs", "0"),
+        ("max_tick_age_secs", "abc"),
     ] {
         let resp = get(&hub, "/v1/healthz/journal", &[q], None).await;
         assert_eq!(resp.status(), 400, "param {q:?} must 400");
     }
+}
+
+/// Grace is measured from each group's **arrival**, never from its day's close.
+///
+/// Two groups on the *same* closed logical day, one whose data arrived 3 h ago
+/// and one whose data just landed: only the first is stale. If grace ran from
+/// the close they would share a verdict, since they share a close.
+///
+/// The consequence is the one worth remembering, because it has been re-derived
+/// wrongly twice: **a day close is never a net drain of this check.** The close
+/// retires whatever aged out of `within_days`, and simultaneously admits a whole
+/// new day's groups — every one of which whose data landed more than
+/// `grace_secs` before the close is stale on arrival, with no grace left to run.
+/// Only a distiller tick clears this endpoint; the clock never does, so a 503
+/// carries no wall-clock recovery time.
+#[tokio::test]
+async fn journal_health_grace_runs_from_arrival_not_from_the_day_close() {
+    let old = spawn().await;
+    let fresh = spawn().await;
+    let pool = connect_pool().await;
+    let old_project = format!("/w/jh-close-old-{}", old.hostname);
+    let fresh_project = format!("/w/jh-close-fresh-{}", fresh.hostname);
+
+    // Same closed logical day for both; only the arrival differs.
+    seed_day(&old, &pool, &old_project, "1 day", "3 hours").await;
+    seed_day(&fresh, &pool, &fresh_project, "1 day", "1 minute").await;
+
+    let resp = get(&old, "/v1/healthz/journal", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        find_group(&body, &old_project)["stale"],
+        Value::Bool(true),
+        "arrival older than grace is stale the moment its day closes"
+    );
+    assert_eq!(
+        find_group(&body, &fresh_project)["stale"],
+        Value::Bool(false),
+        "same close, fresh arrival — so the close is not what grace measures"
+    );
+    assert_eq!(
+        find_group(&body, &old_project)["entry_date"],
+        find_group(&body, &fresh_project)["entry_date"],
+        "the two groups must share a day for this to prove anything"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// distiller tick records — POST /v1/journal/ticks, and their health fields
+//
+// `distiller_ticks` is a GLOBAL table (there is one distiller), so unlike the
+// group assertions above these tests cannot scope themselves by machine. They
+// clear the table first instead, which is safe because these are the only tests
+// that write it. Cargo runs test binaries sequentially and the gate passes
+// `--test-threads=1`, so no other test observes the window.
+// ---------------------------------------------------------------------------
+
+async fn clear_ticks(pool: &sqlx::PgPool) {
+    sqlx::query("DELETE FROM distiller_ticks")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+async fn post_tick(hub: &TestHub, body: Value, auth: bool) -> reqwest::Response {
+    let req = reqwest::Client::new()
+        .post(format!("{}/v1/journal/ticks", hub.base))
+        .json(&body);
+    let req = if auth {
+        req.bearer_auth(&hub.token)
+    } else {
+        req
+    };
+    req.send().await.unwrap()
+}
+
+#[tokio::test]
+async fn journal_tick_record_surfaces_in_health() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    clear_ticks(&pool).await;
+
+    let resp = post_tick(&hub, json!({"mode": "forward", "groups_pending": 41}), true).await;
+    assert_eq!(resp.status(), 200);
+    let recorded: Value = resp.json().await.unwrap();
+    assert!(recorded["tick_at"].is_string(), "{recorded:?}");
+
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(body["last_tick_at"].is_string(), "{body:?}");
+    assert_eq!(body["last_tick_mode"], "forward");
+    assert_eq!(body["last_tick_groups_pending"], 41);
+    assert_eq!(body["ticks_last_24h"], 1);
+    // The point of the field: an operator can tell "ran a minute ago" from
+    // "has not run since Tuesday" without reading the distiller's log file.
+    let age = body["last_tick_age_secs"].as_i64().expect("age reported");
+    assert!((0..60).contains(&age), "fresh tick, got age {age}");
+
+    // A backfill is a tick too — it drains real work — and says so.
+    post_tick(&hub, json!({"mode": "backfill", "groups_pending": 0}), true).await;
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["last_tick_mode"], "backfill");
+    assert_eq!(body["ticks_last_24h"], 2);
+}
+
+#[tokio::test]
+async fn journal_tick_record_validates_and_requires_a_token() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    clear_ticks(&pool).await;
+
+    for bad in [
+        json!({"mode": "sideways", "groups_pending": 1}),
+        json!({"mode": "forward", "groups_pending": -1}),
+    ] {
+        let resp = post_tick(&hub, bad.clone(), true).await;
+        assert_eq!(resp.status(), 400, "payload {bad:?} must 400");
+    }
+    let resp = post_tick(&hub, json!({"mode": "forward", "groups_pending": 1}), false).await;
+    assert!(
+        resp.status().is_client_error(),
+        "recording a tick needs a machine token, got {}",
+        resp.status()
+    );
+
+    // Nothing above wrote a row, so health still reports "never ticked".
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["last_tick_at"], Value::Null);
+    assert_eq!(body["last_tick_age_secs"], Value::Null);
+    assert_eq!(body["ticks_last_24h"], 0);
+}
+
+/// Tick age is reported always and alerts only on request — the `max_lag_rows`
+/// rule from `/v1/healthz/stats`. A default here would be an assumption about
+/// how often the host wakes, and this host sleeps dozens of times a day.
+#[tokio::test]
+async fn journal_tick_age_alerts_only_when_a_budget_is_supplied() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    clear_ticks(&pool).await;
+    // A stale group so the endpoint has a verdict to be outranked.
+    let project = format!("/w/jh-tick-{}", hub.hostname);
+    seed_day(&hub, &pool, &project, "1 day", "3 hours").await;
+
+    // No tick has ever been recorded — and with no budget that changes nothing.
+    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    assert_eq!(resp.status(), 503);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stale");
+    assert_eq!(body["max_tick_age_secs"], Value::Null);
+
+    // Ask, and never having ticked is the strongest form of overdue.
+    let resp = get(
+        &hub,
+        "/v1/healthz/journal",
+        &[("max_tick_age_secs", "3600")],
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), 503);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["status"], "no_tick",
+        "no tick outranks the stale backlog it explains"
+    );
+
+    // A tick lands: the cause is gone, the symptom remains, and the status says
+    // so — this is the discrimination the whole change exists for.
+    post_tick(&hub, json!({"mode": "forward", "groups_pending": 1}), true).await;
+    let resp = get(
+        &hub,
+        "/v1/healthz/journal",
+        &[("max_tick_age_secs", "3600")],
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), 503);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stale");
+
+    // Age that tick past the budget: back to `no_tick` without touching groups.
+    sqlx::query("UPDATE distiller_ticks SET tick_at = now() - interval '2 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body: Value = get(
+        &hub,
+        "/v1/healthz/journal",
+        &[("max_tick_age_secs", "3600")],
+        None,
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(body["status"], "no_tick");
+    assert_eq!(
+        body["ticks_last_24h"], 0,
+        "a tick two days old is not a tick today"
+    );
+    assert!(
+        body["last_tick_age_secs"].as_i64().unwrap() > 3600,
+        "the age is still reported, only the verdict changed"
+    );
 }

@@ -3,13 +3,22 @@
 <!-- dev.cchv.distiller — hourly journal-entries distiller (docs/archive/deployment.md §3c).
      Interval job, NOT KeepAlive: the distiller is catch-up-based (work list derived
      from hub data), and an idle tick is one loopback query + exit (no LLM calls), so
-     it ticks hourly (StartInterval) rather than once nightly. Hourly ticks are what
-     make the pipeline self-healing: some tick always lands after the 04:00 UTC logical
-     day-close regardless of DST offset (the old 05:30-LOCAL calendar run fired 03:30
-     UTC under CEST — before the close — so it never saw yesterday), a failed tick
-     retries in <=1h instead of +24h, and late laptop-wake data is drained within the
-     hour. RunAtLoad adds login/boot catch-up; launchd fires a missed interval once on
-     wake. -->
+     it ticks hourly (StartInterval) rather than once nightly. Interval ticks are what
+     make the pipeline self-healing: the FIRST tick after the 04:00 UTC logical day-close
+     sees it regardless of DST offset (the old 05:30-LOCAL calendar run fired 03:30 UTC
+     under CEST — before the close — so it never saw yesterday), and a failed tick
+     retries at the next tick instead of +24h.
+
+     STALENESS IS BOUNDED IN WAKES, NOT HOURS, and on this host those are very different
+     units. launchd does NOT fire StartInterval while the machine is asleep; a DarkWake
+     is not a wake; and the whole run of missed intervals is coalesced into ONE catch-up
+     at the next full wake rather than replayed. Measured 2026-08-21: 3h45m with zero
+     ticks and `state = not running`, across a Sleep<->DarkWake cycle. This host sleeps
+     40-106x/day, so "N groups / 50 per hourly tick" is a FLOOR on the drain time, never
+     an estimate — never predict a clear-by time from the interval. RunAtLoad adds
+     login/boot catch-up. Each tick records itself via POST /v1/journal/ticks, which is
+     what makes "no tick has run" visible in /v1/healthz/journal instead of inferable
+     only from this log. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
