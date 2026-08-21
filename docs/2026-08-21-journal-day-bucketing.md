@@ -20,7 +20,7 @@ finding the last two took a production deploy each. Tracker: #35 (closed), #37 (
 | Distiller reinstall (infra, 08:15Z) — windowed transcripts | installed file `cmp`-identical to `HEAD`; `build_transcript` takes `entry_date` |
 | `cchv-v0.20.0` — single-pass health + per-day arrival | health 6.9 s → 3.4 s; probe `POST /v1/journal/ticks` 405 → 401 with two controls |
 | `cchv-v0.20.1` — dirty detection at day granularity (#37) | 503/3 groups → 200/0; migration 0008 in **13 ms**; held while 6,669 records ingested for the live repo |
-| rkyv reviewed-ignore + a CI guard that can expire it | `Security Audit` success on `2a318594`; guard fails if an absence-based ignore enters the build graph |
+| rkyv reviewed-ignore + a CI guard that can expire it | `Security Audit` success on `2a318594`; guard fails if an absence-based ignore enters the build graph. **`cchv-v0.20.1` (`ac3945ec`) stays permanently red** — the ignore landed one commit after the tag, so the Phase 4 per-tag CI check reports it forever. Expected and triaged for any tag ≤ `ac3945ec`; new and real for any tag after it. |
 | Historical backfill — 401 groups | 0 never-distilled / 0 wrong-session-set / **562 correct**; 199 entries + 202 skips, 0 failed |
 | `journal-day-bucketing` archived | 6 requirements folded into `journal-entries`, `journal-health`, `archive-search-api` |
 
@@ -101,7 +101,7 @@ into the 20th's, where it happened, and the 19th greps clean for every 20th-only
 
 | Issue | What | Blocked on |
 |---|---|---|
-| **#36** | fold queries seq-scan where the bitmap path is 2–3× faster (health 3.4 s → 1.6 s, pending 3.25 s → 1.08 s, both measured) | nothing — `status/ready` |
+| **#36** | fold queries seq-scan where the bitmap path is 2–3× faster (pending 3.25 s → 1.08 s, measured). Health is a **range, not a number** — 3.4 s / 3.665 s / 3.86 s read three times on one query; treat any single figure as a sample | nothing — `status/ready` |
 | **#39** | no `version` on `/v1/healthz`, so a hub swap can only be proven by route archaeology | nothing; infra explicitly handed it to us |
 | **#40** | the installed distiller is a copy with no version signal | nothing; recommendation recorded (log version at tick start, **not** a symlink — this worktree is Syncthing-shared) |
 | **#41** | 91 % of rows are state records | `needs/decision` — filter at query time vs at ingest is ac's call |

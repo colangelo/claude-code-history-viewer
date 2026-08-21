@@ -602,11 +602,19 @@ Known dead weight in `rust-tests.yml`: the **Benchmarks** job uploads nothing �
 `target/` to the repo root (the run annotation reads *"No files were found with
 the provided path"*). It only proves benches compile.
 
-**`security-audit.yml` has been red since 2026-08-10 on one unreachable
-advisory, and the fix is a three-line config edit nobody has made.** Diagnosed
-2026-08-21 while gating `cchv-v0.20.0`; the red mark rides on the release commit
-of v0.18.1, v0.19.0 and v0.20.0, which is exactly the shape that gets read as
-"the release is unsafe to deploy". It is not.
+**`security-audit.yml` was red from 2026-08-10 to 2026-08-21 on one unreachable
+advisory. It is green now — landed at `2a318594`.** Kept because the *shape* recurs
+and because four release tags carry the red mark permanently.
+
+**⚠️ `cchv-v0.20.1` (`ac3945ec`) is the last tag with the red mark, and it always will
+be.** The ignore landed **one commit after** that tag, so the Phase 4 check above —
+`gh run list --commit <tag-sha>` — reports `Security Audit  failure` for it, forever, and
+every future reader will re-triage it. The same is true of v0.18.1, v0.19.0 and v0.20.0.
+It does not reach the deployed artifact: the advisory is `src-tauri`-only (see the chain
+below), the hub binary cannot contain it under any feature selection, and infra verified
+that independently with `strings` on the shipped asset before swapping. **A red
+`Security Audit` on any tag at or before `ac3945ec` is expected and already triaged; on a
+tag after it, it is new and real.**
 
 - The run reports **`error: 1 vulnerability found!` plus 30 allowed warnings** —
   the warnings do not fail it. The single vulnerability is **RUSTSEC-2026-0235**,
@@ -626,12 +634,19 @@ of v0.18.1, v0.19.0 and v0.20.0, which is exactly the shape that gets read as
   entry is enough to fail it. `.cargo/audit.toml` exists for precisely this and
   already carries three such entries (`rsa` via `sqlx-mysql`, two `quick-xml`
   via `plist`) — the `rsa` one proves unreachability with the same
-  `cargo tree -i … --target all` probe used above. **Adding
-  `"RUSTSEC-2026-0235"` with that reasoning is the repo's own convention**, not
-  a new judgment call; the edit was left unmade only because `.cargo/` is
-  permission-gated for agents, and an unattended run must not talk its way past
-  that gate. Way out for the entry: `rust_decimal` moving to `rkyv` 0.8, or the
-  web-only-cut, whichever lands first.
+  `cargo tree -i … --target all` probe used above. **`"RUSTSEC-2026-0235"` was added
+  with that reasoning at `2a318594`** — the repo's own convention, not a new judgment
+  call. It had been left unmade only because `.cargo/` is permission-gated for agents
+  and an unattended run must not talk its way past that gate; an attended session
+  pasted the block that had been parked on #11 (comment 7159) for exactly that reason.
+  Way out for the entry: `rust_decimal` moving to `rkyv` 0.8, or the web-only-cut,
+  whichever lands first.
+- **The ignore cannot outlive its justification silently.** `security-audit.yml` now
+  fails the build if any *absence-based* entry (`rsa`, `rkyv`) enters the build graph.
+  `quick-xml` is deliberately excluded from that guard — it **is** in the graph
+  (`plist → tauri/os_info`) and its ignore rests on the input being Tauri's own
+  `Info.plist`, not on absence. A name in that list asserts absence; verify with
+  `cargo tree -i <crate> --target all` before adding one.
 
 ## Architecture
 
