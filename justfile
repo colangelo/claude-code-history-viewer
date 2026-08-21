@@ -144,6 +144,10 @@ serve-dev: frontend-build
 rust-test:
     cd src-tauri && cargo test -- --test-threads=1
 
+# Repair historical journal entries in bounded batches (see docs/2026-08-21-journal-day-bucketing.md)
+journal-backfill FROM="2026-07-04" BATCH="50" MAX="12":
+    scripts/journal-backfill.sh {{FROM}} {{BATCH}} {{MAX}}
+
 # Run the journal distiller's tests (offline; no hub, no LLM)
 distill-test:
     uv run --with pytest --with requests pytest scripts/test_cchv_distill.py -q

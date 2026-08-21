@@ -157,6 +157,34 @@ addresses a role.**
    unseen) only for work safe to run with nobody present; `interactive` when the
    answer must come back to a person.
 
+## Repo rules (learned 2026-08-21 — evidence in `docs/2026-08-21-journal-day-bucketing.md`)
+
+Only the things that bind from now on. The story, the measurements and the other seven
+lessons are in the doc.
+
+- **A row in `messages` is not a conversation turn.** 91.1 % of `claude`-provider rows
+  have `content IS NULL` — they are sidecar state records (`permission-mode`,
+  `agent-color`, `worktree-state`, …). Never size, quote or reason from a raw row count
+  without saying which you mean; a session that is "67,889 messages" is 5,997
+  conversation items. It is also why roughly half of any journal backfill legitimately
+  posts `skip`. Tracked as #41.
+- **An installed script is a COPY — a green `main` says nothing about what is running.**
+  `~/.local/bin/cchv-distill` is installed, not symlinked, and announces no version, so a
+  fix can sit undeployed while every checkbox says otherwise. Verify the *installed* file
+  (`cmp` against `git cat-file -p HEAD:<path>`) before believing any claim about distiller
+  behaviour. The rule is about the **install boundary**: when one task turns out
+  undeployed, re-check every task on the far side of it, not just that one. Tracked as #40.
+- **When a change alters the granularity of a key, sweep every predicate that tests that
+  key.** The journal's day fold moved session → day and left three predicates behind — the
+  transcript window, the arrival timestamp and the dirty check — two of which reached
+  production. Grep for the old key and re-derive each hit before shipping, rather than
+  fixing them as they surface.
+- **The release ceremony's own guards are in § Release Process and they are load-bearing**
+  — `gh run list --commit <tag-sha>` across all workflows (not just `server-release.yml`),
+  and a publication proof that reads `rc` by `case` because `--is-ancestor` exits 1 for
+  "no" and 128 for "that object does not exist". Both were added after each was wrong
+  twice in one day.
+
 ## Project Overview
 
 Claude Code History Viewer is a Tauri-based desktop application that allows users to browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
