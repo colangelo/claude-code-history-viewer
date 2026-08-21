@@ -152,6 +152,16 @@ distiller used `date.today()`, the machine's **local calendar** date, so its "to
       behaviour). Until it lands, the nightly 00:00–04:00Z window keeps producing the
       same false stale. The 6 groups dated 2026-08-13 have almost certainly aged out of
       both windows by now and need the §10.2 backfill, not a tick.
+
+      **Still owed, re-verified 2026-08-21 rather than assumed** — by infra on the hub
+      machine at 06:04Z and independently here: `~/.local/bin/cchv-distill` line 588 is
+      still `(date.today() - timedelta(days=args.horizon_days)).isoformat()`, and
+      neither `journal_today` nor `DAY_START_HOUR` appears anywhere in the installed
+      file (the repo has them at lines 100 / 468 / 720). Infra has their tracking issue
+      blocked on this reinstall, and will take it in the same pass as the
+      `distiller-tick-observability` hub swap. The stale copy is dated Jul 24 — an
+      installed script is a *copy*, so nothing about a green `main` says anything about
+      what is running.
 - [ ] 11.6 No Gatus change is owed. `within_days=7` was never the wrong parameter — a
       config-side fix (`within_days=6`) would have been correct for four hours a day and
       wrong for the other twenty.

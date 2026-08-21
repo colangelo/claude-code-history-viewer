@@ -2197,6 +2197,14 @@ equivalently.
      `ticks_last_24h` well under 24 is the normal, expected shape on a host that
      sleeps — it is the drain rate actually on offer.
 
+     **It is not the wake count, and reading it as one is wrong in both
+     directions.** Measured by infra on the hub machine over 13 days
+     (2026-08-21): 194 ticks / 318.4 h = **14.62 ticks/day**, per-UTC-day range
+     **10–18** — against the 40–106 sleep cycles that host turns over daily.
+     Most of those are DarkWakes, and a DarkWake does not run a `StartInterval`
+     agent. So 10–18 is the honest expectation band here; anything downstream
+     that expects `ticks_last_24h` ≈ wakes will be wrong.
+
   Alerting on tick age is **opt-in**: `max_tick_age_secs` is absent by default
   and then never contributes to the verdict (the `max_lag_rows` rule from
   `/v1/healthz/stats`). Any default would be an assumption about ac's wake
@@ -2205,6 +2213,39 @@ equivalently.
   and outranks `"stale"`. Whether the `cchv-journal` check sets it, and to what,
   is infra's call; on this host the honest value is generous, because it is a
   "the job is gone" detector rather than a latency SLO.
+
+  **The value infra chose, and the replay behind it** (2026-08-21, relay thread
+  `15ec026f`; their `hosts/m4m.md` at `f4f39c5` carries the working). Candidate
+  thresholds replayed against 193 gaps between 194 tick starts spanning
+  2026-08-07 23:36Z → 2026-08-21 06:00Z — median gap **68 m**, p90 **3 h 07 m**,
+  max **7 h 56 m**:
+
+  | threshold | firings / 13 days | red time |
+  |---|---|---|
+  | 3 h 30 m | 17 | 36.1 h |
+  | 4 h | 15 | 28.1 h |
+  | 6 h | 5 | 7.2 h |
+  | 8 h · 12 h · 24 h | 0 | — |
+
+  They chose **`43200` (12 h)**: zero firings across the period, 1.51× the
+  observed max, and still catches a dead job within half a day. 8 h is the
+  tightest zero-flap value and has **no headroom** — the observed max is 7 h
+  56 m, so one longer lie-in fires it. The ~3 h 30 m we had proposed sits at 17
+  firings, which is the nightly flap predicted when the param was made opt-in.
+  Caveat infra flagged themselves: `/tmp/cchv-distiller.err` is reboot-volatile,
+  so 13 days is what survived, the window contains **no reboot**, and the real
+  tail may be longer — to be re-derived from `ticks_last_24h` once this endpoint
+  supplies its own evidence. Tracked as `ac/infra#117`; it is a query param on
+  their side and needs nothing from us, and it goes on the Gatus URL **only
+  after both halves are live and verified**.
+
+  That replay also retires a reading of our own. The 4 h 15 m standstill of
+  2026-08-21 — the one that refuted three separate all-clears — is **not in the
+  top five gaps of the 13-day record** (7h56m, 7h46m, 7h41m, 7h23m and 6h22m all
+  beat it). The alarm was not wrong because the gap was unusual; it was wrong
+  because a wall-clock deadline was laid over a distribution whose ordinary tail
+  is ~8 h. That is the case for `ticks_last_24h` being the instrument, stated
+  more strongly than we managed at the time.
 
 ## 3d. Project identity (cchv-v0.10.0): rollout order
 
