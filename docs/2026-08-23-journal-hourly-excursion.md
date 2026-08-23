@@ -3,8 +3,14 @@
 Infra flagged a recurring latency excursion on the endpoint Gatus pages on, and handed
 the cause to this side of the line (thread `88e1fea6`, after the `cchv-v0.21.1` swap).
 This note records **what has been ruled out and how**, so the next reader starts from
-the surviving candidates rather than re-walking the whole surface. It does not identify
-the cause.
+the surviving candidates rather than re-walking the whole surface.
+
+**The mechanism is now named** — an hourly WAL-checkpoint storm on pg1 that flushes up to
+47 % of the instance-wide buffer cache in ~84 s, measured by infra from a week of
+`log_checkpoints` output (*The cause*, below). The **attribution** — which client's write
+burst triggers it — is still a lead, not a diagnosis. Everything above that section is the
+elimination work that got there, and it is kept because the eliminations are what make the
+answer trustworthy, not because the question is still open.
 
 ## The reading — infra's, taken on the instrument that pages
 
@@ -174,9 +180,123 @@ pg1.
 
 - An hourly job on pg1 firing around `:03`–`:05` (backup, snapshot, dump, ANALYZE, a
   container- or host-level timer). *Falsifier:* no timer in that phase means this is wrong.
+  **Answered — it holds, and it is not a timer. See *The cause* below.**
 - If the mechanism is eviction: `pg_stat_database` `blks_hit`/`blks_read` for the archive
   DB, sampled at `:04` and `:20`, should show the hit ratio dip at `:05` and recover. Flat
   means eviction is wrong and the VM-decay story (rule 3) is the next one to test.
+  **Still open, and now a prediction with a named cause rather than a guess.**
 
 Direct confirmation from this side would need pg1 credentials: `kv/infra/cchv/pg1` is 403
-for ac's OIDC token, and broadening it is not this session's call.
+for ac's OIDC token, and broadening it is not this session's call. It was not needed:
+infra took the readings on their own side of the fence, which is where they belong.
+
+## The cause — an hourly WAL-checkpoint storm on pg1 (infra, thread `745a573f`)
+
+Infra answered falsifier 1 from a week of `log_checkpoints` output already on disk in
+`/var/log/postgresql` — no new instrumentation. **Relayed, not taken here**, per the same
+rule that labels the Gatus numbers above; infra's write-up is
+`docs/2026-08-23-pg1-hourly-wal-checkpoint-storm.md` (infra `0670ced`).
+
+Every hour, three to four **WAL-triggered** checkpoints (`checkpoint starting: wal` — the
+`max_wal_size` threshold, not `checkpoint_timeout`) fire in a five-minute window. First one
+of the hour, 22 consecutive hours, lands at `:04:33`–`:04:48`. A minute-of-hour histogram
+over a full day is `:04`=16 `:05`=11 `:06`=6 `:07`=14 `:08`=14 `:09`=3 `:10`=1 `:12`=1,
+and **zero outside `:04`–`:12`**.
+
+`shared_buffers` on pg1 is 196608 × 8 kB = **1.5 GB**. In the 17:00Z hour one checkpoint
+wrote **92,825 buffers = 47.2 % of the entire instance buffer cache in 84 s**. pg1 turns
+over 7–9 GB of WAL per hour — ~180 GB/day — inside that five-minute window, ~150× the
+baseline rate; the timed checkpoints between bursts cover 10–47 MB.
+
+So the eviction candidate has a named, measured cause. The architectural fact underneath it
+is the one to carry forward: **the archive DB does not have a buffer cache of its own.**
+`shared_buffers` is instance-wide, cchv shares that 1.5 GB with every other database on
+pg1, and the fold's working set is large enough to be the thing that notices when half of
+it is flushed.
+
+### The same-hour interlock — two instruments, neither aware of the other
+
+Infra's checkpoint log and this session's probe both cover **17:00Z on 2026-08-23**. Lining
+them up was retrospective, but the two datasets were collected independently and for
+different reasons, so the alignment is evidence rather than fitting:
+
+| time | pg1 checkpoint log (infra) | `/v1/healthz/journal` (here) |
+|---|---|---|
+| 17:02:07Z | — | 2.350 s |
+| **17:04:43Z** | **start: wal** | |
+| 17:05:11Z | *(writing)* | **4.148 s** |
+| 17:06:22Z | complete — 53,135 buf, 27.0 % | |
+| 17:06:36Z | start: wal | |
+| 17:08:00Z | complete — 92,825 buf, **47.2 %** | |
+| 17:08:10Z | start: wal | |
+| 17:08:17Z | *(writing)* | 3.479 s |
+| **17:09:47Z** | **complete — 32,047 buf, 16.3 % → burst ends** | |
+| 17:11:23Z | — | 2.567 s |
+| 17:14:27Z | — | 2.579 s |
+| 17:23:10Z | start: **time** — 600 buf, 0.3 % | |
+
+Every fold sample taken **inside** the burst window (17:04:43–17:09:47) is elevated; every
+sample outside it is baseline. No exceptions in either direction. That also sharpens
+*Result* point 2 above: the decay's end is not a free-running re-warm curve that happens to
+flatten around `:11` — it is pinned to the moment the last burst checkpoint completes.
+
+**What this interlock is worth, stated honestly: one hour, two elevated samples and three
+baseline ones, aligned after the fact.** It is why run 2 of the probe was launched *before*
+the 18:04Z burst as a prospective test — see below.
+
+### Prospective test — the 18:00Z hour
+
+Predicted from the mechanism, before the burst: a peak inside 18:04:3x–18:0x, relaxing as
+the last burst checkpoint completes, control flat throughout. A flat hour, or a peak outside
+the burst, falsifies the coupling. Script `/tmp/cchv-journal-phase-probe2.sh`.
+
+<!-- RESULT-18Z -->
+
+### The trap infra hit on our behalf, and it is worth knowing
+
+`/etc/cron.d/sysstat` on pg1 carries `5-55/10 * * * * root … debian-sa1` — a job at exactly
+the phase we were hunting. **pg1 has no cron daemon at all**: `systemctl is-enabled cron` →
+`not-found`, no `/usr/sbin/cron`, no process. An enumeration that reads `/etc/cron.d` and
+stops there finds a perfect suspect that has never run, and would have closed this thread
+on a false cause. Same shape as this repo's rule *"name the reading that would make it
+FAIL"* — "there is a crontab entry in the right phase" has no failing reading attached to
+it; "the daemon that would run it is installed and running" does.
+
+Everything genuinely scheduled was enumerated and is in the wrong phase or the wrong period
+(`pg-backup.timer` 02:30 daily, `pg-gin-clean` every 10 min, `checkpoint_timeout` 900 s and
+logging `time` not `wal`, vzdump 02:30–03:10, one k8s CronJob daily at 04:00). **So the
+producer is a database *client* writing, not a scheduler firing on pg1.**
+
+### Attribution: infra's lead, and it is explicitly not a diagnosis
+
+The burst phase is a fingerprint — stable to ±10 s while the producer runs, jumping when it
+restarts. It moved twice on 2026-08-22 (`:51:4x` → `:58:2x` → `:04:3x`), and both moves
+bracket a `direction-*` pod restart; `direction` is the second-largest DB on pg1 and
+`direction-api` carries an in-process scheduler. Infra is capturing per-database
+`pg_stat_database` deltas, `pg_stat_activity` and `pg_waldump` across a live burst to name
+the relation directly. **Two coincident events is a place to look, not a diagnosis** —
+recorded here so the next reader does not promote it to a cause in transit.
+
+That phase history also confirms this repo's class-wide argument from the other side: the
+burst kept its `:04` phase straight through our 15:2xZ binary swap, because the producer is
+not on m4m at all.
+
+## What cchv should and should not do about it
+
+- **Not our bug, and not our fix.** The fold is the victim; the producer is another
+  database's client on a shared instance. Nothing in this repo can move the phase, the
+  volume, or the eviction.
+- **The 15 s Gatus timeout stays load-bearing.** The `work_mem` fix (#36, `cchv-v0.21.1`)
+  bought headroom against a driver we do not control — pre-swap the excursion reached
+  9.97 s, 0.03 s under the old 10 s default. Do not retune that timeout down on the strength
+  of the post-swap numbers.
+- **Open question, not a decision to take unattended:** whether cchv should insulate the
+  fold from a cold cache at all (the index declined in #36, a materialised day fold, or a
+  smaller working set), versus whether the answer is on pg1 (a larger `shared_buffers`, a
+  larger `max_wal_size` to spread the flush). The second is infra's call and needs pg1's RAM
+  figure, which nobody here has read — so it is a question to hand over, not a
+  recommendation to make.
+- **Falsifier 2 is unchanged and still worth taking**, now as a prediction with a cause: the
+  `blks_hit` dip should be *findable* at `:05`. The VM-decay story (rule 3) is not excluded
+  by any of this — a checkpoint storm and an insert-triggered VACUUM on `messages` can both
+  be downstream of one write burst.
