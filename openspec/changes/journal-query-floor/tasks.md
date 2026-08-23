@@ -163,6 +163,13 @@
 
 ## 5. Close out
 
+> **RELEASE CUT 2026-08-23 — `cchv-v0.21.1` = `b911e088`, all six workflows green on the
+> tag sha, three assets verified, deploy relayed to infra as `a04d98a6` (auto, host-pinned
+> m4m). 5.1 and 5.3 stay open until the swap is VERIFIED live, not until it is relayed.**
+> The verification that settles it is not the latency — it is `temp_files`/`temp_bytes`
+> per `/v1/healthz/journal` request going from **3 / 99.9 MiB** to **0 / ~0**, which cache
+> state cannot explain away. Pre-swap readings are in the relay and on #36.
+>
 > **BLOCKED ON DEPLOY, deliberately (2026-08-23).** The fix is written, tested and
 > pushed, but `work_mem` ships inside the hub binary — so until a release is cut and
 > infra swaps m4m, **production is still running the 4 MB spill**. 5.1 and 5.3 stay open
