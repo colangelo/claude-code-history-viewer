@@ -39,7 +39,7 @@
 
 ## 2. The index
 
-- [ ] 2.1 Add the index build to `docs/archive/deployment.md` §1 as an operator step —
+- [x] 2.1 Add the index build to `docs/archive/deployment.md` §1 as an operator step —
       **not** a `migrations/*.sql`, since `CREATE INDEX CONCURRENTLY` cannot run in a
       transaction and `sqlx` migrations do. Include the `DROP INDEX CONCURRENTLY` recovery
       for the INVALID-index failure mode, and the ~300 MB / 209 GB-free sizing. Verify:
@@ -132,13 +132,13 @@
 
 ## 4. The row-count caveat (the #41 half that is documentation)
 
-- [ ] 4.1 State in `docs/archive/deployment.md` and `AGENTS.md` (where the archive's size is
+- [x] 4.1 State in `docs/archive/deployment.md` and `AGENTS.md` (where the archive's size is
       quoted) that **a row in `messages` is not a conversation turn** — 91.1 % of
       `claude`-provider rows are sidecar state records with `content IS NULL`, so every raw
       count overstates conversation by ~11×, and it is why ~half of any backfill posts
       `skip`. Verify: `grep -n "conversation turn" AGENTS.md docs/archive/deployment.md`
       hits both; existing figures in those files that quote raw counts carry the caveat.
-- [ ] 4.2 Leave the analytics-side conversation-only count to **#41**, with a comment
+- [x] 4.2 Leave the analytics-side conversation-only count to **#41**, with a comment
       recording why it is not here: it is an API change with its own surface and its own
       decision about what a "message" means to a reader. Verify: comment on #41.
 

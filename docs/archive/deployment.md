@@ -54,6 +54,28 @@ psql -d cchv_archive -c "GRANT ALL ON DATABASE cchv_archive TO cchv;"
 The hub applies the migrations in `migrations/` automatically on startup, so no
 manual migration step is required.
 
+### A row in `messages` is not a conversation turn (#41)
+
+Any figure quoted from this database has to say which unit it means. **91.1 % of
+`claude`-provider rows have `content IS NULL`** — they are sidecar state records
+(`permission-mode`, `agent-color`, `worktree-state`, …), not messages anybody wrote
+or read. A session reported as "67,889 messages" is **5,997 conversation items**, so
+a raw count overstates conversation by roughly **11x**. It is also why about half of
+any journal backfill legitimately posts `skip`: a day made only of state records has
+nothing to distil.
+
+**This does not retroactively invalidate the row counts already in this file, and
+that distinction is the point.** Sizing an index, timing a migration, or reading a
+query plan are all *per-row* operations — `7.22 M rows` for the `0006` build and
+`8,138,011 live rows` for the index sizing above are the correct unit for what they
+measure. The caveat binds when a count is offered as a measure of **how much
+conversation the archive holds**, which is the reading a number like "8.1 M messages"
+invites. Say "rows" when you mean rows.
+
+The analytics-side conversation-only count is deliberately **not** solved here: it is
+an API change with its own surface and its own decision about what "a message" means
+to a reader. Tracked on #41.
+
 ### pg1 analytics schema (`0005`) — applied 2026-07-25, infra-verified
 
 The analytics migration (`message_id` column on `messages`, plus
@@ -133,6 +155,78 @@ the index.
 **The file is frozen now.** sqlx records a checksum per applied migration and
 refuses to start when one changes, so `0006` must not be edited — not even its
 comments — now that it has been applied anywhere. Corrections go in a `0007`.
+
+### pg1 journal-fold covering index — OPERATOR STEP, not a migration (#36, `journal-query-floor`)
+
+**Not built yet.** Nothing in the codebase references it, so a database without it
+is simply the status quo — this section is safe to leave unexecuted indefinitely,
+and that is deliberate.
+
+```sql
+CREATE INDEX CONCURRENTLY messages_journal_fold_idx
+    ON messages ("timestamp", session_id) INCLUDE (created_at);
+```
+
+**Why it is not a `migrations/*.sql`.** `CREATE INDEX CONCURRENTLY` cannot run
+inside a transaction block, and sqlx runs every migration in one. The
+non-concurrent form is not an option either: unlike `0006` above — which is safe
+precisely *because* a §2b swap stops the only writer — this index is worth
+building **without** a swap window, against live ingest.
+
+**Recovery, and the reason it needs stating.** A failed concurrent build leaves an
+`INVALID` index behind. It consumes space, it is maintained on every write, and no
+query can use it — so the failure is silent and looks like "the index did nothing".
+
+```sql
+-- always check first; do not infer validity from the build appearing to finish
+SELECT indisvalid FROM pg_index WHERE indexrelid = 'messages_journal_fold_idx'::regclass;
+-- if false:
+DROP INDEX CONCURRENTLY messages_journal_fold_idx;   -- then retry
+```
+
+**Size: expect ~400 MB, possibly ~575 MB — not the ~300 MB the change's design
+first estimated.** Derived 2026-08-23 from the real indexes on this table at
+8,138,011 live rows rather than from first principles:
+
+| index | key | measured |
+|---|---|---|
+| `messages_pkey` | `id` (uuid, 16 B) | 194 MB · 23.8 B/row |
+| `messages_timestamp_idx` | `"timestamp"` (8 B) | 249 MB · 30.6 B/row |
+| `messages_session_timestamp_idx` | `(session_id, "timestamp")` (24 B) | 249 MB · 30.6 B/row |
+
+The third row is the one that matters: a 24-byte key costs the same as an 8-byte
+one because btree **deduplication** collapses its repeated leading `session_id`
+values. The proposed index gets no such help — it leads on `"timestamp"`, which is
+near-unique, and **`INCLUDE` columns disable btree deduplication outright**. So it
+should be sized against the *undeduplicated* shape (8 B header + 32 B payload),
+giving ~400 MB, and up to ~575 MB if it bloats in the ratio `messages_timestamp_idx`
+already shows. Against 209 GB free and 2,335 MB of existing indexes on this table
+the difference does not change the decision — but the estimate should not be quietly
+low in the doc that an operator budgets from.
+
+**Expected win — state it as ~1.8-2x, and never as ~14x.** Measured baseline
+2026-08-23 (`openspec/changes/journal-query-floor/baseline.txt`, #36 comment 7505):
+
+- It changes **`healthz_journal` only**. Both shapes of `journal::pending` already
+  run an index-only scan on the *existing* `messages_session_timestamp_idx`, because
+  their `grp` never references `latest_arrival` and the planner elides
+  `max(created_at)` accordingly. `healthz_journal` does select it, which is exactly
+  why it seq-scans — and exactly what `INCLUDE (created_at)` fixes.
+- The archive contains its own control: the forward-shape `pending` fold does the
+  same work over the same window (2,482,615 rows, 100 groups) index-only in
+  **1,493 ms** against `healthz_journal`'s seq-scan fold at **3,158 ms** — **2.11x**,
+  with temp writes 172.4 MB -> 52.1 MB. Endpoint-level that is 3,818 ms -> ~2,150 ms,
+  and Amdahl caps it at 4.5x even with a free fold, since the per-group `EXISTS`
+  provenance check is the rest.
+- **Run it at a known vacuum-cycle position and record that position.** The
+  visibility map over the hot range decays between insert-triggered vacuums, so the
+  same index measures anywhere from excellent to mediocre depending on the hour
+  (0 % -> ~60 % of the window needing `Heap Fetches`). Capture `n_ins_since_vacuum`
+  and `relallvisible`/`relpages` before and after any timing, or the reading is not
+  interpretable.
+
+**When to run it:** off-peak, no swap window needed, and the hub keeps running
+throughout. It is infra's to execute — a production write on pg1.
 
 ### `backfill-analytics` and `mirror rebuild` travel together
 
