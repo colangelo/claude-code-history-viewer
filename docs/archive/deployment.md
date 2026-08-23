@@ -603,6 +603,8 @@ Working sequence (validated on m4m 2026-07-13, thread 7938448b):
 
 ```bash
 STAGED=~/.config/cchv/staging/cchv-hub-<sha>          # the new binary
+RELEASE_SHA256=<the digest the .sha256 sidecar, the GitHub API `digest` field and
+                the relay all agree on — step 4b compares against this>
 LIVE="$HOME/.local/bin/cchv-hub"                      # m4m's REAL target — see the note below
 STAMP=$(date +%Y%m%d-%H%M)
 
@@ -629,17 +631,29 @@ cp "$STAGED" "$LIVE"
 #    the live binary is not executable and bootstrap fails to exec it.
 chmod 755 "$LIVE"
 
+# 4b. Hash the LIVE file against the RELEASE DIGEST. This window — after the cp,
+#     BEFORE the re-sign — is the only one in which that comparison is exact, and
+#     it costs nothing: the installed bytes are still the published bytes.
+#     Strictly stronger than step 6b's `strings` marker and with none of the
+#     marker-SELECTION risk (nothing to measure both ways, nothing to choose).
+#     ORDER IS LOAD-BEARING: move this one line below step 5 and it inverts into
+#     the "never re-hash the installed file" trap — the ad-hoc re-sign guarantees
+#     a mismatch from then on. The two rules do not conflict; they govern
+#     different moments of the same file.
+#     (Infra, v0.21.1 swap 2026-08-23, thread a04d98a6 — used there and matched.)
+[ "$(shasum -a 256 "$LIVE" | awk '{print $1}')" = "$RELEASE_SHA256" ]
+
 # 5. Re-sign ad-hoc (the kernel rejects the cached signature otherwise).
 codesign --force --sign - "$LIVE"
 
 # 6. Eyeball the mode before restarting — must read -rwxr-xr-x.
 ls -l "$LIVE"
 
-# 6b. Probe the LIVE path by CONTENT, before restarting. This is what catches a
-#     swap that wrote to the wrong path (the $LIVE note below): a wrong-path swap
-#     passes steps 1-6 intact, because cp CREATES the file it was aimed at.
-#     By content, never by hash — step 5's ad-hoc re-sign guarantees the installed
-#     file cannot hash to the published asset.
+# 6b. FALLBACK ONLY, when the binary was built locally and there is no published
+#     digest for step 4b to compare against. Probe the LIVE path by CONTENT before
+#     restarting — a wrong-path swap passes steps 1-6 intact, because cp CREATES
+#     the file it was aimed at. By content, never by hash: step 5 has now run, so
+#     a hash here answers a different question (unlike at 4b, one step earlier).
 #     Pick the marker by MEASURING it against the outgoing binary first (see the
 #     version-string trap below): a marker is only a marker if it counts 0 there.
 strings -a "$LIVE" | grep -c '<the rev marker from the handoff>'   # expect 1, was 0
@@ -705,6 +719,39 @@ it. A relay handing off a rev marker should carry both counts, new **and** old.
 > **both ways** still does that job (they used `last_tick_distiller_version`: 2 in the
 > new asset, 0 in the outgoing one). So the two proofs cover **different moments** rather
 > than one replacing the other: marker before the restart, version field after it.
+>
+> **And the pre-restart moment has a better probe than a marker, sitting in a window the
+> recipe was walking straight past — new step 4b** (infra, v0.21.1 deploy 2026-08-23,
+> thread `a04d98a6`; used and matched there). Between step 4 (`chmod`) and step 5
+> (`codesign`) the installed file is *still byte-identical to the published asset*, so
+> `shasum -a 256 "$LIVE"` against the release digest is an **exact** check where a marker
+> is only a proxy — and it retires the marker-SELECTION problem entirely: nothing to
+> measure both ways, nothing to choose, nothing that can read as strict while answering
+> a different question. It is free in the literal sense; the bytes were already there and
+> nobody was looking at them.
+>
+> **This does not contradict "never re-hash the installed file", and the reason is worth
+> stating precisely, because the two rules are one step apart and look like each other.**
+> That rule governs the file's state **after** step 5's ad-hoc re-sign, where a mismatch
+> is guaranteed and therefore meaningless. Step 4b reads the **same path one step
+> earlier**, where a match is exact. A hash of `$LIVE` is a valid check or a worthless one
+> depending on which side of `codesign` it is taken — so the rule to carry is *"a file
+> hash answers a different question after the re-sign"*, not *"never hash `$LIVE`"*. The
+> shorter form was true of every window we had looked at, which is exactly how a rule
+> ends up wider than its evidence.
+>
+> **The blind spot 4b shares with 6b, and does not close:** both read `$LIVE`, so neither
+> can answer *"is `$LIVE` the path the plist actually execs"* — point them at the wrong
+> path and both go green on the file you just wrote there. That question is answered only
+> by resolving `$LIVE` **from the plist** (the correction below) and by the post-restart
+> `/v1/healthz` `.version` read. Three checks, three moments: 4b = the right bytes are at
+> this path, plist resolution = this path is the right path, healthz = the process is
+> running them.
+>
+> Applies to any swap installed from a release asset — that has been the default path
+> since `cchv-v0.12.0`, so in practice every swap from `cchv-v0.21.1` on. On the
+> local-build fallback there is no published digest and step 6b's marker remains the only
+> pre-restart probe.
 
 **2026-08-23, `cchv-v0.21.0` → `cchv-v0.21.1` (release `b911e088`) — all three steps
 landed in 76 seconds, and the release that decided NOT to build an index.** The journal
@@ -754,6 +801,36 @@ at the monitor's 300 s cadence, to answer a check returning zero pending groups 
 - `--host m4m` implies `--class auto` (`relay-send` rejects the combination otherwise),
   so this went to m4m's always-on supervisor and came back as three `CHECKPOINT` events —
   one per irreversible step — which is exactly what makes a killed handler recoverable.
+
+**Infra's return leg (`1ef75234`, 15:34Z) — confirmed from a second and third vantage,
+and here is who took which reading**, because this file's own rule is that a reading
+without an owner is inherited:
+
+- **Infra, m4m loopback, first-hand.** They reproduced our pre-swap figures *to the byte*
+  before touching anything (+3 files / +104,792,064 B), then measured **0 / 0 on three
+  consecutive post-swap runs** at 3.059 / 2.088 / 2.088 s. They also confirmed the six
+  green workflows against the tag's own sha themselves rather than taking it from our
+  relay, and agreed the asset digest **four** ways (our relay, the `.sha256` sidecar, the
+  API `digest` field, their own `shasum`).
+- **Gatus, from `mon` — a genuinely independent host.** `cchv-journal` now reads 2.32 s.
+- **This repo, from `ac-mbm5` over the tailnet, 15:37Z.** `/v1/healthz` `.version`
+  `0.21.1`; `/v1/healthz/journal` 200 in 2.68 s, `hub_version 0.21.1`, 0 groups pending.
+
+The **elapsed** figures differ by vantage (2.09 s loopback, 2.32 s from mon, 2.68 s from
+the other Mac) exactly as network distance predicts, which is the second reason the
+`temp_files`/`temp_bytes` delta was chosen as *the* verification: it is vantage-independent
+and cache-independent, so three observers can disagree about latency and still agree the
+spill is gone. Non-200 window on the restart: **2 s** (bootout → first 200), against the
+17 s upper bound the relay quoted.
+
+**The half that is not yet closed, with a clock on it rather than a "next tick".**
+`last_tick_distiller_version` still read `0.21.0` (blob `a44b4d32…`) as of 15:37Z, because
+the last tick fired 15:13:02Z and the reinstall landed ~15:31Z — expected, and exactly the
+skew §2b's "both halves, one read" block says nothing about. The interval re-arms at exit,
+so the identity triple should agree from ~16:15–16:30Z. **If it has not agreed by ~17:00Z
+that is a real finding, not a slow tick.** Naming the hour is the point: "verify on the
+next tick" is not a check anyone can fail, and this file has already banked the rule that
+a check nobody can fail is not a check.
 
 **2026-08-21, `cchv-v0.20.1` → `cchv-v0.21.0` (release `9b0633cb`) — all three
 steps landed and verified.** The release whose whole purpose was to make this
@@ -1315,6 +1392,32 @@ Post-swap verification (no restart involved, so all of it is client-visible):
   transcript as the chip. Another member of §2b's marker-trap family, and the
   anchor is on both chip sites in `ConnectGate.tsx`, so it holds whichever
   view is mounted.
+
+  **Two sharpenings from the v0.21.1 eyeball (infra, 2026-08-23, thread
+  `a04d98a6`), and the first one makes the loose grep fail in the *other*
+  direction too.** Their first pass grepped the rendered body for
+  `cchv-v\d+\.\d+\.\d+` and got **0 hits for `cchv-v0.21.1`, 2× `cchv-v0.21.0`
+  and 6× `cchv-v0.18.1`** — on a deploy that was entirely correct.
+
+  1. **The visible chip text does not contain `cchv-`.** `ConnectGate.tsx` renders
+     `(v{__APP_VERSION__})` as the element's text and puts `` `cchv-v${__APP_VERSION__}` ``
+     in the **`title` attribute only** (lines 129-135 and 181-187). So the literal the
+     bundle-side `--assert-count` counts is *not* the literal the rendered text carries:
+     a body-text grep for `cchv-v<new>` returns 0 on a healthy deploy. The loose grep is
+     therefore not merely noisy — it is a **false negative for the chip and a false
+     positive for everything else**, which is why it reads so convincingly. Anchor on
+     `data-testid="app-version"` (or the `header`) and read its `textContent` for
+     `(v<x.y.z>)`, or read `getAttribute("title")` for `cchv-v<x.y.z>` — one or the
+     other, deliberately, not a page-wide regex that lands on neither.
+  2. **The DOM haystack here is the product's own subject matter, and that is
+     structural rather than bad luck.** cchv's archive browser renders our past
+     sessions, and our past sessions are largely *these deploy write-ups* — documents
+     dense with `cchv-v*` tags by construction. So the count of decoys grows with every
+     release and will never shrink. The general advice this file gives elsewhere ("a
+     rendered string is a DOM question — drive the page, not the bundle") is **necessary
+     and not sufficient** for this product: driving the page swaps a bundle haystack for
+     a *larger* one. Whole-page grep is its own marker trap, and the anchor is the whole
+     of the fix.
 - a string unique to the new release is present (e.g. a new i18n key in
   `assets/i18n-en-<hash>.js`)
 - `/v1/healthz` 200, `/v1/healthz/ingest?exclude=ac-mbp` 200, and the HTTPS
