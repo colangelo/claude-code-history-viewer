@@ -56,7 +56,9 @@ excursion *precedes* the ~:13Z tick rather than coinciding with it.
 
 ## Surviving candidates, each with the reading that would kill it
 
-1. **m4m's sync-daemon hourly rescan.** Ours. Its phase is wherever m4m's daemon last
+1. **m4m's sync-daemon hourly rescan.** Ours. **Retired — see *What this closes on our
+   side* below; it was settled from the code without needing the ssh reading this
+   paragraph asks for.** Its phase is wherever m4m's daemon last
    started, which nobody here can see — peer-Mac ssh routes through the 1Password agent
    and prompts, so an unattended session cannot take this reading.
    *Falsifier:* `grep 'sync pass complete' /tmp/cchv-daemon.log` on m4m. If the passes are
@@ -105,6 +107,70 @@ reassurance, not proof.
 
 ### Result
 
-Probe window 16:22Z–17:22Z, script `/tmp/cchv-journal-phase-probe.sh`.
+Probe window 16:22Z–17:16Z, script `/tmp/cchv-journal-phase-probe.sh`.
 
-<!-- RESULT -->
+**The excursion reproduced from this second, independent vantage point, and the control
+did not move.** Taken from ac-mbm5 by this session, 2026-08-23:
+
+| sampled at | `/v1/healthz/journal` (fold) |
+|---|---|
+| 16:22:28Z | 2.406 s |
+| 16:25:32Z | 2.437 s |
+| 16:35:41Z | 2.509 s |
+| 16:45:50Z | 2.445 s |
+| 16:55:58Z | 2.404 s |
+| 16:59:03Z | 2.394 s |
+| 17:02:07Z | 2.350 s |
+| **17:05:11Z** | **4.148 s** |
+| 17:08:17Z | 3.479 s |
+| 17:11:23Z | 2.567 s |
+| 17:14:27Z | 2.579 s |
+
+Control `/v1/healthz` across the same hour: **n=53, min 0.302 s, max 0.557 s, mean
+0.389 s.** The control sample taken in the *same second* as the 4.148 s peak was
+**0.302 s — the minimum of all 53**.
+
+Three things follow.
+
+1. **It is pg1-side work on the fold.** The control shares the network path, the TLS
+   termination, the m4m process and the connection pool, and differs only in doing
+   `SELECT 1` instead of the fold. It is flat through the excursion. m4m CPU, the tailnet
+   and pool acquisition are all excluded.
+
+2. **It is one event that decays, not a pair.** 4.148 → 3.479 → 2.567 → 2.579 across
+   `:05`→`:14`. Infra's "recurring pair at `:05` and `:10`" is a single perturbation
+   peaking around `:05` and relaxing to baseline over ~6 minutes; their `:10` poll catches
+   the tail rather than a second event. Peak-then-decay is the signature of a cache working
+   set being evicted and progressively re-warmed, not of a job running concurrently for ten
+   minutes.
+
+3. **This number is a floor, not a match.** Sampling the fold every 150 s keeps pg1's
+   buffers warmer than Gatus's 300 s does, which shrinks the excursion. 4.15 s here against
+   infra's 5.36 s at the same phase is consistent with that and is not a discrepancy to
+   chase.
+
+## What this closes on our side
+
+- **The sync-daemon rescan is not it — on code, not on timing.** Both arms of the loop in
+  `sync-daemon/src/lib.rs` break to the *same* `sync::run_once` call with the same
+  arguments: a safety-net rescan does identical work to a watcher-triggered pass, and
+  ac-mbm5 runs ~70 of those an hour (4,587 passes in 2.6 days). There is no "hourly burst"
+  for the rescan to be. This retires candidate 1 above, which the ssh block had left open.
+- **m4m ingests continuously right through the window.** `/v1/healthz/ingest` sampled every
+  300 s for an hour (n=10) puts m4m's arrival lag at 0–66 s, including 10 s at 17:02Z and
+  47 s at 17:07Z. No hourly gap, no hourly burst.
+
+So cchv owns no hourly cycle that can produce this. The fold is the **victim** — the one
+query expensive enough to be sensitive to the perturbation — and the perturbation is on
+pg1.
+
+## Handed back, with falsifiers
+
+- An hourly job on pg1 firing around `:03`–`:05` (backup, snapshot, dump, ANALYZE, a
+  container- or host-level timer). *Falsifier:* no timer in that phase means this is wrong.
+- If the mechanism is eviction: `pg_stat_database` `blks_hit`/`blks_read` for the archive
+  DB, sampled at `:04` and `:20`, should show the hit ratio dip at `:05` and recover. Flat
+  means eviction is wrong and the VM-decay story (rule 3) is the next one to test.
+
+Direct confirmation from this side would need pg1 credentials: `kv/infra/cchv/pg1` is 403
+for ac's OIDC token, and broadening it is not this session's call.
