@@ -163,9 +163,22 @@
 
 ## 5. Close out
 
+> **BLOCKED ON DEPLOY, deliberately (2026-08-23).** The fix is written, tested and
+> pushed, but `work_mem` ships inside the hub binary — so until a release is cut and
+> infra swaps m4m, **production is still running the 4 MB spill**. 5.1 and 5.3 stay open
+> on exactly that: closing #36 or archiving this change now would assert a fix that is
+> not running, which is the repo's own *"an installed script is a COPY — a green `main`
+> says nothing about what is running"* rule (#40) in its other form.
+>
+> It also needs ac's go-ahead rather than mine, because the plan's shape changed: the
+> change was specced to deliver a **pg1 DDL run by infra**, and it is delivering a **hub
+> code change released by us**. There is no release task in this list because none was
+> ever needed. See the closing report.
+
+
 - [ ] 5.1 Close #36 with the before/after plans and buffer counts (not "fixed in vX.Y.Z").
       Verify: the issue carries both `EXPLAIN` extracts.
-- [ ] 5.2 Record the outcome in `docs/archive/deployment.md` — including, if it happened,
+- [x] 5.2 Record the outcome in `docs/archive/deployment.md` — including, if it happened,
       the planner declining the index, which is the more useful record of the two.
 - [ ] 5.3 Archive this change (`openspec archive`), syncing both deltas into the main specs.
       Verify: `openspec validate --specs` passes and `journal-health` carries the

@@ -158,9 +158,39 @@ comments — now that it has been applied anywhere. Corrections go in a `0007`.
 
 ### pg1 journal-fold covering index — OPERATOR STEP, not a migration (#36, `journal-query-floor`)
 
-**Not built yet.** Nothing in the codebase references it, so a database without it
-is simply the status quo — this section is safe to leave unexecuted indefinitely,
-and that is deliberate.
+**Not built, and deliberately not asked for — this is a recorded decision, not a
+pending step.** Nothing in the codebase references it, so a database without it is
+simply the status quo. The statement is kept here because the analysis is worth
+having if the table's shape changes; it is not a queued task, and nobody should
+run it without re-measuring first.
+
+**Why it was declined (measured on pg1 2026-08-23, #36 comments 7505/7511).** The
+real fix for #36 turned out to be `work_mem`, which is free, ours alone to ship, and
+was measured *before* asking infra for a production window — that ordering is the
+whole reason the index was not built. The journal fold spilled to disk on every call
+at the 4 MB default; `SET LOCAL work_mem = '64MB'` (shipped in the hub, see
+`journal::JOURNAL_FOLD_WORK_MEM`) takes `healthz_journal` from **3,545 ms to
+2,252 ms** and its temp writes from **17,163 blocks to zero**.
+
+Against *that* baseline the covering index is worth about **124 ms — 5 % of the
+endpoint**. The archive supplies its own control for the figure: forward-shape
+`journal::pending` already folds the same window index-only in **1,493 ms**, against
+the 64 MB fold's **1,617 ms**. Five per cent does not buy ~400 MB, a production DDL
+on 8.1 M rows, and permanent write amplification on the hottest table in the archive.
+
+**And the 5 % is generous to the index in three independent ways**, all pointing the
+same direction: the control elides `max(created_at)`, which the real index must carry
+in `INCLUDE`; every reading was taken at the *optimistic* end of the vacuum cycle
+(16 %, 10.6 % of the window needing `Heap Fetches`); and at the pessimistic end
+(~46 %+) an index-only scan pays heap fetches on half the window and could be
+**slower** than the sequential scan `work_mem` has already made cheap.
+
+**The planner was never given the chance to decline it** — worth stating plainly,
+since that is the other outcome this section was written to record. No index was
+built, so no plan chose or rejected one. Anyone reviving this should build it
+`CONCURRENTLY`, measure at *both* ends of the vacuum cycle, and compare against the
+64 MB `work_mem` baseline rather than against the original 4 MB one, or the win will
+be double-counted with a fix that has already shipped.
 
 ```sql
 CREATE INDEX CONCURRENTLY messages_journal_fold_idx
@@ -204,26 +234,30 @@ already shows. Against 209 GB free and 2,335 MB of existing indexes on this tabl
 the difference does not change the decision — but the estimate should not be quietly
 low in the doc that an operator budgets from.
 
-**Expected win — state it as ~1.8-2x, and never as ~14x.** Measured baseline
-2026-08-23 (`openspec/changes/journal-query-floor/baseline.txt`, #36 comment 7505):
+**If it is ever revived, the expected win is ~5 %, not ~14x and not ~1.8x — and
+which baseline you measure against is the whole question.** The change's design
+projected ~14x from byte counts. Against the *original* 4 MB `work_mem` baseline the
+measured proxy said ~1.8x. Against the 64 MB baseline that actually shipped it is
+~5 %, because `work_mem` had already collected almost all of the same win — the two
+levers were never the clean split the design assumed (*"the index removes bytes read,
+`work_mem` removes bytes written"*). They overlap heavily: the index's benefit comes
+substantially from replacing an `external merge` sort with an ordered scan, which is
+the same spill `work_mem` removes outright. Adding the two separately measured wins
+would double-count.
 
-- It changes **`healthz_journal` only**. Both shapes of `journal::pending` already
+Two further constraints on any revival:
+
+- **It would change `healthz_journal` only.** Both shapes of `journal::pending` already
   run an index-only scan on the *existing* `messages_session_timestamp_idx`, because
-  their `grp` never references `latest_arrival` and the planner elides
-  `max(created_at)` accordingly. `healthz_journal` does select it, which is exactly
-  why it seq-scans — and exactly what `INCLUDE (created_at)` fixes.
-- The archive contains its own control: the forward-shape `pending` fold does the
-  same work over the same window (2,482,615 rows, 100 groups) index-only in
-  **1,493 ms** against `healthz_journal`'s seq-scan fold at **3,158 ms** — **2.11x**,
-  with temp writes 172.4 MB -> 52.1 MB. Endpoint-level that is 3,818 ms -> ~2,150 ms,
-  and Amdahl caps it at 4.5x even with a free fold, since the per-group `EXISTS`
-  provenance check is the rest.
-- **Run it at a known vacuum-cycle position and record that position.** The
-  visibility map over the hot range decays between insert-triggered vacuums, so the
-  same index measures anywhere from excellent to mediocre depending on the hour
-  (0 % -> ~60 % of the window needing `Heap Fetches`). Capture `n_ins_since_vacuum`
-  and `relallvisible`/`relpages` before and after any timing, or the reading is not
-  interpretable.
+  their `grp` never references `latest_arrival` and the planner elides `max(created_at)`
+  accordingly. `healthz_journal` does select it, which is exactly why it seq-scans — and
+  exactly what `INCLUDE (created_at)` would fix.
+- **Measure at a known vacuum-cycle position, at both ends.** The visibility map over the
+  hot range decays between insert-triggered vacuums, so the same index measures anywhere
+  from excellent to mediocre depending on the hour (0 % -> ~60 % of the window needing
+  `Heap Fetches`). Capture `n_ins_since_vacuum` and `relallvisible`/`relpages` before and
+  after every timing, or the reading is not interpretable. All the figures above are from
+  the optimistic end.
 
 **When to run it:** off-peak, no swap window needed, and the hub keeps running
 throughout. It is infra's to execute — a production write on pg1.
