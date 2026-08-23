@@ -181,6 +181,18 @@
 > change was specced to deliver a **pg1 DDL run by infra**, and it is delivering a **hub
 > code change released by us**. There is no release task in this list because none was
 > ever needed. See the closing report.
+>
+> **↑ Everything above this line is the PRE-DEPLOY state, kept for the record. The block
+> resolved at 15:31Z the same day** — infra swapped m4m (relay `1ef75234`, thread
+> `a04d98a6`) and measured the delta this section named, around one
+> `GET /v1/healthz/journal`: **+3 files / +104,792,064 B → 0 / 0**, three consecutive
+> post-swap runs, having first reproduced our pre-swap figures to the byte on their own
+> reading. `/v1/healthz` `.version` = `0.21.1` from three vantages (m4m loopback, Gatus on
+> `mon`, this repo from ac-mbm5). That is what makes the three `[x]` below true; read as
+> a pair, the stale "stay open" wording above and those checkmarks otherwise contradict
+> each other. Deploy record: `docs/archive/deployment.md` §2b, the
+> `cchv-v0.21.0 → cchv-v0.21.1` entry, which also carries the two probe improvements
+> infra sent back on the return leg.
 
 
 - [x] 5.1 Close #36 with the before/after plans and buffer counts (not "fixed in vX.Y.Z").
