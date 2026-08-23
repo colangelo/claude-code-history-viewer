@@ -12,6 +12,11 @@ burst triggers it — is still a lead, not a diagnosis. Everything above that se
 elimination work that got there, and it is kept because the eliminations are what make the
 answer trustworthy, not because the question is still open.
 
+**Read the title as historical.** `:05`/`:10` is where *Gatus's poll phase* happened to
+catch it. The event is a **`:04`–`:12` window** whose internal peak moves hour to hour;
+two hours measured here peaked at `:05` and at `:09`. Anything keyed to `:05`
+specifically will read as intermittent — see *Prospective test*.
+
 ## The reading — infra's, taken on the instrument that pages
 
 Gatus, `mon` → m4m, 300 s cadence. **Nobody on this side reproduced these numbers**;
@@ -244,13 +249,50 @@ flatten around `:11` — it is pinned to the moment the last burst checkpoint co
 baseline ones, aligned after the fact.** It is why run 2 of the probe was launched *before*
 the 18:04Z burst as a prospective test — see below.
 
-### Prospective test — the 18:00Z hour
+### Prospective test — the 18:00Z hour. **The prediction held.**
 
-Predicted from the mechanism, before the burst: a peak inside 18:04:3x–18:0x, relaxing as
-the last burst checkpoint completes, control flat throughout. A flat hour, or a peak outside
-the burst, falsifies the coupling. Script `/tmp/cchv-journal-phase-probe2.sh`.
+Stated *before* the burst, at 17:40Z: an elevated fold inside the `:04`–`:12` window,
+relaxing after it, control flat throughout. A flat hour, or a peak outside the window,
+falsifies the coupling. Script now landed as `scripts/journal-phase-probe.sh`.
 
-<!-- RESULT-18Z -->
+| sampled at | `/v1/healthz/journal` | | |
+|---|---|---|---|
+| 17:50:27Z | 2.585 s | | |
+| 17:53:31Z | 2.443 s | | baseline, five consecutive samples |
+| 17:56:36Z | 2.606 s | | |
+| 17:59:40Z | 2.599 s | | |
+| 18:02:45Z | 2.675 s | | |
+| **18:05:49Z** | **3.416 s** | ← | inside the burst window |
+| **18:08:54Z** | **3.731 s** | ← | inside the burst window |
+| 18:12:00Z | 2.818 s | | relaxing |
+| 18:15:05Z | 2.581 s | | baseline |
+
+Control `/v1/healthz` over the same span: **n=31, min 0.304 s, max 0.597 s, mean 0.376 s**,
+flat through both elevated samples. So the second hour reproduces the first: elevation
+confined to the burst window, control unmoved. This is no longer a retrospective alignment
+— the window was named first and the readings landed in it.
+
+Two things this hour adds that the 17:00Z one could not:
+
+- **The within-burst shape varies; the window does not.** 17:00Z peaked at `:05` and 18:00Z
+  at `:09`. That is expected — infra's histogram has three to four checkpoints spread over
+  `:04`–`:12` and the largest flush is not always the first — but it means *"the excursion
+  is at `:05`"* was always an artifact of Gatus's poll phase. **The claim to carry is
+  `:04`–`:12`, not `:05`/`:10`.** Anything that keys on `:05` specifically will read as
+  intermittent.
+- **Peak magnitude varies hour to hour** (4.15 s, then 3.73 s) with the size of that hour's
+  flush. Both under infra's 5.36 s, consistent with the 150 s-vs-300 s cadence note.
+
+**One unexplained reading, recorded rather than smoothed away.** The first fold sample of
+run 2 — 17:40:16Z, off-phase, 24 minutes after run 1 last touched the fold — cost **5.05 s**,
+above both hours' in-burst peaks. About 0.7 s of that is fresh-process connection setup
+(the first control of the run read 1.11 s against a 0.30–0.60 s steady state), leaving
+~4.3 s unaccounted for. The obvious story — that magnitude tracks time-since-last-fold, so
+Gatus at 300 s always reads a colder cache than this probe at 150 s — is **weakened by this
+same run**: the 17:50Z sample, ten minutes after that one, was an ordinary 2.585 s. Infra's
+live capture (`pg_waldump` over the burst's WAL segments is a large sequential read on pg1)
+may have been running. It is one sample, it is not explained, and it is not evidence for
+anything yet.
 
 ### The trap infra hit on our behalf, and it is worth knowing
 
