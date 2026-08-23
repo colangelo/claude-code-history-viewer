@@ -1,15 +1,15 @@
 ## 1. Baseline, taken before anything changes
 
-- [ ] 1.0 Probe **without a client timeout** and check `pg_stat_activity` for orphaned
+- [x] 1.0 Probe **without a client timeout** and check `pg_stat_activity` for orphaned
       `msg_days` queries before any reading. An abandoned HTTP request leaves the query
       running server-side; six accumulated during this change's own measurement and
       starved each other. Verify: zero active `%msg_days%` queries before each timing run.
-- [ ] 1.1 Capture `EXPLAIN (ANALYZE, BUFFERS)` for the `healthz_journal` fold query and for
+- [x] 1.1 Capture `EXPLAIN (ANALYZE, BUFFERS)` for the `healthz_journal` fold query and for
       `journal::pending`, against pg1, in one session. Verify: both plans recorded with node
       type and `shared read`/`hit` block counts, saved into the change folder as
       `baseline.txt` so the "after" has something to be compared with. A timing without
       buffer counts does not count — cache state confounds it.
-- [ ] 1.2 Record `pg_stat_user_tables` for `messages`: `last_autovacuum`, `last_autoanalyze`,
+- [x] 1.2 Record `pg_stat_user_tables` for `messages`: `last_autovacuum`, `last_autoanalyze`,
       `n_dead_tup`, `n_live_tup`. Verify: values captured in the same file. This is the
       visibility-map baseline decision 5 depends on; an index-only scan degrades silently
       without it. **CORRECTED 2026-08-21 (the first version of this line was wrong).**
@@ -28,7 +28,7 @@
       index-only scan incurs `Heap Fetches` on ~46 % of what it touches **today**, and that
       fraction **oscillates with the vacuum cycle** — near 0 % just after a vacuum, ~60 %+
       just before the next fires.
-- [ ] 1.3 **Capture 1.2 BEFORE any `pg_stat_reset()`.** A clean per-day temp rate wants the
+- [x] 1.3 **Capture 1.2 BEFORE any `pg_stat_reset()`.** A clean per-day temp rate wants the
       counters reset (`stats_reset` on `cchv_archive` is NULL, so the 3,781 GB / 295,895
       temp files are lifetime totals and no rate can be derived from them — infra's point).
       But `pg_stat_reset()` is database-wide and clears `pg_stat_user_tables` too, which is
@@ -49,6 +49,17 @@
       ("timestamp", session_id) INCLUDE (created_at)`. Carry the expected duration, the
       storage delta, the recovery command, and the fact that **nothing breaks if it is not
       built** — no code references it. Verify: ack received; index reported `indisvalid`.
+
+      **AMENDED 2026-08-23 after phase 1 — the relay must carry `~1.8-2x`, never `~14x`.**
+      `baseline.txt` contains a measured control the design did not have: `journal::pending`
+      in forward shape already runs an **index-only scan over the same window, the same
+      2,482,615 rows and the same 100 groups**, and its fold takes **1,493 ms against
+      `healthz_journal`'s seq-scan fold at 3,158 ms — 2.11x**, with temp writes 172.4 MB ->
+      52.1 MB. Carried through, the endpoint lands near **2,150 ms against 3,818 ms (~1.8x)**
+      and is Amdahl-capped at 4.5x even with a free fold. State also that the index is
+      expected to change **`healthz_journal` only**: both `pending` shapes are already
+      index-only on the existing `(session_id, "timestamp")` index, and the proposed index
+      leads on `"timestamp"`, which backfill-shape `pending` has no range predicate on.
 
 ## 3. Prove it, or say it did not work
 
@@ -73,6 +84,12 @@
       Verify: node is `Index Only Scan using messages_journal_fold_idx`; `Heap Fetches` is
       small relative to rows returned; `shared read+hit` drops by roughly an order of
       magnitude (baseline ≈ 170 k pages for the window).
+
+      **AMENDED 2026-08-23 — assert this for `healthz_journal` ONLY.** Both `journal::pending`
+      shapes already scan index-only via `messages_session_timestamp_idx` at baseline, so
+      "it is an index-only scan" is **not a check** there — it passes before the change.
+      For `pending` the only meaningful assertion is that plan and timing are **unchanged**,
+      i.e. the new index was not chosen and did not make things worse.
 - [ ] 3.2 Confirm the result set is **unchanged** — same groups, same count, same
       `latest_arrival` values as the baseline run. Verify: a diff of the two result sets is
       empty. This is the check that catches a plan change that quietly became a behaviour
@@ -86,6 +103,14 @@
       without the index. Verify: four readings recorded — baseline, index only, work_mem
       only, both — and `temp read/written` drops to ~0 in the work_mem arms. Complementary,
       not alternative: the index removes bytes read, work_mem removes bytes written.
+
+      **AMENDED 2026-08-23 — that split is too clean, so DO NOT ADD THE TWO ARMS.** Phase 1
+      measured the index-only path removing **70 % of the temp writes on its own**
+      (172.4 MB -> 52.1 MB) with no memory limit raised: it replaces an `external merge`
+      sort with an `Incremental Sort` over presorted input. The two levers therefore
+      **overlap on bytes written**, and index-only + work_mem-only summed would double-count
+      it. That makes the four-arm design necessary rather than tidy — the `both` arm is the
+      only one that answers what they are worth together.
       **Sizing, measured on prod by infra 2026-08-21:** one request spills **88.4 MB across
       3 temp files** (≈22× the 4 MB `work_mem`, one file per parallel process) and takes
       4.04 s; at Gatus's 300 s cadence that alone is **~24.9 GB/day of temp writes**. Our

@@ -1,0 +1,293 @@
+Timing is on.
+Output format is aligned.
+================ CYCLE POSITION: BEFORE ================
+          utc_now           | n_ins_since_vacuum | relallvisible | relpages | vm_pct | cycle_pct 
+----------------------------+--------------------+---------------+----------+--------+-----------
+ 2026-08-23 14:15:20.126901 |             262645 |        595137 |   595276 |  99.98 |      16.1
+(1 row)
+
+Time: 15.034 ms
+================ ORPHAN CHECK (task 1.0) ================
+ orphaned_msg_days_queries 
+---------------------------
+                         3
+(1 row)
+
+Time: 4.596 ms
+PREPARE
+Time: 4.976 ms
+PREPARE
+Time: 1.210 ms
+
+################ ARM=baseline  QUERY=healthz_journal (within_days=7) ################
+                                                                                                                                                                                                    QUERY PLAN                                                                                                                                                                                                     
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=1026644.39..1026736.27 rows=36754 width=64) (actual time=3798.950..3799.042 rows=0.00 loops=1)
+   Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) DESC, p.project_path DESC
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=1273262 read=438313, temp read=21503 written=21547
+   ->  Hash Left Join  (cost=1013407.31..1023857.40 rows=36754 width=64) (actual time=3798.933..3799.025 rows=0.00 loops=1)
+         Hash Cond: ((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) = j.entry_date) AND (p.project_path = j.project_path))
+         Filter: ((j.id IS NULL) OR (j.session_ids IS DISTINCT FROM (array_agg(m.session_id ORDER BY m.session_id))) OR EXISTS(SubPlan 1))
+         Rows Removed by Filter: 100
+         Buffers: shared hit=1273259 read=438313, temp read=21503 written=21547
+         ->  GroupAggregate  (cost=1013294.38..1023027.51 rows=36800 width=96) (actual time=3157.188..3157.653 rows=100.00 loops=1)
+               Group Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), p.project_path
+               Buffers: shared hit=176555 read=438292, temp read=21503 written=21547
+               ->  Sort  (cost=1013294.38..1015149.01 rows=741850 width=72) (actual time=3157.155..3157.295 rows=307.00 loops=1)
+                     Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), p.project_path, m.session_id
+                     Sort Method: quicksort  Memory: 48kB
+                     Buffers: shared hit=176555 read=438292, temp read=21503 written=21547
+                     ->  Hash Join  (cost=763901.53..880103.16 rows=741850 width=72) (actual time=2770.457..3157.072 rows=307.00 loops=1)
+                           Hash Cond: (s.project_id = p.id)
+                           Buffers: shared hit=176555 read=438292, temp read=21503 written=21547
+                           ->  GroupAggregate  (cost=763863.11..870664.64 rows=741850 width=28) (actual time=2447.275..2833.778 rows=307.00 loops=1)
+                                 Group Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), s.project_id, m.session_id
+                                 Buffers: shared hit=176522 read=438292, temp read=21503 written=21547
+                                 ->  Gather Merge  (cost=763863.11..850263.76 rows=741850 width=28) (actual time=2446.140..2723.106 rows=2482615.00 loops=1)
+                                       Workers Planned: 2
+                                       Workers Launched: 2
+                                       Buffers: shared hit=176522 read=438292, temp read=21503 written=21547
+                                       ->  Sort  (cost=762863.08..763635.84 rows=309104 width=28) (actual time=2416.686..2471.955 rows=827538.33 loops=3)
+                                             Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), s.project_id, m.session_id
+                                             Sort Method: external merge  Disk: 32456kB
+                                             Buffers: shared hit=176522 read=438292, temp read=21503 written=21547
+                                             Worker 0:  Sort Method: external merge  Disk: 34672kB
+                                             Worker 1:  Sort Method: external merge  Disk: 35208kB
+                                             ->  Hash Join  (cost=438.26..727277.30 rows=309104 width=28) (actual time=323.614..2274.924 rows=827538.33 loops=3)
+                                                   Hash Cond: (m.session_id = s.id)
+                                                   Buffers: shared hit=176490 read=438292
+                                                   ->  Parallel Seq Scan on messages m  (cost=0.00..723708.66 rows=309104 width=24) (actual time=321.622..2142.411 rows=827538.33 loops=3)
+                                                         Filter: (("timestamp" IS NOT NULL) AND ("timestamp" >= '2026-08-16 04:00:00+00'::timestamp with time zone) AND (((("timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date < (((now() - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date))
+                                                         Rows Removed by Filter: 1851921
+                                                         Buffers: shared hit=175509 read=438292
+                                                   ->  Hash  (cost=376.45..376.45 rows=4945 width=16) (actual time=1.961..1.962 rows=4945.00 loops=3)
+                                                         Buckets: 8192  Batches: 1  Memory Usage: 296kB
+                                                         Buffers: shared hit=981
+                                                         ->  Seq Scan on sessions s  (cost=0.00..376.45 rows=4945 width=16) (actual time=0.047..1.547 rows=4945.00 loops=3)
+                                                               Buffers: shared hit=981
+                           ->  Hash  (cost=35.41..35.41 rows=241 width=60) (actual time=323.164..323.165 rows=241.00 loops=1)
+                                 Buckets: 1024  Batches: 1  Memory Usage: 31kB
+                                 Buffers: shared hit=33
+                                 ->  Seq Scan on projects p  (cost=0.00..35.41 rows=241 width=60) (actual time=323.002..323.122 rows=241.00 loops=1)
+                                       Buffers: shared hit=33
+         ->  Hash  (cost=103.97..103.97 rows=597 width=128) (actual time=0.412..0.413 rows=597.00 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 104kB
+               Buffers: shared hit=98
+               ->  Seq Scan on journal_entries j  (cost=0.00..103.97 rows=597 width=128) (actual time=0.020..0.326 rows=597.00 loops=1)
+                     Buffers: shared hit=98
+         SubPlan 1
+           ->  Index Scan using messages_session_timestamp_idx on messages m_1  (cost=0.45..777.00 rows=5 width=0) (actual time=6.406..6.406 rows=0.00 loops=100)
+                 Index Cond: ((session_id = ANY ((array_agg(m.session_id ORDER BY m.session_id)))) AND ("timestamp" >= ((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) + '04:00:00'::interval) AT TIME ZONE 'UTC'::text)) AND ("timestamp" < (((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) + 1) + '04:00:00'::interval) AT TIME ZONE 'UTC'::text)))
+                 Filter: ((ingest_xid IS NOT NULL) AND (NOT pg_visible_in_snapshot(ingest_xid, j.generated_snapshot)))
+                 Rows Removed by Filter: 24826
+                 Index Searches: 213
+                 Buffers: shared hit=1096606 read=21
+ Planning:
+   Buffers: shared hit=519 read=20
+ Planning Time: 5.722 ms
+ JIT:
+   Functions: 72
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 3.355 ms (Deform 1.568 ms), Inlining 147.420 ms, Optimization 292.709 ms, Emission 200.275 ms, Total 643.759 ms
+ Execution Time: 3818.528 ms
+(69 rows)
+
+Time: 3826.303 ms (00:03.826)
+
+################ ARM=baseline  QUERY=journal::pending (from=NULL, limit=50) ################
+                                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                                        
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1388203.39..1388203.52 rows=50 width=120) (actual time=19166.982..19166.992 rows=50.00 loops=1)
+   Buffers: shared hit=3461572 read=695899 written=453, temp read=11881 written=11915
+   ->  Sort  (cost=1388203.39..1388295.28 rows=36754 width=120) (actual time=18969.599..18969.606 rows=50.00 loops=1)
+         Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) DESC, p.project_path DESC
+         Sort Method: top-N heapsort  Memory: 46kB
+         Buffers: shared hit=3461572 read=695899 written=453, temp read=11881 written=11915
+         ->  Hash Left Join  (cost=1358844.53..1386982.45 rows=36754 width=120) (actual time=3793.055..18969.407 rows=783.00 loops=1)
+               Hash Cond: ((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) = j.entry_date) AND (p.project_path = j.project_path))
+               Filter: ((j.id IS NULL) OR (j.session_ids IS DISTINCT FROM (array_agg(m.session_id ORDER BY m.session_id))) OR EXISTS(SubPlan 1))
+               Rows Removed by Filter: 591
+               Buffers: shared hit=3461572 read=695899 written=453, temp read=11881 written=11915
+               ->  GroupAggregate  (cost=1358731.61..1386244.90 rows=36800 width=88) (actual time=3791.390..3796.035 rows=1374.00 loops=1)
+                     Group Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), p.project_path
+                     Buffers: shared hit=427342 read=34737, temp read=11881 written=11915
+                     ->  Sort  (cost=1358731.61..1365494.93 rows=2705329 width=64) (actual time=3791.356..3792.102 rows=7305.00 loops=1)
+                           Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), p.project_path, m.session_id
+                           Sort Method: quicksort  Memory: 739kB
+                           Buffers: shared hit=427342 read=34737, temp read=11881 written=11915
+                           ->  Hash Join  (cost=620.26..866268.74 rows=2705329 width=64) (actual time=5.141..3788.811 rows=7305.00 loops=1)
+                                 Hash Cond: (s.project_id = p.id)
+                                 Buffers: shared hit=427342 read=34737, temp read=11881 written=11915
+                                 ->  GroupAggregate  (cost=581.84..831950.66 rows=2705329 width=28) (actual time=5.044..3787.311 rows=7305.00 loops=1)
+                                       Group Key: m.session_id, ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), s.project_id
+                                       Buffers: shared hit=427309 read=34737, temp read=11881 written=11915
+                                       ->  Incremental Sort  (cost=581.84..764317.44 rows=2705329 width=20) (actual time=5.017..3485.643 rows=7984236.00 loops=1)
+                                             Sort Key: m.session_id, ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), s.project_id
+                                             Presorted Key: m.session_id
+                                             Full-sort Groups: 2776  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB
+                                             Pre-sorted Groups: 2422  Sort Methods: quicksort, external merge  Average Memory: 73kB  Peak Memory: 3672kB  Average Disk: 5053kB  Peak Disk: 9672kB
+                                             Buffers: shared hit=427309 read=34737, temp read=11881 written=11915
+                                             ->  Merge Join  (cost=0.71..580714.03 rows=2705329 width=20) (actual time=0.060..2523.189 rows=7984236.00 loops=1)
+                                                   Merge Cond: (m.session_id = s.id)
+                                                   Buffers: shared hit=427309 read=34737
+                                                   ->  Index Only Scan using messages_session_timestamp_idx on messages m  (cost=0.43..525412.82 rows=2705329 width=16) (actual time=0.047..1623.811 rows=7984236.00 loops=1)
+                                                         Index Cond: ("timestamp" IS NOT NULL)
+                                                         Filter: (((("timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date < (((now() - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date)
+                                                         Rows Removed by Filter: 54026
+                                                         Heap Fetches: 265921
+                                                         Index Searches: 1
+                                                         Buffers: shared hit=423758 read=34723
+                                                   ->  Index Scan using sessions_pkey on sessions s  (cost=0.28..1191.03 rows=4945 width=16) (actual time=0.007..3.735 rows=4944.00 loops=1)
+                                                         Index Searches: 1
+                                                         Buffers: shared hit=3551 read=14
+                                 ->  Hash  (cost=35.41..35.41 rows=241 width=60) (actual time=0.090..0.091 rows=241.00 loops=1)
+                                       Buckets: 1024  Batches: 1  Memory Usage: 31kB
+                                       Buffers: shared hit=33
+                                       ->  Seq Scan on projects p  (cost=0.00..35.41 rows=241 width=60) (actual time=0.019..0.069 rows=241.00 loops=1)
+                                             Buffers: shared hit=33
+               ->  Hash  (cost=103.97..103.97 rows=597 width=128) (actual time=1.641..1.642 rows=597.00 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 104kB
+                     Buffers: shared read=98
+                     ->  Seq Scan on journal_entries j  (cost=0.00..103.97 rows=597 width=128) (actual time=0.328..1.532 rows=597.00 loops=1)
+                           Buffers: shared read=98
+               SubPlan 1
+                 ->  Index Scan using messages_session_timestamp_idx on messages m_1  (cost=0.45..777.00 rows=5 width=0) (actual time=25.666..25.666 rows=0.00 loops=591)
+                       Index Cond: ((session_id = ANY ((array_agg(m.session_id ORDER BY m.session_id)))) AND ("timestamp" >= ((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) + '04:00:00'::interval) AT TIME ZONE 'UTC'::text)) AND ("timestamp" < (((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) + 1) + '04:00:00'::interval) AT TIME ZONE 'UTC'::text)))
+                       Filter: ((ingest_xid IS NOT NULL) AND (NOT pg_visible_in_snapshot(ingest_xid, j.generated_snapshot)))
+                       Rows Removed by Filter: 12789
+                       Index Searches: 1876
+                       Buffers: shared hit=3034230 read=661064 written=453
+ Planning:
+   Buffers: shared hit=25
+ Planning Time: 0.599 ms
+ JIT:
+   Functions: 42
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 1.220 ms (Deform 0.488 ms), Inlining 15.393 ms, Optimization 106.962 ms, Emission 75.099 ms, Total 198.675 ms
+ Execution Time: 19168.390 ms
+(68 rows)
+
+Time: 19171.273 ms (00:19.171)
+
+================ CYCLE POSITION: AFTER ================
+          utc_now           | n_ins_since_vacuum | relallvisible | relpages | vm_pct | cycle_pct 
+----------------------------+--------------------+---------------+----------+--------+-----------
+ 2026-08-23 14:15:43.151069 |             262645 |        595137 |   595276 |  99.98 |      16.1
+(1 row)
+
+Time: 3.337 ms
+================ ORPHAN CHECK: AFTER ================
+ orphaned 
+----------
+        1
+(1 row)
+
+Time: 1.023 ms
+
+###############################################################################
+# APPENDED: journal::pending in PRODUCTION forward-mode shape (from=today-7).
+# The from=NULL run above is the BACKFILL shape (--backfill), not the routine tick.
+###############################################################################
+Timing is on.
+Output format is aligned.
+================ CYCLE POSITION: BEFORE ================
+          utc_now           | n_ins_since_vacuum | relallvisible | relpages | vm_pct | cycle_pct 
+----------------------------+--------------------+---------------+----------+--------+-----------
+ 2026-08-23 14:17:22.037287 |             264362 |        595137 |   595276 |  99.98 |      16.2
+(1 row)
+
+Time: 12.936 ms
+================ ORPHAN CHECK (task 1.0) ================
+ orphaned_msg_days_queries 
+---------------------------
+                         0
+(1 row)
+
+Time: 3.368 ms
+PREPARE
+Time: 4.153 ms
+PREPARE
+Time: 1.206 ms
+
+################ ARM=baseline  QUERY=journal::pending (from=today-7 = PRODUCTION forward mode, limit=50) ################
+                                                                                                                                                                                                       QUERY PLAN                                                                                                                                                                                                        
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=399723.20..399723.33 rows=50 width=120) (actual time=3249.948..3249.954 rows=0.00 loops=1)
+   Buffers: shared hit=1205346 read=33699, temp read=6500 written=6518
+   ->  Sort  (cost=399723.20..399815.09 rows=36754 width=120) (actual time=3238.489..3238.495 rows=0.00 loops=1)
+         Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) DESC, p.project_path DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=1205346 read=33699, temp read=6500 written=6518
+         ->  Hash Left Join  (cost=389997.65..398502.26 rows=36754 width=120) (actual time=3238.449..3238.454 rows=0.00 loops=1)
+               Hash Cond: ((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) = j.entry_date) AND (p.project_path = j.project_path))
+               Filter: ((j.id IS NULL) OR (j.session_ids IS DISTINCT FROM (array_agg(m.session_id ORDER BY m.session_id))) OR EXISTS(SubPlan 1))
+               Rows Removed by Filter: 100
+               Buffers: shared hit=1205340 read=33699, temp read=6500 written=6518
+               ->  GroupAggregate  (cost=389884.72..397764.71 rows=36800 width=88) (actual time=1492.819..1493.374 rows=100.00 loops=1)
+                     Group Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), p.project_path
+                     Buffers: shared hit=130585 read=11729, temp read=6500 written=6518
+                     ->  Sort  (cost=389884.72..391739.72 rows=741999 width=64) (actual time=1492.788..1492.872 rows=307.00 loops=1)
+                           Sort Key: ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), p.project_path, m.session_id
+                           Sort Method: quicksort  Memory: 45kB
+                           Buffers: shared hit=130585 read=11729, temp read=6500 written=6518
+                           ->  Hash Join  (cost=217.70..261738.90 rows=741999 width=64) (actual time=103.567..1492.629 rows=307.00 loops=1)
+                                 Hash Cond: (s.project_id = p.id)
+                                 Buffers: shared hit=130585 read=11729, temp read=6500 written=6518
+                                 ->  GroupAggregate  (cost=179.27..252298.48 rows=741999 width=28) (actual time=103.422..1492.307 rows=307.00 loops=1)
+                                       Group Key: m.session_id, ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), s.project_id
+                                       Buffers: shared hit=130552 read=11729, temp read=6500 written=6518
+                                       ->  Incremental Sort  (cost=179.27..233748.51 rows=741999 width=20) (actual time=102.921..1370.755 rows=2482615.00 loops=1)
+                                             Sort Key: m.session_id, ((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date), s.project_id
+                                             Presorted Key: m.session_id
+                                             Full-sort Groups: 135  Sort Method: quicksort  Average Memory: 27kB  Peak Memory: 27kB
+                                             Pre-sorted Groups: 135  Sort Methods: quicksort, external merge  Average Memory: 45kB  Peak Memory: 869kB  Average Disk: 4266kB  Peak Disk: 5152kB
+                                             Buffers: shared hit=130552 read=11729, temp read=6500 written=6518
+                                             ->  Merge Join  (cost=0.71..190296.80 rows=741999 width=20) (actual time=84.042..1020.236 rows=2482615.00 loops=1)
+                                                   Merge Cond: (m.session_id = s.id)
+                                                   Buffers: shared hit=130552 read=11729
+                                                   ->  Index Only Scan using messages_session_timestamp_idx on messages m  (cost=0.43..174262.19 rows=741999 width=16) (actual time=81.802..724.167 rows=2482615.00 loops=1)
+                                                         Index Cond: (("timestamp" IS NOT NULL) AND ("timestamp" >= '2026-08-16 04:00:00+00'::timestamp with time zone))
+                                                         Filter: (((("timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date < (((now() - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date)
+                                                         Rows Removed by Filter: 55743
+                                                         Heap Fetches: 266811
+                                                         Index Searches: 1087
+                                                         Buffers: shared hit=127222 read=11494
+                                                   ->  Index Scan using sessions_pkey on sessions s  (cost=0.28..1191.03 rows=4945 width=16) (actual time=0.013..2.771 rows=4944.00 loops=1)
+                                                         Index Searches: 1
+                                                         Buffers: shared hit=3330 read=235
+                                 ->  Hash  (cost=35.41..35.41 rows=241 width=60) (actual time=0.136..0.137 rows=241.00 loops=1)
+                                       Buckets: 1024  Batches: 1  Memory Usage: 31kB
+                                       Buffers: shared hit=33
+                                       ->  Seq Scan on projects p  (cost=0.00..35.41 rows=241 width=60) (actual time=0.016..0.114 rows=241.00 loops=1)
+                                             Buffers: shared hit=33
+               ->  Hash  (cost=103.97..103.97 rows=597 width=128) (actual time=1.643..1.644 rows=597.00 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 104kB
+                     Buffers: shared read=98
+                     ->  Seq Scan on journal_entries j  (cost=0.00..103.97 rows=597 width=128) (actual time=0.286..1.534 rows=597.00 loops=1)
+                           Buffers: shared read=98
+               SubPlan 1
+                 ->  Index Scan using messages_session_timestamp_idx on messages m_1  (cost=0.45..777.00 rows=5 width=0) (actual time=17.429..17.429 rows=0.00 loops=100)
+                       Index Cond: ((session_id = ANY ((array_agg(m.session_id ORDER BY m.session_id)))) AND ("timestamp" >= ((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) + '04:00:00'::interval) AT TIME ZONE 'UTC'::text)) AND ("timestamp" < (((((((m."timestamp" - '04:00:00'::interval) AT TIME ZONE 'UTC'::text))::date) + 1) + '04:00:00'::interval) AT TIME ZONE 'UTC'::text)))
+                       Filter: ((ingest_xid IS NOT NULL) AND (NOT pg_visible_in_snapshot(ingest_xid, j.generated_snapshot)))
+                       Rows Removed by Filter: 24826
+                       Index Searches: 213
+                       Buffers: shared hit=1074755 read=21872
+ Planning:
+   Buffers: shared hit=509 read=32
+ Planning Time: 4.994 ms
+ JIT:
+   Functions: 42
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 1.329 ms (Deform 0.493 ms), Inlining 0.000 ms, Optimization 0.562 ms, Emission 10.990 ms, Total 12.881 ms
+ Execution Time: 3262.952 ms
+(68 rows)
+
+Time: 3270.130 ms (00:03.270)
+================ CYCLE POSITION: AFTER ================
+          utc_now           | n_ins_since_vacuum | vm_pct | cycle_pct 
+----------------------------+--------------------+--------+-----------
+ 2026-08-23 14:17:25.329776 |             264362 |  99.98 |      16.2
+(1 row)
+
+Time: 1.869 ms
