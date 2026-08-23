@@ -69,6 +69,50 @@ pub(crate) const DAY_START_HOUR: i32 = 4;
 /// 20th's data — the same misattribution this whole change exists to remove,
 /// surviving in the one column nobody looked at. Computed here it is the latest
 /// arrival of data **for that day**.
+/// `work_mem` for the two statements that run [`SESSION_DAYS_CTE`], applied per
+/// transaction by [`begin_fold_tx`].
+///
+/// The fold aggregates ~2.4 M rows over a 7-day window and **spills to disk at the
+/// server default of 4 MB**: `external merge` sorts of ~35 MB in each of the leader
+/// and its two parallel workers, 17,163 temp blocks written per call. At the health
+/// monitor's 300 s cadence that is ~25 GB/day of temp write I/O spent answering a
+/// check that usually returns nothing.
+///
+/// 64 MB is one step past the knee, and the knee is sharp because the entire win is
+/// *whether the sort spills at all* — measured on pg1 2026-08-23, interleaved and
+/// warm, `healthz_journal` runs **3,545 ms at 4 MB** and **2,333 / 2,251 / 2,298 /
+/// 2,305 ms at 48 / 64 / 128 / 256 MB**. Nothing above the knee buys anything, so the
+/// smallest safe value is the right one: `work_mem` is per *process*, and a parallel
+/// plan spends it once per worker, so 64 MB bounds one request at ~192 MB where 256 MB
+/// would allow ~768 MB.
+///
+/// This is the whole of #36's fix. A covering index was specced and measured against
+/// this and is **deliberately not built**: it is worth a further ~5 % once the spill is
+/// gone, for ~400 MB and a production DDL (`journal-query-floor`, #36 comment 7511).
+const JOURNAL_FOLD_WORK_MEM: &str = "64MB";
+
+/// Begin a transaction with [`JOURNAL_FOLD_WORK_MEM`] applied to it.
+///
+/// **`SET LOCAL`, never a bare `SET`.** These run on a pooled connection that is handed
+/// straight back to unrelated statements; a session-level `SET` would leak this
+/// allocation to every later query on that connection, which is how a targeted fix
+/// becomes a server-wide memory change nobody remembers making. `SET LOCAL` is scoped to
+/// the transaction, so the connection returns to the pool unchanged.
+///
+/// The caller may simply drop the transaction — both statements are read-only, so a
+/// rollback and a commit are equivalent here; committing is done for clarity, not effect.
+pub(crate) async fn begin_fold_tx(
+    pool: &sqlx::PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    // `SET` takes no bind parameters, so this is formatted — from a crate constant with
+    // no caller input anywhere in it.
+    sqlx::query(&format!("SET LOCAL work_mem = '{JOURNAL_FOLD_WORK_MEM}'"))
+        .execute(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
 pub(crate) const SESSION_DAYS_CTE: &str = r#"
     msg_days AS (
         SELECT
@@ -178,6 +222,7 @@ pub async fn pending(
     let from = parse_date(params.from.as_deref(), "from")?;
     let page = Page::from(params.limit, None);
 
+    let mut tx = begin_fold_tx(&state.pool).await?;
     let rows = sqlx::query_as::<_, PendingGroup>(&format!(
         r#"
         WITH {SESSION_DAYS_CTE},
@@ -217,8 +262,9 @@ pub async fn pending(
     .bind(DAY_START_HOUR)
     .bind(from)
     .bind(page.limit)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(Json(rows))
 }

@@ -440,6 +440,11 @@ pub async fn healthz_journal(
     // gets investigated. `SESSION_DAYS_CTE` now carries the arrival, which is
     // both free there and the more correct number (see its doc comment).
     let horizon_from = horizon_from(Utc::now(), day_start_hour, within_days);
+    // Raised `work_mem`, scoped to this statement. The fold spills ~35 MB per process
+    // at the 4 MB default and this is the whole of #36's fix; the rationale, the
+    // measurements and why it is not a covering index live on
+    // `journal::JOURNAL_FOLD_WORK_MEM`.
+    let mut tx = crate::journal::begin_fold_tx(&state.pool).await?;
     let rows = sqlx::query_as::<_, JournalGroupRow>(&format!(
         r#"
         WITH {session_days},
@@ -482,8 +487,9 @@ pub async fn healthz_journal(
     ))
     .bind(day_start_hour)
     .bind(horizon_from)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     // Runtime query for the same reason as the one above. Both halves read
     // `distiller_ticks_tick_at_idx`: one backwards probe for the newest row, one

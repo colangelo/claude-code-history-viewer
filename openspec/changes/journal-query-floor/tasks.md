@@ -39,12 +39,31 @@
 
 ## 2. The index
 
+> **DECISION 2026-08-23 (measured, phase 3 run early): DO NOT BUILD IT.** Task 3.4's
+> `work_mem` arms were run *before* 2.2's relay, because 2.2 spends infra's production
+> window and the free lever had not been measured. `work_mem = 64MB` takes
+> `healthz_journal` from 3,545 ms to 2,252 ms (**1.57x**) and its temp writes from 17,163
+> blocks to **zero**, at no storage cost, no DDL, and no coordination. Against that
+> baseline the covering index is worth **~124 ms, about 5 %** of the endpoint — measured
+> via the forward-`pending` index-only fold (1,493 ms) against the 64 MB fold (1,617 ms) —
+> for ~400 MB, a production `CREATE INDEX CONCURRENTLY` on 8.1 M rows, and permanent write
+> amplification on the hottest table. The 5 % is also *generous* to the index: the proxy
+> elides `max(created_at)`, and everything was measured at the optimistic end of the vacuum
+> cycle, where an index-only scan looks its best. Evidence: `workmem-arms.txt`,
+> `baseline.txt`, #36 comments 7505 and 7511.
+>
+> Consequences: **2.2 is not sent** — not blocked, not deferred pending information, but
+> measurably not worth doing. 2.1's operator step stays in `deployment.md` marked *not
+> built*, so a future reader can build it if the table's shape changes. 3.1 / 3.2 / 3.3 /
+> 3.6 are moot while the index does not exist, and are marked so rather than deleted, so
+> the record shows what was planned and why it was not run.
+
 - [x] 2.1 Add the index build to `docs/archive/deployment.md` §1 as an operator step —
       **not** a `migrations/*.sql`, since `CREATE INDEX CONCURRENTLY` cannot run in a
       transaction and `sqlx` migrations do. Include the `DROP INDEX CONCURRENTLY` recovery
       for the INVALID-index failure mode, and the ~300 MB / 209 GB-free sizing. Verify:
       the section names the exact statement, the recovery, and when to run it.
-- [ ] 2.2 Relay the build to infra (`cchv-deploy`, Channel 0 while `ac/infra#98` is open):
+- [~] 2.2 **NOT SENT — see the decision above.** Relay the build to infra (`cchv-deploy`, Channel 0 while `ac/infra#98` is open):
       off-peak, `CREATE INDEX CONCURRENTLY messages_journal_fold_idx ON messages
       ("timestamp", session_id) INCLUDE (created_at)`. Carry the expected duration, the
       storage delta, the recovery command, and the fact that **nothing breaks if it is not
@@ -63,7 +82,7 @@
 
 ## 3. Prove it, or say it did not work
 
-- [ ] 3.0 **Record where in the vacuum cycle each measurement was taken** — `n_ins_since_vacuum`
+- [x] 3.0 **Record where in the vacuum cycle each measurement was taken** — `n_ins_since_vacuum`
       and `relallvisible`/`relpages` immediately before and after every timing run. Because
       the unmarked fraction of the window swings from ~0 % to ~60 % across an insert cycle,
       the *same index* measures anywhere between "nearly free" and "half-wasted" depending
@@ -80,7 +99,7 @@
       at both ends of the cycle** (just after an insert-triggered VACUUM and just before
       the next), or take it once and state explicitly which end it came from and which way
       it biases. A result quoted without that is not interpretable.
-- [ ] 3.1 Re-run 1.1's two `EXPLAIN (ANALYZE, BUFFERS)` and diff against `baseline.txt`.
+- [~] 3.1 **MOOT (moot: no index to re-measure against)** Re-run 1.1's two `EXPLAIN (ANALYZE, BUFFERS)` and diff against `baseline.txt`.
       Verify: node is `Index Only Scan using messages_journal_fold_idx`; `Heap Fetches` is
       small relative to rows returned; `shared read+hit` drops by roughly an order of
       magnitude (baseline ≈ 170 k pages for the window).
@@ -90,15 +109,15 @@
       "it is an index-only scan" is **not a check** there — it passes before the change.
       For `pending` the only meaningful assertion is that plan and timing are **unchanged**,
       i.e. the new index was not chosen and did not make things worse.
-- [ ] 3.2 Confirm the result set is **unchanged** — same groups, same count, same
+- [~] 3.2 **MOOT (moot: no plan change to check for a behaviour change)** Confirm the result set is **unchanged** — same groups, same count, same
       `latest_arrival` values as the baseline run. Verify: a diff of the two result sets is
       empty. This is the check that catches a plan change that quietly became a behaviour
       change; it is the whole reason the index is not partial.
-- [ ] 3.3 If the planner declines the index: keep it, record the plan it chose, and measure
+- [~] 3.3 **MOOT (moot: the planner was never offered the index)** If the planner declines the index: keep it, record the plan it chose, and measure
       decision 1's fallback (`SET LOCAL random_page_cost` on just these two statements)
       before deciding. Verify: whichever way it goes, the reading is on #36 — a slow
       endpoint left slow silently is the outcome this task exists to prevent.
-- [ ] 3.4 Measure `SET LOCAL work_mem` **separately from the index**, so neither is
+- [x] 3.4 Measure `SET LOCAL work_mem` **separately from the index**, so neither is
       credited with the other's win: re-run the two queries with work_mem raised, with and
       without the index. Verify: four readings recorded — baseline, index only, work_mem
       only, both — and `temp read/written` drops to ~0 in the work_mem arms. Complementary,
@@ -119,14 +138,14 @@
       top-level Sort reports `rows=0.00`), so it is not "floor versus with-work". Candidates
       are `EXPLAIN ANALYZE` instrumentation and an hour of window drift between the two.
       Re-measure both ways in the same session before quoting either number.
-- [ ] 3.5 **Decide whether to ask ac for `autovacuum_vacuum_insert_scale_factor = 0.02`
+- [x] 3.5 **Decide whether to ask ac for `autovacuum_vacuum_insert_scale_factor = 0.02`
       on `messages`** (~150 k inserts between vacuums instead of ~1.5 M, keeping the window
       mostly VM-marked). infra has named it and deliberately **not run it** — it is a prod
       DDL on their box and therefore ac's call. Only worth asking once 3.0–3.1 show the
       index's win is genuinely capped by `Heap Fetches` rather than by the planner ignoring
       the index. Verify: either a measured case put to ac with numbers, or a recorded
       decision that the uncapped win is already sufficient.
-- [ ] 3.6 Watch one heavy ingest after the build for write amplification on `messages`.
+- [~] 3.6 **MOOT (moot: no new index to amplify writes)** Watch one heavy ingest after the build for write amplification on `messages`.
       Verify: ingest duration compared against a pre-build batch of comparable size; noted
       even if unchanged, so a later regression has a baseline.
 

@@ -57,8 +57,8 @@ computed group key, so a bounded call does not read the whole archive.
 - **THEN** all groups from those days are still pending on its next run
 
 The pending list runs the same logical-day fold as the staleness check and is subject to the
-same floor: computing it SHALL NOT require reading message payloads, and the access path that
-makes this possible MUST NOT change which groups are returned — a day of nothing but agent
+same floor: computing it SHALL NOT require reading message payloads, and whatever access path
+serves it MUST NOT change which groups are returned — a day of nothing but agent
 state records still appears, and still earns its `skip`.
 
 #### Scenario: Pending is computed without reading message payloads

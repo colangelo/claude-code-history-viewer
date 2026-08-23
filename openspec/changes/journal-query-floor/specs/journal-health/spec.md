@@ -62,10 +62,23 @@ it matches none.
 
 The endpoint is monitor-polled, so its cost is part of its contract. Evaluating it SHALL
 NOT require reading message payloads: the fold it runs needs only each message's timestamp,
-session and arrival time, and the archive SHALL carry an access path that supplies those
-three without visiting the rows they belong to. Stated this way — a bound on what the check
-is allowed to touch — rather than as a wall-clock number, which would be a property of
-whichever machine happened to run it. The failure this prevents is concrete: reading the
+session and arrival time, and it SHALL obtain those three without reading the content or raw
+payload of the messages they belong to, and without spilling its aggregate to disk. Stated
+this way — a bound on what the check is allowed to touch — rather than as a wall-clock
+number, which would be a property of whichever machine happened to run it.
+
+**AMENDED 2026-08-23, and the previous wording is worth recording because it was wrong in an
+instructive way.** This sentence used to require "an access path that supplies those three
+*without visiting the rows they belong to*" — which is a covering index and nothing else. It
+therefore mandated a mechanism, while the scenario below that actually tests it asks only for
+"without reading that message's content or raw payload", which a sequential scan already
+satisfies (`content` is TOASTed and is never detoasted by a fold that does not select it).
+Prose and scenario disagreed, and only the prose demanded the index. Measurement then showed
+the mandated mechanism was not worth its price: against `work_mem` sized past the spill knee
+the covering index buys ~5 % of the endpoint for ~400 MB, a production DDL and permanent write
+amplification (#36 comments 7505/7511). The bound is now stated as the two things measured to
+matter — do not read payloads, do not spill — which is what the failure this requirement
+prevents was actually made of. The failure this prevents is concrete: reading the
 payload columns to answer a question that does not use them means ~1.3 GB of heap for a
 7-day window, which has already exceeded a proxy timeout and answered 502, and a health
 check that flaps is worse than one that is slow because the flap is what gets investigated.
