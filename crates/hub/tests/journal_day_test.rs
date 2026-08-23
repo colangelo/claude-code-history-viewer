@@ -731,3 +731,60 @@ async fn a_live_session_does_not_dirty_its_own_frozen_day() {
          call per day per tick forever: {after:?}"
     );
 }
+
+/// `work_mem` for the fold is applied to the transaction and **does not leak past it**.
+///
+/// Both halves matter and only one of them is about speed. The fold spills to disk at
+/// the 4 MB server default (17,163 temp blocks per call, ~25 GB/day at the health
+/// monitor's cadence), so a refactor that quietly dropped the transaction would put
+/// that back with no test failing and no error anywhere — the regression #36 exists to
+/// remove, returning silently. The second assertion guards the opposite mistake: a bare
+/// `SET` instead of `SET LOCAL` would raise `work_mem` on a *pooled* connection that is
+/// then handed to unrelated statements.
+///
+/// The pool is deliberately capped at **one connection**, which is what gives the leak
+/// assertion any force: with a larger pool the second query could land on a different
+/// backend and pass without ever testing the thing it names.
+#[tokio::test]
+async fn fold_work_mem_applies_to_the_transaction_and_does_not_leak() {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&test_db_url())
+        .await
+        .expect("connect");
+
+    let before: String = sqlx::query_scalar("SHOW work_mem")
+        .fetch_one(&pool)
+        .await
+        .expect("read work_mem before");
+    assert_ne!(
+        before,
+        hub::journal::JOURNAL_FOLD_WORK_MEM,
+        "test is vacuous: the server default already equals the fold setting, so neither \
+         assertion below can fail. Pick a fold value that differs from the server default."
+    );
+
+    let mut tx = hub::journal::begin_fold_tx(&pool)
+        .await
+        .expect("begin fold tx");
+    let inside: String = sqlx::query_scalar("SHOW work_mem")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("read work_mem inside");
+    assert_eq!(
+        inside,
+        hub::journal::JOURNAL_FOLD_WORK_MEM,
+        "the fold ran without its raised work_mem — it will spill to disk as before"
+    );
+    tx.commit().await.expect("commit");
+
+    let after: String = sqlx::query_scalar("SHOW work_mem")
+        .fetch_one(&pool)
+        .await
+        .expect("read work_mem after");
+    assert_eq!(
+        after, before,
+        "work_mem leaked out of the fold transaction onto a pooled connection — \
+         SET LOCAL was replaced by a bare SET"
+    );
+}

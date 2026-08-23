@@ -89,7 +89,7 @@ pub(crate) const DAY_START_HOUR: i32 = 4;
 /// This is the whole of #36's fix. A covering index was specced and measured against
 /// this and is **deliberately not built**: it is worth a further ~5 % once the spill is
 /// gone, for ~400 MB and a production DDL (`journal-query-floor`, #36 comment 7511).
-const JOURNAL_FOLD_WORK_MEM: &str = "64MB";
+pub const JOURNAL_FOLD_WORK_MEM: &str = "64MB";
 
 /// Begin a transaction with [`JOURNAL_FOLD_WORK_MEM`] applied to it.
 ///
@@ -101,7 +101,7 @@ const JOURNAL_FOLD_WORK_MEM: &str = "64MB";
 ///
 /// The caller may simply drop the transaction — both statements are read-only, so a
 /// rollback and a commit are equivalent here; committing is done for clarity, not effect.
-pub(crate) async fn begin_fold_tx(
+pub async fn begin_fold_tx(
     pool: &sqlx::PgPool,
 ) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
     let mut tx = pool.begin().await?;
