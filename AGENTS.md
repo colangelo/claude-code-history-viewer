@@ -157,10 +157,12 @@ addresses a role.**
    unseen) only for work safe to run with nobody present; `interactive` when the
    answer must come back to a person.
 
-## Repo rules (learned 2026-08-21 — evidence in `docs/2026-08-21-journal-day-bucketing.md`)
+## Repo rules (learned 2026-08-21 — evidence in `docs/2026-08-21-journal-day-bucketing.md`
+and `docs/2026-08-21-identity-surfaces-and-query-floor.md`)
 
-Only the things that bind from now on. The story, the measurements and the other seven
-lessons are in the doc.
+Only the things that bind from now on. The story, the measurements and the other lessons
+are in the two docs — morning (the wrong-day journal bug) and afternoon (the v0.21.0
+release and the query-floor measurements).
 
 - **A row in `messages` is not a conversation turn.** 91.1 % of `claude`-provider rows
   have `content IS NULL` — they are sidecar state records (`permission-mode`,
@@ -179,6 +181,26 @@ lessons are in the doc.
   transcript window, the arrival timestamp and the dirty check — two of which reached
   production. Grep for the old key and re-derive each hit before shipping, rather than
   fixing them as they surface.
+- **Before trusting a check, name the reading that would make it FAIL. If you cannot, it
+  is not a check.** Three in one afternoon, each of which produced a confident wrong answer:
+  `count(DISTINCT uuid)` to measure ingest duplication (returns 1.0 always — `convert.rs`
+  fills a missing uuid with a **random v4** per re-parse, and `content_hash` is populated on
+  **0** rows); `curl --max-time N` to time an endpoint (abandons the request but leaves the
+  query running server-side — six piled up and starved each other, so the reading was of
+  our own backlog); and `until [ "$x" != "null" ]` to wait for a field (a *failed read* is
+  also `!= "null"`, so it announced a tick that had not happened). Same family as
+  `--is-ancestor` collapsing exit 1 and 128.
+- **Publish the number from the machine that will run it.** Migration `0009` measured
+  0.93 ms locally against a table of prod's exact shape and 7.15 ms on prod — **7.7×**.
+  A local stand-in predicts the order of magnitude and nothing finer; measuring the wrong
+  machine is its own kind of estimate, even when you did measure.
+- **A measurement taken inside a cycle needs its position in that cycle, or it is a
+  measurement of the day.** `messages` is append-only, so VACUUM is insert-triggered
+  (~1.5 M inserts) and visibility-map coverage over the hot range decays between runs: the
+  share of a 7-day window needing `Heap Fetches` swings **0 % → ~60 %**. Record
+  `n_ins_since_vacuum` and `relallvisible`/`relpages` with any index timing, and say which
+  way the current position biases it. Related: a threshold is not a schedule —
+  `last_autovacuum` being old is not a backlog when no trigger has been crossed.
 - **The release ceremony's own guards are in § Release Process and they are load-bearing**
   — `gh run list --commit <tag-sha>` across all workflows (not just `server-release.yml`),
   and a publication proof that reads `rc` by `case` because `--is-ancestor` exits 1 for
