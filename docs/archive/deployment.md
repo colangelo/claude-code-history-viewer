@@ -706,6 +706,55 @@ it. A relay handing off a rev marker should carry both counts, new **and** old.
 > new asset, 0 in the outgoing one). So the two proofs cover **different moments** rather
 > than one replacing the other: marker before the restart, version field after it.
 
+**2026-08-23, `cchv-v0.21.0` → `cchv-v0.21.1` (release `b911e088`) — all three steps
+landed in 76 seconds, and the release that decided NOT to build an index.** The journal
+fold was spilling to disk on every health poll at the 4 MB `work_mem` default; both
+statements running `SESSION_DAYS_CTE` now execute in a transaction with
+`SET LOCAL work_mem = '64MB'` (`journal::JOURNAL_FOLD_WORK_MEM`).
+
+- Hub: `/v1/healthz` `.version` `0.21.0` → `0.21.1`, `.db` `up` throughout; first 200
+  **2 s** after `bootout`+`bootstrap`; no migration in this release. Asset
+  `cchv-hub-0.21.1-aarch64-apple-darwin`, sha256 `3bb5bcf6…3603a27b`, agreeing **three**
+  ways — the `.sha256` sidecar, the GitHub API `digest`, and a local `shasum` of the
+  download. Backup `staging/cchv-hub-preswap-20260823-1729`.
+- Webapp: entry `assets/archive-BIvVjlna.js`, marker `2× cchv-v0.21.1`. Verified further
+  by fetching the chunk **from the running hub** and `cmp`-ing it against the release
+  asset — byte-identical. No frontend source changed; it shipped anyway because the
+  bundle embeds the version the header chip renders (the v0.16.0 rule).
+- Distiller: reinstalled, installed blob `134f16ad…` == `git rev-parse
+  cchv-v0.21.1:scripts/cchv-distill.py`. Version-only bump, as every release makes.
+
+**The verification was the temp-write delta, not the latency, and that choice is the
+transferable part.** Wall-clock on this endpoint is confounded by cache state — during
+this change's own measurement a `work_mem` sweep run in ascending order read as a clean
+dose-response and was entirely the buffer cache warming (`shared read` 438,292 → 1,817
+across three arms). So the relay named a check that cache cannot explain, measured as a
+`pg_stat_database` delta around one request:
+
+| per one `GET /v1/healthz/journal` | before | after |
+|---|---|---|
+| `temp_files` | **3** | **0** |
+| `temp_bytes` | **104,792,064 (99.9 MiB)** | **0** |
+| elapsed | 3.34 / 3.33 s | 2.38 / 2.23 s |
+
+Both sides reproduced across two consecutive runs. ~29 GB/day of temp write I/O on pg1,
+at the monitor's 300 s cadence, to answer a check returning zero pending groups — gone.
+
+- Predicted and held, again: **no behavioural non-200 and no verdict change.** This
+  release moved no health predicate, the relay said so explicitly, and
+  `/v1/healthz/journal` stayed `200 ok / 0 groups` on both sides. Stating the *expected
+  post-swap body* — not merely "it will answer" — is what stopped v0.20.0's mid-deploy
+  ambiguity from recurring.
+- **The covering index of #36 was measured and declined, not deferred.** Full reasoning
+  in §1 *pg1 journal-fold covering index*; the short form is that `work_mem` collected
+  almost the same win for free, leaving the index worth ~5 % against ~400 MB, a production
+  DDL and permanent write amplification. **Measure the lever you control before asking
+  another team for a production window** — the task list had those two steps in the
+  opposite order, and running them as written would have spent infra's window to buy 5 %.
+- `--host m4m` implies `--class auto` (`relay-send` rejects the combination otherwise),
+  so this went to m4m's always-on supervisor and came back as three `CHECKPOINT` events —
+  one per irreversible step — which is exactly what makes a killed handler recoverable.
+
 **2026-08-21, `cchv-v0.20.1` → `cchv-v0.21.0` (release `9b0633cb`) — all three
 steps landed and verified.** The release whose whole purpose was to make this
 section's central question answerable: *which build is running?*
