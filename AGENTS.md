@@ -201,6 +201,17 @@ release and the query-floor measurements).
   `n_ins_since_vacuum` and `relallvisible`/`relpages` with any index timing, and say which
   way the current position biases it. Related: a threshold is not a schedule —
   `last_autovacuum` being old is not a backlog when no trigger has been crossed.
+- **A phase read through a poller is the POLLER's phase until you sample faster than the
+  event.** The hourly `/v1/healthz/journal` excursion was called "a recurring `:05`/`:10`
+  pair" for two rounds because Gatus polls every 300 s. Sampled at 150 s it is one event
+  spanning **`:04`–`:12`** whose internal peak moves hour to hour — `:05` one hour, `:09`
+  the next — because pg1 fires three to four WAL checkpoints in that window and the biggest
+  flush is not always the first. The "pair" was two polls of one event, and the phase was
+  an artifact of the instrument. Nyquist, and it bites hardest where the reading looks
+  cleanest: a stable-looking `:05` repeated across many hours reads as a *strong* signal.
+  Before keying anything to a minute — an alert window, a maintenance slot, a sampling
+  schedule chosen to dodge the event — sample at least twice as fast as the thing you are
+  timing and check the width. Evidence: `docs/2026-08-23-journal-hourly-excursion.md`.
 - **Say WHO took a reading, not just that it exists — and never inherit a "broken" claim
   without one.** Two instances, both caught by a successor rather than by the author:
   "verified from two vantage points" was one vantage (loopback on m4m) plus infra's
