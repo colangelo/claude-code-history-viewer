@@ -63,6 +63,34 @@ distiller half is still the old copy. The blob id is the exact identity: it equa
 matches, so a reader with the repo can name the commit the copy came from — or show that
 it matches none.
 
+The endpoint is monitor-polled, so its cost is part of its contract. Evaluating it SHALL
+NOT require reading message payloads: the fold it runs needs only each message's timestamp,
+session and arrival time, and it SHALL obtain those three without reading the content or raw
+payload of the messages they belong to, and without spilling its aggregate to disk. Stated
+this way — a bound on what the check is allowed to touch — rather than as a wall-clock
+number, which would be a property of whichever machine happened to run it.
+
+**AMENDED 2026-08-23, and the previous wording is worth recording because it was wrong in an
+instructive way.** This sentence used to require "an access path that supplies those three
+*without visiting the rows they belong to*" — which is a covering index and nothing else. It
+therefore mandated a mechanism, while the scenario below that actually tests it asks only for
+"without reading that message's content or raw payload", which a sequential scan already
+satisfies (`content` is TOASTed and is never detoasted by a fold that does not select it).
+Prose and scenario disagreed, and only the prose demanded the index. Measurement then showed
+the mandated mechanism was not worth its price: against `work_mem` sized past the spill knee
+the covering index buys ~5 % of the endpoint for ~400 MB, a production DDL and permanent write
+amplification (#36 comments 7505/7511). The bound is now stated as the two things measured to
+matter — do not read payloads, do not spill — which is what the failure this requirement
+prevents was actually made of. The failure this prevents is concrete: reading the
+payload columns to answer a question that does not use them means ~1.3 GB of heap for a
+7-day window, which has already exceeded a proxy timeout and answered 502, and a health
+check that flaps is worse than one that is slow because the flap is what gets investigated.
+
+That access path MUST NOT change which groups the fold sees. In particular it MUST NOT be
+restricted to messages carrying conversation content: a logical day composed entirely of
+agent state records is still a day the distiller must consider and dispose of, and making
+it invisible here would silently withdraw its `skip` row.
+
 Tick age SHALL NOT contribute to the verdict unless a `max_tick_age_secs` query
 param is supplied. Absent, tick liveness is reported and never alerts — the host
 running the distiller sleeps many times a day, so any default threshold would be
@@ -157,6 +185,18 @@ error path.
 - **WHEN** the last recorded tick carried no identity fields
 - **THEN** `last_tick_distiller_version` and `last_tick_distiller_blob` are `null`
   while `last_tick_at` and the other tick fields are populated as before
+
+#### Scenario: The check does not read what it does not use
+
+- **WHEN** the staleness evaluation runs over its window
+- **THEN** it obtains each message's timestamp, session and arrival time without reading
+  that message's content or raw payload
+
+#### Scenario: A day of only state records is still evaluated
+
+- **WHEN** a closed logical day's messages are all agent state records with no conversation
+  content
+- **THEN** that day is evaluated exactly as any other — the access path does not hide it
 
 #### Scenario: Invalid parameters
 

@@ -151,6 +151,17 @@ computed group key, so a bounded call does not read the whole archive.
 - **WHEN** the distiller does not run for N days
 - **THEN** all groups from those days are still pending on its next run
 
+The pending list runs the same logical-day fold as the staleness check and is subject to the
+same floor: computing it SHALL NOT require reading message payloads, and whatever access path
+serves it MUST NOT change which groups are returned — a day of nothing but agent
+state records still appears, and still earns its `skip`.
+
+#### Scenario: Pending is computed without reading message payloads
+
+- **WHEN** the pending work list is computed for its window
+- **THEN** it obtains each message's timestamp, session and arrival time without reading that
+  message's content or raw payload, and returns the same groups it would have returned before
+
 ### Requirement: Journal write endpoint
 
 The hub SHALL expose `POST /v1/journal/entries` authenticated by machine token (as
@@ -426,6 +437,7 @@ identity fields SHALL be reported by `GET /v1/healthz/journal`.
 
 - **WHEN** `distiller_blob` is present and is not exactly 40 lowercase hex characters
 - **THEN** the hub returns 400 naming `distiller_blob` and writes nothing
+
 ### Requirement: Identity-scoped journal reads
 
 `GET /v1/journal/entries` and journal search SHALL accept the

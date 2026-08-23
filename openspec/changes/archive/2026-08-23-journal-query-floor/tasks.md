@@ -183,10 +183,10 @@
 > ever needed. See the closing report.
 
 
-- [ ] 5.1 Close #36 with the before/after plans and buffer counts (not "fixed in vX.Y.Z").
+- [x] 5.1 Close #36 with the before/after plans and buffer counts (not "fixed in vX.Y.Z").
       Verify: the issue carries both `EXPLAIN` extracts.
 - [x] 5.2 Record the outcome in `docs/archive/deployment.md` — including, if it happened,
       the planner declining the index, which is the more useful record of the two.
-- [ ] 5.3 Archive this change (`openspec archive`), syncing both deltas into the main specs.
+- [x] 5.3 Archive this change (`openspec archive`), syncing both deltas into the main specs.
       Verify: `openspec validate --specs` passes and `journal-health` carries the
       does-not-read-payloads requirement.
