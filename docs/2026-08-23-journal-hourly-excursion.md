@@ -18,8 +18,9 @@ question is about a phase in the hour.
 | post-swap 15:30–16:15Z | 10 | 2.06–2.52 s | **5.36 s** at 16:05:23Z, 2.87 s at 16:10:21Z |
 
 `cchv-v0.21.1` (the `work_mem` fix, #36) took ~4.5 s off the peak and left the periodic
-component intact. **The post-swap excursion is n=1** — infra says so themselves, and
-every argument below inherits that weakness.
+component intact. **Infra's post-swap excursion is n=1** — they say so themselves, and
+every argument below was written inheriting that weakness. It is no longer the only
+post-swap hour: the 17:05Z reading in *Result* is a second one, taken here.
 
 Worth keeping from infra's account independently of the cause: 15:05:28Z measured
 **9.97 s**, 0.03 s under the 10 s Gatus default retired in `2f23d7f`. The 15 s timeout
@@ -43,8 +44,13 @@ its phase across the hub restart.** The binary swapped between the two series (~
 so every hub-internal timer re-armed at process start and re-phased with it. The excursion
 did not move — still `:05`/`:10` afterwards. Anything anchored to hub process start is
 therefore excluded *whatever its period*, including a hypothetical hourly cache TTL.
-This argument rests on the single post-swap excursion; a second hour of Gatus data either
-confirms it or dissolves it.
+This argument was written resting on infra's single post-swap excursion, asking for a
+second post-swap hour to confirm or dissolve it. **That reading was then taken, below:**
+16:05Z (infra, Gatus path) and 17:05Z (this session, mbm5 path) are two independent
+post-swap hours at the same `:05` phase, so the restart did not re-phase it and the
+class-wide exclusion stands. The two hours are from *different vantage points*, which is
+what the phase argument needs — the same phase seen twice — and not what a magnitude
+comparison would need.
 
 **Exactly one hourly cycle exists in this repo's code**, found by sweeping the crates for
 schedule constants: `sync-daemon/src/config.rs:36`, `default_scan_interval() = 3600` — the
