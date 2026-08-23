@@ -144,6 +144,39 @@ serve-dev: frontend-build
 rust-test:
     cd src-tauri && cargo test -- --test-threads=1
 
+# The ARCHIVE crates (history-core, protocol, hub, sync-daemon) — the exact scope,
+# flags and thread count `archive-tests.yml` uses, so a local green means the same
+# thing CI's green does.
+#
+# `--test-threads=1` is not optional: these share one database, and under default
+# parallelism embed_sweep_test and others fail on each other's rows.
+#
+# TEST_DATABASE_URL defaults to a LOCAL scratch database. It is never pg1 — point
+# it at the live archive and the tests will migrate and write to it.
+#
+# If a journal_day_test refuses to assert ("the page was truncated ... Refusing to
+# assert"), the scratch DB has simply accumulated too many rows across runs — that
+# is the test correctly declining to make a claim it cannot support, not a
+# regression. Run `just archive-test-reset` and re-run. CI never sees it because
+# each run gets a fresh container.
+#
+# Test the archive crates exactly as CI does (shared DB, so --test-threads=1)
+archive-test *ARGS:
+    TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgres://$USER@127.0.0.1:5432/cchv_archive_test}" \
+    cargo test -p history-core -p archive-protocol -p hub -p sync-daemon {{ARGS}} -- --test-threads=1
+
+# CI's clippy scope for the same crates.
+archive-lint:
+    cargo clippy -p history-core -p archive-protocol -p hub -p sync-daemon \
+        --all-targets --all-features -- -D warnings
+
+# Drop and recreate the LOCAL scratch test database. Loopback only, by construction.
+archive-test-reset:
+    psql -h 127.0.0.1 -d postgres -X -q \
+        -c "DROP DATABASE IF EXISTS cchv_archive_test;" \
+        -c "CREATE DATABASE cchv_archive_test OWNER $USER;"
+    @echo "cchv_archive_test recreated (migrations run on the next test spawn)"
+
 # Repair historical journal entries in bounded batches (see docs/2026-08-21-journal-day-bucketing.md)
 journal-backfill FROM="2026-07-04" BATCH="50" MAX="12":
     scripts/journal-backfill.sh {{FROM}} {{BATCH}} {{MAX}}
