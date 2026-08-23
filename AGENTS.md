@@ -201,6 +201,17 @@ release and the query-floor measurements).
   `n_ins_since_vacuum` and `relallvisible`/`relpages` with any index timing, and say which
   way the current position biases it. Related: a threshold is not a schedule —
   `last_autovacuum` being old is not a backlog when no trigger has been crossed.
+- **Say WHO took a reading, not just that it exists — and never inherit a "broken" claim
+  without one.** Two instances, both caught by a successor rather than by the author:
+  "verified from two vantage points" was one vantage (loopback on m4m) plus infra's
+  reported Gatus reading, which a successor on the same box cannot reproduce; and
+  `ac/infra#98` was named as a live cause of message loss all day by a session that **sent
+  nothing over the relay** and so had no first-hand evidence either way — infra had in fact
+  proved the 401 fixed at 2026-08-21T15:03:52Z in a message that sat undelivered on our own
+  `interactive` queue. Either take the reading or label it inherited and name who last
+  measured it. Also from that message: `auto` is a **shared** wildcard queue
+  (`relay.msg.*.auto`), not per-host routing, so one green relay smoke test proves nothing
+  about the other Mac.
 - **The release ceremony's own guards are in § Release Process and they are load-bearing**
   — `gh run list --commit <tag-sha>` across all workflows (not just `server-release.yml`),
   and a publication proof that reads `rc` by `case` because `--is-ancestor` exits 1 for

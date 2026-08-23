@@ -23,7 +23,7 @@ cross-cutting layer**: what binds afterwards, and what is open.
 | Distiller announces `DISTILL_VERSION` + its own git blob id (#40) | live log line `cchv-distill 0.21.0 blob=a44b4d32bb99 mode=forward`; blob = `git rev-parse cchv-v0.21.0:scripts/cchv-distill.py` |
 | Both halves readable in one GET | `/v1/healthz/journal` → `hub_version` = `last_tick_distiller_version` = `0.21.0` after the 14:57:30Z tick |
 | `sync-version`'s fifth target | marker validated **before** any write, so a missing marker is a refusal, not a half-synced bump |
-| Deployed to m4m | three steps by infra; confirmed independently from Gatus on `mon` |
+| Deployed to m4m | three steps by infra; **infra reported** all four `cchv-*` Gatus checks green from `mon` across the swap window — that reading is theirs, not one this session ran (see *Learnings* 6) |
 | `journal-query-floor` specced (#36, #41) | 18 tasks; index build deliberately **not** run — a production write |
 | #30 re-investigated | 0.48 % duplication, not 23×; it collapses into #41 |
 | 3 openspec changes archived | `distiller-tick-observability`, `build-identity-surfaces`, `hub-mirror-refresh-timeout` |
@@ -81,6 +81,29 @@ cross-cutting layer**: what binds afterwards, and what is open.
    BSD-grep rule on a line-wrapped marker, and "a sibling session restructured it" for a
    file they had truncated themselves. *Rule:* a catalogue tells you what a symptom **could**
    be; only a reading tells you what it **is**.
+
+6. **"Verified from two vantage points" was one vantage point plus a report.** Every probe
+   this session ran was on m4m against `http://127.0.0.1:8790` — loopback, the hub's own
+   host. The second vantage (Gatus on `mon`) was **infra's reading, relayed to me**; I
+   never ran a command against it, and the handover's phrasing implied I had one. A
+   successor on the same machine cannot reproduce it, which is exactly how the successor
+   caught it. *Rule:* say **who took a reading**, not just that it exists — "confirmed from
+   two vantage points" and "someone told me the second one" are different claims, and only
+   the first survives being handed on. Same family as rule 1: it is a claim that cannot
+   fail for the person repeating it.
+
+7. **A "broken" claim inherited across a handover needs its own reading, or it becomes
+   folklore.** The handover named `ac/infra#98` (the relay supervisor 401) as a live cause
+   of today's message loss and justified using Channel 0 all day on it. But **this session
+   sent nothing over the relay** — so it never tested the mechanism and has no first-hand
+   evidence either way; the claim was inherited from the morning handover and repeated by
+   infra mid-thread. Meanwhile infra proved the 401 fixed at **2026-08-21T15:03:52Z**, in a
+   message that sat **undelivered on our own `interactive` queue** and was found by the
+   successor, not by me. Related correction from that message: `auto` is a **shared**
+   wildcard queue (`auto-workers`, `relay.msg.*.auto`), not per-host routing, so a single
+   green relay smoke test samples a coin flip and proves nothing about the other Mac.
+   *Rule:* before repeating "X is broken" in a handover, either take the reading or label
+   it as inherited and name who last measured it.
 
 ## Open at handover
 
