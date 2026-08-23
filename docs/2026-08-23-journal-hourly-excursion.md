@@ -5,12 +5,14 @@ the cause to this side of the line (thread `88e1fea6`, after the `cchv-v0.21.1` 
 This note records **what has been ruled out and how**, so the next reader starts from
 the surviving candidates rather than re-walking the whole surface.
 
-**The mechanism is now named** — an hourly WAL-checkpoint storm on pg1 that flushes up to
-47 % of the instance-wide buffer cache in ~84 s, measured by infra from a week of
-`log_checkpoints` output (*The cause*, below). The **attribution** — which client's write
-burst triggers it — is still a lead, not a diagnosis. Everything above that section is the
-elimination work that got there, and it is kept because the eliminations are what make the
-answer trustworthy, not because the question is still open.
+**The thread is closed.** The mechanism is an hourly WAL-checkpoint storm on pg1 that
+flushes up to 47 % of the instance-wide buffer cache in ~84 s (*The cause*, below), and the
+producer is named: the `direction` database's client rewrites its whole document corpus
+once an hour (*Attribution*, below — infra's live capture, thread `b1d5226a`). Both
+falsifiers were answered, one on each side of the fence. Everything above those sections is
+the elimination work that got there, and it is kept because the eliminations are what make
+the answer trustworthy, not because the question is still open. **What binds now is in
+*What cchv should and should not do about it*, and it is mostly "do not act".**
 
 **Read the title as historical.** `:05`/`:10` is where *Gatus's poll phase* happened to
 catch it. The event is a **`:04`–`:12` window** whose internal peak moves hour to hour;
@@ -189,7 +191,7 @@ pg1.
 - If the mechanism is eviction: `pg_stat_database` `blks_hit`/`blks_read` for the archive
   DB, sampled at `:04` and `:20`, should show the hit ratio dip at `:05` and recover. Flat
   means eviction is wrong and the VM-decay story (rule 3) is the next one to test.
-  **Still open, and now a prediction with a named cause rather than a guess.**
+  **Answered — the dip is measured, 99.7 % → 50.3 %. See *Falsifier 2 — CONFIRMED* below.**
 
 Direct confirmation from this side would need pg1 credentials: `kv/infra/cchv/pg1` is 403
 for ac's OIDC token, and broadening it is not this session's call. It was not needed:
@@ -200,7 +202,8 @@ infra took the readings on their own side of the fence, which is where they belo
 Infra answered falsifier 1 from a week of `log_checkpoints` output already on disk in
 `/var/log/postgresql` — no new instrumentation. **Relayed, not taken here**, per the same
 rule that labels the Gatus numbers above; infra's write-up is
-`docs/2026-08-23-pg1-hourly-wal-checkpoint-storm.md` (infra `0670ced`).
+`docs/2026-08-23-pg1-hourly-wal-checkpoint-storm.md` (infra `0670ced` for the storm,
+`76cf054` for the attribution and our falsifier 2).
 
 Every hour, three to four **WAL-triggered** checkpoints (`checkpoint starting: wal` — the
 `max_wal_size` threshold, not `checkpoint_timeout`) fire in a five-minute window. First one
@@ -309,19 +312,66 @@ Everything genuinely scheduled was enumerated and is in the wrong phase or the w
 logging `time` not `wal`, vzdump 02:30–03:10, one k8s CronJob daily at 04:00). **So the
 producer is a database *client* writing, not a scheduler firing on pg1.**
 
-### Attribution: infra's lead, and it is explicitly not a diagnosis
+### Attribution — CONFIRMED: `direction` rewrites its whole corpus, hourly
 
-The burst phase is a fingerprint — stable to ±10 s while the producer runs, jumping when it
-restarts. It moved twice on 2026-08-22 (`:51:4x` → `:58:2x` → `:04:3x`), and both moves
-bracket a `direction-*` pod restart; `direction` is the second-largest DB on pg1 and
-`direction-api` carries an in-process scheduler. Infra is capturing per-database
-`pg_stat_database` deltas, `pg_stat_activity` and `pg_waldump` across a live burst to name
-the relation directly. **Two coincident events is a place to look, not a diagnosis** —
-recorded here so the next reader does not promote it to a cause in transit.
+The lead below was a phase coincidence; it is now a live capture. Infra sampled
+`pg_stat_database` and `pg_stat_activity` at 15 s across the 18:04Z burst (thread
+`b1d5226a`, 17:32–18:18Z). **Relayed, not taken here** — pg1 credentials were never needed
+on this side and none were requested. Deltas over 18:02:46Z → 18:09:03Z, whole instance:
 
-That phase history also confirms this repo's class-wide argument from the other side: the
-burst kept its `:04` phase straight through our 15:2xZ binary swap, because the producer is
-not on m4m at all.
+| database | xact | ins | upd | del |
+|---|---|---|---|---|
+| **direction** | **+47,824** | **+561,161** | +47,780 | **+561,201** |
+| cchv_archive | +301 | +6,094 | +625 | +12 |
+| gitea | +1,648 | +48 | +89 | +0 |
+| gatus | +234 | +486 | +222 | +627 |
+| woodpecker / atuin / vikunja / postgres | ≤3 digits | | | |
+
+Inserts ≈ deletes over six minutes, so it is not growth — the document corpus is **torn
+down and rewritten once an hour**. `pg_stat_activity` names it directly: backends from the
+`direction` app's egress node, user `direction`, running `INSERT INTO documents …` and
+`DELETE FROM document_links WHERE source_id = $1` in a `BEGIN`/`COMMIT` loop, 47,824
+transactions, continuously from 18:04:02Z. ~180 GB of WAL a day for a 2.2 GB database,
+~80× amplification, paid by every tenant of the instance.
+
+That also settles the earlier fingerprint argument in both directions: the loop is armed by
+the `direction-api` process, which is why the phase jumped on both of 2026-08-22's pod
+restarts (`:51:4x` → `:58:2x` → `:04:3x`) and did **not** jump on our 15:2xZ binary swap.
+The producer was never on m4m.
+
+The fix — incremental reconcile (upsert + delete-what-vanished) instead of a corpus
+rewrite — is upstream of pg1 and goes to `direction` as a separate thread. Infra owns the
+measurement; the pg1-side knobs are strictly worse. **Nothing here is cchv's to do.**
+
+### Falsifier 2 — CONFIRMED, and the cost lands on our query
+
+The prediction was: if the mechanism is eviction, the archive DB's hit ratio dips at the
+burst and recovers. `cchv_archive` `blks_hit`/`blks_read`, per 15 s slice (infra, same
+capture):
+
+| slice | blks_read | blks_hit | hit ratio |
+|---|---|---|---|
+| 18:00:31Z | +474,655 | +1,450,252 | **75.3 %** ← `:00` fold poll, quiet instance |
+| 18:01:01Z | +137 | +44,416 | 99.7 % |
+| 18:02:46Z | +0 | +1,095 | 100 % |
+| 18:05:32Z | +979,363 | +989,994 | **50.3 %** ← `:05` fold poll, mid-burst |
+| 18:06:02Z | +385,134 | +914,703 | 70.4 % |
+| 18:09:03Z | +383,456 | +915,771 | 70.5 % |
+
+Baseline slices are 99.7–100 %; through the burst the archive DB runs 50–70 %. Sharper than
+the dip: **the same fold read 474,655 blocks from outside `shared_buffers` at `:00` and
+979,363 at `:05`** — same hour, ~5 min apart, a little over twice as many. With 1.5 GB of
+`shared_buffers` for the whole instance and `direction` churning half a million rows through
+it hourly (this hour's checkpoints wrote 29.7 %, 34.8 % and 51.9 % of it), our working set
+is simply not resident when the `:05` poll arrives. **So eviction is measured, not
+inferred.**
+
+Two honesty notes, neither of which moves the conclusion. It does **not** exclude the
+VM-decay alternative (rule 3) — a checkpoint storm and an insert-triggered VACUUM on
+`messages` can both be downstream of one write burst; the excursion simply no longer needs
+it. And two independent pollers were live in that hour (Gatus at 300 s, our probe 2 at
+150 s), so a 15 s slice can contain more than one fold: the hit-ratio collapse is robust to
+that, the exact 2× block-read factor less so.
 
 ## What cchv should and should not do about it
 
@@ -332,13 +382,19 @@ not on m4m at all.
   bought headroom against a driver we do not control — pre-swap the excursion reached
   9.97 s, 0.03 s under the old 10 s default. Do not retune that timeout down on the strength
   of the post-swap numbers.
-- **Open question, not a decision to take unattended:** whether cchv should insulate the
-  fold from a cold cache at all (the index declined in #36, a materialised day fold, or a
-  smaller working set), versus whether the answer is on pg1 (a larger `shared_buffers`, a
-  larger `max_wal_size` to spread the flush). The second is infra's call and needs pg1's RAM
-  figure, which nobody here has read — so it is a question to hand over, not a
-  recommendation to make.
-- **Falsifier 2 is unchanged and still worth taking**, now as a prediction with a cause: the
-  `blks_hit` dip should be *findable* at `:05`. The VM-decay story (rule 3) is not excluded
-  by any of this — a checkpoint storm and an insert-triggered VACUUM on `messages` can both
-  be downstream of one write burst.
+- **Do not tune the fold against this driver.** Insulating the fold from a cold cache (the
+  index declined in #36, a materialised day fold, a smaller working set) is still a
+  legitimate *engineering* question, but it is no longer motivated by this excursion: the
+  excursion will move or vanish when `direction` is fixed. Do not let a tenant-noise artefact
+  justify work on our query. The pg1-side knobs (`shared_buffers`, `max_wal_size`) are
+  infra's call and they have already ruled them worse than the upstream fix.
+- **If the peak changes magnitude over the coming days, that is `direction` changing, not a
+  cchv regression.** Read it that way before opening anything.
+- **Leaving the `:05` poll in place is the informative choice.** Dropping it would make the
+  excursion disappear from our series honestly, but right now the fold is the only
+  instrument on that box that notices the storm at all.
+- **Falsifier 2 is answered — see *Falsifier 2 — CONFIRMED* above.** Both falsifiers this
+  document handed back came home: one from a log already on disk, one from a live capture,
+  neither needing a credential this side did not have. That is the pattern worth keeping —
+  hand back a falsifier with the reading that would kill it, and let the side that owns the
+  fence take it.
