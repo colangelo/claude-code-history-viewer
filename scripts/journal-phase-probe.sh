@@ -8,6 +8,18 @@
 # day). When the excursion appears at a new minute, re-run this rather than
 # re-deriving it, and set DENSE_FROM/DENSE_TO to bracket the new phase.
 #
+# THE PHASE MOVED ON 2026-08-24T11:20Z AND WILL MOVE AGAIN. A restart of the producing
+# client is not the only thing that re-phases the burst: so does any change to the
+# TRIGGER. max_wal_size 4 GB -> 8 GB doubled the WAL distance a forced checkpoint has to
+# accumulate, so it now takes twice as long to arm -- the first post-change forced
+# checkpoint ran :13:15 -> :17:04, outside the old :04-:12 window entirely (infra,
+# thread 8d5eb1ba). A dense window still bracketing :04-:12 would have sampled a quiet
+# stretch and read as "the storm stopped".
+# So: DENSE_FROM/DENSE_TO are a CACHED DERIVATION, not a property of the system. Unless
+# you have a current checkpoint-log phase to bracket, run dense across the whole hour --
+#   DENSE_FROM=0 DENSE_TO=59 scripts/journal-phase-probe.sh 90
+# -- and derive the phase from the run instead of assuming it.
+#
 #   control   /v1/healthz          -> SELECT 1 on pg1 (health.rs). Same network path,
 #                                     same TLS termination, same m4m process, same
 #                                     connection pool, none of the day-fold.
@@ -31,6 +43,12 @@
 #   to read LOWER peaks than Gatus for exactly that reason (4.15 s here vs 5.36 s
 #   there, same phase, same day) -- a floor, not a discrepancy to chase.
 #
+#   That cuts against the full-hour default below, and knowingly. Dense-everywhere runs
+#   the fold every 150 s off-phase too (it was 600 s), so it warms the cache more and
+#   reads an even lower floor -- and an off-phase sample is no longer a cold-cache
+#   control. Accept that while you are LOCATING an unknown phase; once you have one,
+#   narrow the window back so the off-phase samples mean something again.
+#
 # Usage:  scripts/journal-phase-probe.sh [minutes]      (default 60)
 # Env:    HUB, OUT, DENSE_FROM, DENSE_TO
 # Output: TSV to $OUT (default /tmp/cchv-journal-phase-probe.tsv)
@@ -40,8 +58,13 @@ set -u
 HUB="${HUB:-https://m4m.cat-bluegill.ts.net:8788}"
 OUT="${OUT:-/tmp/cchv-journal-phase-probe.tsv}"
 MINUTES="${1:-60}"
-DENSE_FROM="${DENSE_FROM:-48}"   # minute-of-hour: dense sampling wraps from here...
-DENSE_TO="${DENSE_TO:-22}"       # ...through here, to bracket the :04-:12 burst
+DENSE_FROM="${DENSE_FROM:-0}"    # minute-of-hour: dense sampling wraps from here...
+DENSE_TO="${DENSE_TO:-59}"       # ...through here. DEFAULT IS THE WHOLE HOUR since
+                                 # 2026-08-24: the burst phase moved off :04-:12 to
+                                 # :13-:17 when max_wal_size doubled, and a stale window
+                                 # samples the quiet stretch and reads as "no storm".
+                                 # Narrow it (e.g. 48/22 for the old phase) only against
+                                 # a phase you have just derived.
 
 END=$(( $(date -u +%s) + MINUTES * 60 ))
 

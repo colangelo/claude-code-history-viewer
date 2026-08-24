@@ -19,6 +19,13 @@ catch it. The event is a **`:04`–`:12` window** whose internal peak moves hour
 two hours measured here peaked at `:05` and at `:09`. Anything keyed to `:05`
 specifically will read as intermittent — see *Prospective test*.
 
+**And as of 2026-08-24T11:20Z the window is historical too.** `max_wal_size` 4 GB → 8 GB
+doubled the WAL distance each forced checkpoint has to accumulate, so it takes twice as long
+to arm: the first post-change hour's forced checkpoint started at **`:13:15`** and completed
+**`:17:04`**, outside `:04`–`:12` entirely. **Anything still keyed to `:04`–`:12` now reads
+as "the storm stopped" and means nothing by it** — including a probe whose dense window
+brackets the old phase. See *Post-change reading*, below.
+
 ## The reading — infra's, taken on the instrument that pages
 
 Gatus, `mon` → m4m, 300 s cadence. **Nobody on this side reproduced these numbers**;
@@ -227,9 +234,21 @@ five-minute window, ~150× the baseline rate; the timed checkpoints between burs
 > different question: `setting=196608`, `unit=8kB` concatenates to `1966088kB`, read as
 > 1.875 GB. The real value is `196608 × 8 kB = 1536 MB`. **Every 8kB-unit setting relayed on
 > that thread is wrong the same way** — `effective_cache_size` is **4096 MB** (not
-> `5242888kB`) and `wal_buffers` is **16 MB** (not `20488kB`). Settings whose unit is
-> `MB`/`kB`/`s` were unaffected because the concatenation happened to be harmless, so
-> `max_wal_size 4096MB`, `min_wal_size 80MB`, `work_mem 4096kB`,
+> `5242888kB`) and `wal_buffers` is **16 MB** (not `20488kB`).
+>
+> **The blast radius has a sharp edge, and it is the reason this one landed** (infra,
+> 2026-08-24, thread `8d5eb1ba`): the probe corrupted **every 8kB-unit row and no others**,
+> and those three rows — `shared_buffers`, `effective_cache_size`, `wal_buffers` — are exactly
+> the ones whose corrupted form still reads as an ordinary kB figure. So it was **wrong for
+> every row it touched and visibly wrong for none**. A per-row plausibility check cannot find
+> this class; only re-deriving from `setting` and `unit` can. (Infra also reconstructed a
+> *cause* for the 1.875 GB before finding the real one — "25 % of a 7.5 GiB VM, read as a
+> measurement" — which fits to within rounding. A coincidence that good is what makes a wrong
+> number survive review.)
+>
+> The `MB`/`kB`/`s` rows were unaffected — the concatenation happened to reproduce their own
+> true strings — so `max_wal_size 4096MB` (the pre-change value; raised to 8 GB later the
+> same day — *The lever*), `min_wal_size 80MB`, `work_mem 4096kB`,
 > `maintenance_work_mem 65536kB`, `checkpoint_timeout 900s` and
 > `checkpoint_completion_target 0.9` all stand, as do the checkpoint counters below (a
 > different query).
@@ -304,6 +323,68 @@ just got quieter. If the phase probe is re-run, state the prediction first, whic
 the `:04`–`:12` excursions become **less frequent** (fewer size-forced checkpoints) rather
 than smaller when they do occur. If they vanish entirely, that is the coupling confirmed a
 third way. Give the new setting a few hours before reading anything into either.
+
+### Post-change reading — 4 forced checkpoints/hour became 1, and **the phase moved**
+
+Infra took the first-hour reading at the **checkpoint layer**, not through Gatus, and handed
+it over on thread `8d5eb1ba` (measured 12:17–12:27Z, infra `b8ba11a`). **Relayed, not taken
+here** — same fence as every other pg1 number in this document.
+
+| | pre-change (4 GB) | post-change (8 GB) |
+|---|---|---|
+| forced checkpoints | **4 per hour, every hour of the day** | **1** (`num_requested` 6,761 → 6,762 across the hour) |
+| distance per forced checkpoint | 2,196,929 kB | **4,405,533 kB — exactly double** |
+| phase | first one of the hour at `:04:33`–`:04:48` | started **`:13:15`**, completed **`:17:04`** |
+
+The doubling of the distance *is* the mechanism: the trigger is a WAL distance derived from
+`max_wal_size`. So infra's prediction holds in the form it was recorded above — **less
+frequent, and bigger; not smaller.**
+
+Three things that bind:
+
+- **The phase moved, because accumulating twice the distance takes twice as long.** The
+  forced checkpoint no longer lands in `:04`–`:12`. Every window-keyed artefact on either
+  side is now wrong in the *reassuring* direction: it sees nothing and reads as "the storm
+  stopped". Infra has flagged the grep in their own reproduce block in place. On this side
+  the affected knob is `scripts/journal-phase-probe.sh`'s `DENSE_FROM`/`DENSE_TO` — the
+  header there now records the new phase, and running the probe **dense across the full
+  hour** (`DENSE_FROM=0 DENSE_TO=59`) is the safe default while the phase is still settling.
+- **The workload did not change — pg1's response to it did.** Ten minutes after that
+  checkpoint completed, 4,057 MB of WAL had re-accumulated without tripping the next trigger,
+  so the hour still turned over ~8.5 GB, inside the 7–9 GB/hour band measured at 4 GB.
+  `direction-prod` is still v0.99.1.
+- **4 → 1 therefore proves *nothing* about `direction`'s fix.** It is precisely what doubling
+  the WAL trigger does on its own. **The surviving discriminator is unchanged: zero forced
+  checkpoints across a non-first post-deploy hour.** Anyone reading a quiet checkpoint log as
+  evidence that the corpus rewrite was fixed is reading the lever, not the driver.
+
+This is the *"a phase read through a poller is the poller's phase"* rule with a second
+edge on it: **a phase is also a property of the driver's current trigger, so changing the
+trigger moves the phase.** A window derived under one setting has no authority under the
+next one, and it fails silently — the check still runs, still passes, and now measures
+nothing.
+
+#### The Gatus day is infra's to take — and it has four hours that must be excluded
+
+Infra will run the clean-day Gatus series and hand it over rather than have this side
+duplicate it. Not a verdict yet, and infra say so themselves: the 12:00Z hour peaked at
+6.126 s at 12:14:17Z (inside the *new* checkpoint window) against 4.684 s the hour before,
+and 5.808 s at 12:04:17Z where `direction`'s job starts — but that is **300 s sampling
+against a ~4 minute excursion, one sample per event**, and the quiet baseline drifted
+3.089–4.634 s on its own across the two preceding hours. Exactly the Nyquist problem this
+document already carries; do not read a verdict out of it.
+
+**The caveat that binds any reader of that series: `03:00–07:00Z` on 2026-08-24 is all
+`15.001 s` — the check's own timeout**, from a hub-side condition unrelated to the
+checkpoint storm. A day-long aggregate that includes those four hours measures the timeout,
+not the fold. Any clean-day number infra sends will name the hours it excludes.
+
+**That timeout window is *ours*, and it is not explained.** It is the cchv hub, not pg1. It
+is not live — a single probe from mbm5 at 12:33Z read `/v1/healthz/journal` **200 in 2.286 s**
+and `/v1/healthz` **200 in 0.086 s**, ordinary baseline. So this is a four-hour historical
+excursion of a different shape (saturating a 15 s ceiling, not a ~4 minute checkpoint dip),
+and nothing here has diagnosed it. Do not fold it into the storm story; it is a separate
+open question, and the first thing it needs is infra's per-check series for those hours.
 
 ### The same-hour interlock — two instruments, neither aware of the other
 
@@ -486,7 +567,19 @@ that, the exact 2× block-read factor less so.
   above), so the ruling is no longer the thing to wait for. What replaces it is weaker and
   empirical: the driver just got quieter, so **a few hours of post-change readings should
   land before anything is specced against the old behaviour** — the size of the problem
-  insulation would solve is exactly what just changed.
+  insulation would solve is exactly what just changed. **First hour is in** (*Post-change
+  reading*, above): forced checkpoints 4/hour → 1, each twice as big, phase moved to
+  `:13`–`:17`. That is the checkpoint layer; the fold-latency half is the clean-day Gatus
+  series infra is taking.
+- **A window-keyed check is now a check that cannot fail.** `:04`–`:12` was derived under
+  `max_wal_size = 4 GB` and the trigger moved with the setting. Before trusting any probe,
+  grep or alert window in this document, confirm it was re-derived after 2026-08-24T11:20Z —
+  otherwise its silence is an artefact. Repo rule it instantiates: *name the reading that
+  would make it FAIL*.
+- **The `03:00–07:00Z` 15.001 s block on 2026-08-24 is a hub-side open question, not part of
+  this thread.** Four hours of the Gatus check hitting its own timeout, on our side of the
+  fence, currently not reproducing (2.286 s at 12:33Z). It must be excluded from any
+  aggregate of that day, and it deserves its own look — see *The Gatus day*, above.
 - **The pg1-side knobs are not symmetric, and the earlier "both worse than the upstream fix"
   is superseded.** `max_wal_size` 4 GB → 8 GB was infra's *cheap lever* and is **applied**;
   `shared_buffers` is the one they would not take. Detail and numbers: *The lever*, above.

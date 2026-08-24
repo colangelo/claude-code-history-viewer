@@ -220,6 +220,14 @@ release and the query-floor measurements).
   Before keying anything to a minute — an alert window, a maintenance slot, a sampling
   schedule chosen to dodge the event — sample at least twice as fast as the thing you are
   timing and check the width. Evidence: `docs/2026-08-23-journal-hourly-excursion.md`.
+  **And a phase is a property of the driver's current TRIGGER, so changing the trigger moves
+  it.** `max_wal_size` 4 GB → 8 GB (2026-08-24T11:20Z) doubled the WAL distance a forced
+  checkpoint must accumulate, so it takes twice as long to arm: the window went from
+  `:04`–`:12` to a single checkpoint at `:13:15`–`:17:04`. Every window-keyed grep, probe
+  window and alert on both sides then failed in the *reassuring* direction — still running,
+  still passing, sampling a quiet stretch and reading as "the storm stopped". A window is a
+  cached derivation; re-derive it whenever the thing that triggers the event changes, and
+  treat a fixed window that suddenly goes quiet as unverified rather than as good news.
 - **Say WHO took a reading, not just that it exists — and never inherit a "broken" claim
   without one.** Two instances, both caught by a successor rather than by the author:
   "verified from two vantage points" was one vantage (loopback on m4m) plus infra's
@@ -243,7 +251,12 @@ release and the query-floor measurements).
   "their reading is sound". Arithmetic we performed outranks a transcription we did not see
   the query for. Read an `8kB`-unit setting as
   `pg_size_pretty(setting::bigint * 8192)`, and when a correction contradicts something
-  *derived*, ask for the query before rewriting the document.
+  *derived*, ask for the query before rewriting the document. **Blast radius, since it is
+  the reason this one survived review** (infra, 2026-08-24): that probe corrupted every
+  `8kB`-unit row and no others — `shared_buffers`, `effective_cache_size`, `wal_buffers` —
+  and those are exactly the rows whose corrupted form still reads as an ordinary kB figure,
+  so it was **wrong for every row it touched and visibly wrong for none**. Per-row
+  plausibility cannot catch that class; only re-deriving from `setting` and `unit` can.
 - **The release ceremony's own guards are in § Release Process and they are load-bearing**
   — `gh run list --commit <tag-sha>` across all workflows (not just `server-release.yml`),
   and a publication proof that reads `rc` by `case` because `--is-ancestor` exits 1 for
