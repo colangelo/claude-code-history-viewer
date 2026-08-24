@@ -1420,14 +1420,34 @@ Post-swap verification (no restart involved, so all of it is client-visible):
      of the fix.
 - a string unique to the new release is present (e.g. a new i18n key in
   `assets/i18n-en-<hash>.js`)
-- `/v1/healthz` 200, `/v1/healthz/ingest?exclude=ac-mbp` 200, and the HTTPS
-  front (`:8788`) 200 — **the `?exclude=` is not optional.** `ac-mbp` (the
-  decommissioning Intel laptop) has a permanently stale ingest heartbeat
-  (`last_seen` 2026-07-06), so the **bare** `/v1/healthz/ingest` is a standing
-  503 today and every day. That is not an outage and must never roll a deploy
-  back. The excluded host stays observable (`excluded:true`) but cannot flip the
-  verdict; this is the same form the Gatus `cchv-ingest` check has used since
-  hub `36870b4`.
+- `/v1/healthz` 200 and the HTTPS front (`:8788`) 200.
+- `/v1/healthz/ingest?exclude=ac-mbp` **answers with a well-formed body** — read
+  the body, not the status code. `ac-mbp` (the decommissioning Intel laptop) has
+  a permanently stale heartbeat (`last_seen` 2026-07-06), so the **bare**
+  `/v1/healthz/ingest` is a standing 503 today and every day; the `?exclude=` is
+  still not optional. But **the excluded form is no longer a green/red gate
+  either**, and reading it as one will roll back a healthy deploy:
+  - The endpoint's *default* threshold is `stale_after_secs=7200` (2 h,
+    `crates/hub/src/health.rs::DEFAULT_STALE_AFTER_SECS`) and this query scopes
+    to *both* live Macs. `ac-mbm5` is a laptop that sleeps, so a 503 here is the
+    ordinary state whenever it has been shut for two hours. **Measured on m4m
+    2026-08-24T11:0xZ: this exact URL returned 503** — `m4m.local` fresh
+    (`stale:false`), `ac-mbm5.local` `last_seen 08:01Z` ≈ 3.0 h → `stale:true`,
+    `ac-mbp.local` `excluded:true`. Nothing was wrong with the hub.
+  - **It is no longer "the same query Gatus uses"** (infra `39d277a`,
+    2026-08-24). The single `cchv-ingest` check is gone, split into
+    `cchv-ingest-m4m` (`?exclude=ac-mbp,ac-mbm5`) and `cchv-ingest-mbm5`
+    (`?exclude=ac-mbp,m4m`), **both at `stale_after_secs=129600` (36 h)** —
+    `exclude` parses a set while `stale_after_secs` is global, which is what
+    makes per-machine thresholds possible with no hub change. So this probe is
+    now strictly *stricter* than Gatus (2 h vs 36 h, joint vs scoped): it going
+    red does **not** imply Gatus will follow, and a deploy must never be rolled
+    back on it.
+  - What the probe is still good for after a swap: the route exists, the body
+    parses, `machines[]` carries every expected host, and `m4m.local` — the box
+    the hub runs on, the one that is genuinely always ingesting — is
+    `stale:false`. Judge on that, or pass `&stale_after_secs=129600` to ask the
+    question Gatus actually asks.
 - `/v1/healthz/journal` present (200 or a *legitimate* 503 — a real undrained
   in-window day; check the body's `groups`). A 404 here means the deployed
   binary predates `distiller-self-healing` (cchv-v0.13.0) — the swap didn't take.
@@ -2668,7 +2688,9 @@ equivalently.
   never-auto-distilled historical pending groups that would otherwise pin it
   red forever). This catches *all* stall modes — including runs that succeed but
   distill nothing (the DST-race bug) — which a distiller-side dead-man ping
-  cannot. Relay a `cchv-journal` Gatus check to infra alongside `cchv-ingest`.
+  cannot. Relay a `cchv-journal` Gatus check to infra alongside the ingest ones.
+  (Those are `cchv-ingest-m4m` and `cchv-ingest-mbm5` since infra `39d277a`,
+  2026-08-24 — the single `cchv-ingest` no longer exists; see §2c.)
 
   **Two things the 503 does not tell you, and how to read it anyway.**
 
