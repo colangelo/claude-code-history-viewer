@@ -290,6 +290,10 @@ pg_wal on disk         4.1 GB             -> at the ceiling
 checkpoint_timeout     900 s              checkpoint_completion_target 0.9
 ```
 
+**Both WAL figures are pre-change.** After the lever, `max_wal_size` is 8 GB and pg_wal is
+**7.6 GB** — still "at the ceiling", because the ceiling is what the recycle pool is sized
+against. Same ratio, double the disk: *The disk cost*, below.
+
 `num_requested` is the counter for checkpoints triggered by hitting `max_wal_size`, and it is
 **23 % of all checkpoints on the instance**. So the burst is not a coincidence of the
 15-minute timer at all: on roughly a quarter of cycles `direction`'s rewrite fills 4 GB of
@@ -308,7 +312,9 @@ There is no coincidence: the timer is not what fires.
 - **Doubling `max_wal_size` 4 GB → 8 GB was the cheap lever, and ac approved it.** It converts
   size-forced checkpoints back into timed ones, which *do* get spread by
   `completion_target 0.9`. `/var/lib/postgresql` is 47 GB with 27 GB free (40 % used), so the
-  4 GB of headroom exists. **Applied by infra 2026-08-24T11:20:07Z** — `ALTER SYSTEM` +
+  4 GB of headroom exists — **and about 3.5 GB of it was then actually spent, permanently**;
+  the ceiling is not just a trigger, it also sizes the recycled WAL pool. See *The disk cost*,
+  below. **Applied by infra 2026-08-24T11:20:07Z** — `ALTER SYSTEM` +
   `pg_reload_conf()`, **no restart** (`context=sighup`, `pending_restart=false`, postmaster
   uptime unbroken at 1d23h); all five tenant DBs reachable afterwards and every pg1-dependent
   Gatus check green. The log caught the storm minutes before the reload — three `checkpoint
@@ -441,12 +447,71 @@ factor in *Falsifier 2* had a producer, and the producer stopped writing. A mate
 fold is therefore now a decision about **our own workload**, with no pg1-side confound to
 design around — and with a smaller measured problem than the one that motivated it.
 
-**And the setting the gate was about is now inert.** At 0.03 GB/hour, 8 GB of `max_wal_size`
-is ~11 days of WAL rather than ~55 minutes. ac ruled 2026-08-24 to **keep it at 8 GB, no
-revert** (infra#126 closed), so this side's hold is discharged — but infra's own description
-is the honest one and worth preserving: *"keeping it costs nothing and buys nothing; it
-stopped being urgent rather than being answered on the merits."* Do not carry 8 GB forward
-as a tuning win.
+**And the setting the gate was about is now inert *as a trigger* — but it is not free.** At
+0.03 GB/hour, 8 GB of `max_wal_size` is ~11 days of WAL rather than ~55 minutes, so nothing
+will reach that ceiling again on the current workload. ac ruled 2026-08-24 to **keep it at
+8 GB, no revert** (infra#126 closed), so this side's hold is discharged. Infra's first
+description — *"keeping it costs nothing and buys nothing; it stopped being urgent rather
+than being answered on the merits"* — is **half withdrawn by its own author**: the "buys
+nothing" stands, the "costs nothing" does not. It costs ~3.5 GB of disk, measured. Either
+way, **do not carry 8 GB forward as a tuning win.**
+
+### The disk cost — `max_wal_size` has two effects, and only one of them went inert
+
+Infra corrected their own claim ~2 h after making it (thread `8d5eb1ba`, their
+`docs/2026-08-23-pg1-hourly-wal-checkpoint-storm.md` § 4, commits `1ef1d0d` / `e915da4`,
+infra#126). The setting does two things, and only the first was measured before it was
+called free:
+
+| effect | status |
+|---|---|
+| forced-checkpoint **trigger** | genuinely inert — 0.03 GB/hour is ~11 days to 8 GB |
+| cap on the **recycled WAL pool** | **not inert — the pool tracks the setting** |
+
+```
+pg_wal at max_wal_size = 4 GB    4.1 GB
+pg_wal at max_wal_size = 8 GB    7.6 GB   (483 segments × 16 MiB; infra `du`, 17:37Z)
+```
+
+**~3.5 GB of additional disk**, still there after five hours and ~20 timed checkpoints.
+Nothing is pinning it — `pg_replication_slots` empty, `wal_keep_size` 0, `archive_mode` off,
+`min_wal_size` 80 MB — it is the recycle pool sized against the new ceiling. **A cost to
+name, not a risk:** `/var/lib/postgresql` has 24 G free of 47 G (49 % used).
+
+**The disk half is first-hand here; the attribution is not.** This side cannot run the `du` —
+`/var/lib/postgresql/18/main` is `0700 postgres` and our tailnet login is `ac` — but `df`
+needs no privilege, and a probe **from this repo at 2026-08-24T17:49:50Z**, twelve minutes
+after infra's reading, returned `47G size / 22G used / 24G avail / 49%`: their figure exactly,
+on our own instrument. The 483-segment attribution stays relayed. So the fence in this
+document is real but **narrower than "no pg1 numbers are ours"** — `df` is on our side of it.
+
+**Why this correction was takeable when the last one was not.** It ships two independent
+cross-checks: 483 × 16 MiB = 7,728 MiB = 7.55 GiB, so the headline number is re-derivable
+from the parts sent with it; and free space fell 27 G → 24 G over the same interval, a
+**different command** accounting for the same ~3.5 GB. Contrast the `setting||unit` artefact
+(the blockquote at the head of *The cause*), which arrived as a bare plausible figure with no
+arithmetic to check — and was wrong. The repo rule is *ask which query produced it*; the
+usable form of that is **ask whether the correction can be re-derived from what came with
+it**.
+
+**Open, and cheap to settle: does the pool decay?** PostgreSQL sizes the recycle-ahead pool
+from a moving average of recent checkpoint distances, and that average falls as the distances
+shrink — so the textbook expectation is pg_wal drifting back toward `min_wal_size` over
+successive checkpoints once the writer stops. Infra measured it **undecayed** after ~20 timed
+checkpoints. One of those two is wrong, and which one changes the answer: a permanent 3.5 GB
+is a line in the disk envelope, a decaying one is a transient. **The falsifier is one command
+this side can run with no credential and no fence-crossing**, which is why it is recorded
+here rather than handed back:
+
+```bash
+: "${PG1:?set PG1 to pg1's tailnet FQDN — not recorded in this public fork}"
+ssh -o BatchMode=yes ac@"$PG1" df -h /var/lib/postgresql   # headless; verified 2026-08-24
+```
+
+`avail` climbing back toward 27 G = the pool decayed. Read a *flat* result carefully, though:
+the same disk carries the nightly `pg_dump` set at 14-day retention and the databases grow on
+their own, so **a rise confirms decay while a flat reading cannot rule it out** — only a `du`
+on `pg_wal` settles that direction, and that one is infra's to take.
 
 ### First-hand: what the fold does on a quiet instance
 
@@ -662,8 +727,13 @@ that, the exact 2× block-read factor less so.
 - **The pg1-side knobs are not symmetric, and the earlier "both worse than the upstream fix"
   is superseded.** `max_wal_size` 4 GB → 8 GB was infra's *cheap lever* and is **applied**;
   `shared_buffers` is the one they would not take. Detail and numbers: *The lever*, above.
-  **The lever is now inert** — 8 GB is ~11 days of WAL at the post-fix rate — and it is kept
-  because reverting costs a change, not because it buys anything.
+  **The lever is now inert as a trigger and costs ~3.5 GB of disk** — 8 GB is ~11 days of WAL
+  at the post-fix rate, so it will not fire again; but the ceiling also sizes the recycled WAL
+  pool, and pg_wal went 4.1 GB → 7.6 GB with it. It is kept because reverting costs a change,
+  not because it buys anything. **If anything in this repo sizes against pg1 disk — the day
+  fold, or the pgvector Phase 2 envelope in `docs/archive/deployment.md` — the current figure
+  is 24 G free of 47 G, not the 27 G this document quoted before the lever landed.** Detail,
+  provenance and the decay falsifier: *The disk cost*, above.
 - **If the peak changes magnitude over the coming days, that is `direction` changing, not a
   cchv regression.** Read it that way before opening anything. As of 2026-08-24 the expected
   peak is **no peak**; an hourly excursion *reappearing* is `direction` regressing, and the

@@ -2993,6 +2993,16 @@ returns 200, which reads like a broken deploy and is not one.
   retention, so a +6–7 GB embeddings table inflates every dump. Send infra the firm
   dimension/type when scoped and they will re-check; tens-of-GB grows are fine on
   request, 100 GB+ needs a `/mnt/state` cleanup conversation first.
+  **Re-read 2026-08-24T17:49:50Z, first-hand from this repo** (`ssh ac@pg1… df -h
+  /var/lib/postgresql`, headless, no credential): `47G size / 22G used / 24G avail /
+  49%`. The envelope still reads ~24 GB free a month on — but **do not read that as
+  "nothing changed"**: it is a different 24 GB. `max_wal_size` went 4 GB → 8 GB on
+  2026-08-24T11:20Z and the recycled WAL pool followed it (pg_wal 4.1 → 7.6 GB), so
+  ~3.5 GB of today's *used* is WAL that was free in July, and free space fell 27 G →
+  24 G across that change. A 768-dim `halfvec` backfill still fits; the f32 variants
+  lost their comfort margin. Whether the 3.5 GB is permanent or decays is open —
+  mechanism, provenance and the one-command falsifier are in
+  `docs/2026-08-23-journal-hourly-excursion.md` § *The disk cost*.
 - **Desktop release:** the repo is now a Cargo workspace, so build artifacts
   live in the repo-root `target/` (not `src-tauri/target/`). The release
   workflows were updated accordingly — verify at the next desktop release.

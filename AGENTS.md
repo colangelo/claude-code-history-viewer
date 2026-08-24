@@ -269,6 +269,28 @@ release and the query-floor measurements).
   and those are exactly the rows whose corrupted form still reads as an ordinary kB figure,
   so it was **wrong for every row it touched and visibly wrong for none**. Per-row
   plausibility cannot catch that class; only re-deriving from `setting` and `unit` can.
+  **The complement, so this rule does not harden into refusing every correction** (infra,
+  2026-08-24, same thread): they withdrew *"`max_wal_size = 8 GB` costs nothing"* two hours
+  after sending it — pg_wal had gone 4.1 → 7.6 GB. We took that one **the same day**, and the
+  discriminator was not who measured it but whether it **re-derives from what came with it**:
+  483 × 16 MiB = 7,728 MiB = 7.55 GiB reproduces the headline from the parts, and free space
+  falling 27 G → 24 G accounts for the same ~3.5 GB from a *different command*. The
+  `setting||unit` figure shipped alone and unre-derivable. So: *ask which query produced it*
+  is the question; **"can I rebuild this number from what the message contains, and does a
+  second instrument agree?" is the usable test.**
+- **A parameter with more than one effect is not "free" until each effect is measured
+  separately.** `max_wal_size` is both a forced-checkpoint trigger *and* the cap on the
+  recycled WAL pool. Infra measured the trigger (0.03 GB/hour → ~11 days to fill 8 GB),
+  correctly called it inert, and then asserted inertness of **the setting**, which was one
+  `du` away from being false — the pool had grown 3.5 GB and stayed. The failure is not the
+  measurement, it is the quantifier: a reading of one mechanism was generalised to the knob.
+  Same shape as the poller-phase and `setting||unit` errors — a confident number from an
+  instrument never pointed at the question actually being answered. Before writing *inert*,
+  *free*, *no-op* or *costs nothing* about a setting, enumerate what it controls and say which
+  of those you measured. Evidence: `docs/2026-08-23-journal-hourly-excursion.md` § *The disk
+  cost*. And note where the fence actually sits — this side **can** run
+  `ssh ac@pg1… df -h /var/lib/postgresql` headless, so "every pg1 number is relayed" was
+  itself too broad: `du` on the 0700 data dir is infra's, `df` is ours.
 - **The release ceremony's own guards are in § Release Process and they are load-bearing**
   — `gh run list --commit <tag-sha>` across all workflows (not just `server-release.yml`),
   and a publication proof that reads `rc` by `case` because `--is-ancestor` exits 1 for
