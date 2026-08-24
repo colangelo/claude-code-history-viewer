@@ -228,6 +228,18 @@ release and the query-floor measurements).
   still passing, sampling a quiet stretch and reading as "the storm stopped". A window is a
   cached derivation; re-derive it whenever the thing that triggers the event changes, and
   treat a fixed window that suddenly goes quiet as unverified rather than as good news.
+  **Then, ~40 minutes later, the storm really did stop** — `direction` shipped its
+  incremental-reconcile fix (0.99.3) and pg1 measured **zero** forced checkpoints across four
+  consecutive hours (infra, 2026-08-24, thread `8d5eb1ba`). So both windows now match
+  nothing, and a window-keyed grep is silent for three indistinguishable reasons: wrong
+  phase, no event, or dead instrument. **The way out is not a better window, it is a positive
+  control in the same reading** — infra's zero is trustworthy only because
+  `checkpoint starting: time` was still logging 4/hour beside it and the log's last line was
+  minutes old. And the reason the fix could be told apart from the lever at all is that the
+  discriminator was **written down before the lever was pulled**: *"only zero is unambiguous;
+  1–2/hour is what the doubled trigger does on its own."* Doubling a trigger cannot reach
+  zero against a live 7–9 GB/hour write. State the falsifier before the confound arrives and
+  you never have to untangle it.
 - **Say WHO took a reading, not just that it exists — and never inherit a "broken" claim
   without one.** Two instances, both caught by a successor rather than by the author:
   "verified from two vantage points" was one vantage (loopback on m4m) plus infra's

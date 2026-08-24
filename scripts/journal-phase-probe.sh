@@ -20,6 +20,15 @@
 #   DENSE_FROM=0 DENSE_TO=59 scripts/journal-phase-probe.sh 90
 # -- and derive the phase from the run instead of assuming it.
 #
+# AND SINCE 2026-08-24 ~12:00Z THERE IS NO PHASE AT ALL: direction shipped its
+# incremental-reconcile fix (0.99.3), pg1 measured ZERO forced checkpoints across four
+# consecutive hours against a timed control still at 4/hour, and WAL generation fell
+# 7-9 GB/hour -> 0.03 GB/hour (infra, thread 8d5eb1ba). Both retired windows -- :04-:12 and
+# :13-:17 -- now match nothing, correctly. What this script measures today is the fold's
+# own cost on a QUIET instance, which is the number any day-fold/insulation work has to be
+# justified against. If an hourly excursion reappears, that is direction regressing:
+# check https://<direction-prod>/api/version against 0.99.3 before re-opening anything here.
+#
 #   control   /v1/healthz          -> SELECT 1 on pg1 (health.rs). Same network path,
 #                                     same TLS termination, same m4m process, same
 #                                     connection pool, none of the day-fold.
@@ -49,22 +58,26 @@
 #   control. Accept that while you are LOCATING an unknown phase; once you have one,
 #   narrow the window back so the off-phase samples mean something again.
 #
-# Usage:  scripts/journal-phase-probe.sh [minutes]      (default 60)
-# Env:    HUB, OUT, DENSE_FROM, DENSE_TO
+# Usage:  HUB=https://<hub-host>:8788 scripts/journal-phase-probe.sh [minutes]  (default 60)
+# Env:    HUB (REQUIRED), OUT, DENSE_FROM, DENSE_TO
 # Output: TSV to $OUT (default /tmp/cchv-journal-phase-probe.tsv)
 
 set -u
 
-HUB="${HUB:-https://m4m.cat-bluegill.ts.net:8788}"
+# No default host: `origin` is the PUBLIC fork and internal hostnames stay out of the tree
+# (the 2026-08-02 scrub). This script had re-introduced one; HEAD is clean, the history is
+# not. Pass it in:  HUB=https://<hub-host>:8788 scripts/journal-phase-probe.sh 60
+HUB="${HUB:?set HUB to the hub base URL, e.g. https://<hub-host>:8788}"
 OUT="${OUT:-/tmp/cchv-journal-phase-probe.tsv}"
 MINUTES="${1:-60}"
 DENSE_FROM="${DENSE_FROM:-0}"    # minute-of-hour: dense sampling wraps from here...
 DENSE_TO="${DENSE_TO:-59}"       # ...through here. DEFAULT IS THE WHOLE HOUR since
                                  # 2026-08-24: the burst phase moved off :04-:12 to
-                                 # :13-:17 when max_wal_size doubled, and a stale window
-                                 # samples the quiet stretch and reads as "no storm".
-                                 # Narrow it (e.g. 48/22 for the old phase) only against
-                                 # a phase you have just derived.
+                                 # :13-:17 when max_wal_size doubled, and then the burst
+                                 # stopped entirely when direction 0.99.3 shipped. A stale
+                                 # window samples a quiet stretch and reads as "no storm"
+                                 # whether or not there is one. Narrow it ONLY against a
+                                 # phase you have just derived -- there is none today.
 
 END=$(( $(date -u +%s) + MINUTES * 60 ))
 

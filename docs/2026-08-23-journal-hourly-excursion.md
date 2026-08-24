@@ -26,6 +26,13 @@ to arm: the first post-change hour's forced checkpoint started at **`:13:15`** a
 as "the storm stopped" and means nothing by it** — including a probe whose dense window
 brackets the old phase. See *Post-change reading*, below.
 
+**And as of 2026-08-24 ~12:00Z the storm itself is over — there is no window at all.**
+`direction-prod` shipped its incremental-reconcile fix (0.99.3), the producer stopped
+writing, and pg1 measured **zero** forced checkpoints across four consecutive hours against
+a timed positive control still at 4/hour. **Both windows — `:04`–`:12` and `:13`–`:17` —
+now match nothing, correctly.** Re-running any window-keyed grep or probe against the
+checkpoint log from here on measures *absence*, not phase. See *The storm is over*, below.
+
 ## The reading — infra's, taken on the instrument that pages
 
 Gatus, `mon` → m4m, 300 s cadence. **Nobody on this side reproduced these numbers**;
@@ -357,6 +364,9 @@ Three things that bind:
   the WAL trigger does on its own. **The surviving discriminator is unchanged: zero forced
   checkpoints across a non-first post-deploy hour.** Anyone reading a quiet checkpoint log as
   evidence that the corpus rewrite was fixed is reading the lever, not the driver.
+  **That discriminator was met four hours running on the same day — *The storm is over*,
+  below.** Note what stating it in advance bought: the lever and the fix landed within an
+  hour of each other, and nobody ever had to untangle them.
 
 This is the *"a phase read through a poller is the poller's phase"* rule with a second
 edge on it: **a phase is also a property of the driver's current trigger, so changing the
@@ -385,6 +395,71 @@ and `/v1/healthz` **200 in 0.086 s**, ordinary baseline. So this is a four-hour 
 excursion of a different shape (saturating a 15 s ceiling, not a ~4 minute checkpoint dip),
 and nothing here has diagnosed it. Do not fold it into the storm story; it is a separate
 open question, and the first thing it needs is infra's per-check series for those hours.
+
+## The storm is over — the producer was fixed, and it is not the lever that did it
+
+Infra, thread `8d5eb1ba`, measured on pg1 15:59–17:28Z on 2026-08-24; their write-up is
+`docs/2026-08-23-pg1-hourly-wal-checkpoint-storm.md` § 4, commit `9999316`. **Relayed, not
+taken here** — same fence as every other pg1 number in this document. `direction-prod`
+answers `/api/version` → `{"api":"0.99.3","mcp":"0.99.3"}`, so the incremental-reconcile fix
+named in *Attribution* is deployed.
+
+| hour UTC (2026-08-24) | forced checkpoints (`wal`) | timed (`time`) — positive control |
+|---|---|---|
+| 00:00–11:00 | 4 every hour, no exceptions | 4/hour |
+| 12:00 | 1 (at 12:13:15) | 4 |
+| 13:00, 14:00, 15:00, 16:00 | **0** | **4** each |
+
+```
+WAL generation   7–9 GB/hour  ->  0.03 GB/hour
+distance/ckpt    ~2.19 GB     ->  2.7–29.2 MB, timed only
+direction churn  561k rows/hour -> ins +0 / del +0 / upd +0
+```
+
+**Three method notes, because the discriminator was written down first and that is what
+makes this readable.**
+
+- **The falsifier was declared BEFORE `max_wal_size` doubled** — *"only zero is unambiguous;
+  1–2/hour proves nothing, that is what the doubled trigger does on its own"* (this
+  document's own *Post-change reading*, third bullet). A doubled trigger **cannot** reach
+  zero against a live 7–9 GB/hour write: 8 GB would trip about every 55 minutes. So the
+  confound between lever and fix never had to be untangled — the reading falls outside the
+  range the lever can produce.
+- **The zero is a real zero, not a dead log.** `checkpoint starting: time` still ran 4/hour
+  through 16:00Z and the log's last line was written 17:15:12Z. A silent log and a silent
+  storm are identical in a `grep -c`; the timed line is the positive control that separates
+  them.
+- **The 90 s tuple delta is corroboration, not proof, and infra flagged it themselves.** The
+  offending job ran *hourly*, so a 90 s window would show `ins +0 / del +0` even if it were
+  still running. The four-hour checkpoint history and the WAL rate carry the verdict; the
+  tuple zero rides along. Same discipline as the poller-folding challenge that produced
+  *"a phase read through a poller is the poller's phase"*.
+
+**What it means for the fold.** The eviction pressure the day-fold was competing with is
+gone **at the source**, not absorbed by a bigger buffer. The 474,655 → 979,363 block-read
+factor in *Falsifier 2* had a producer, and the producer stopped writing. A materialised day
+fold is therefore now a decision about **our own workload**, with no pg1-side confound to
+design around — and with a smaller measured problem than the one that motivated it.
+
+**And the setting the gate was about is now inert.** At 0.03 GB/hour, 8 GB of `max_wal_size`
+is ~11 days of WAL rather than ~55 minutes. ac ruled 2026-08-24 to **keep it at 8 GB, no
+revert** (infra#126 closed), so this side's hold is discharged — but infra's own description
+is the honest one and worth preserving: *"keeping it costs nothing and buys nothing; it
+stopped being urgent rather than being answered on the merits."* Do not carry 8 GB forward
+as a tuning win.
+
+### First-hand: what the fold does on a quiet instance
+
+Everything above is pg1's checkpoint layer, relayed. The reading this side owns is the one
+this document has always taken — the fold's own latency — and it was re-taken after the fix
+landed, **from m4m loopback this time** rather than from ac-mbm5, so the network path is out
+of it and the absolute numbers are not comparable to the mbm5 series above (a spot control
+read 0.083 s against 0.30–0.60 s there).
+
+Probe: `scripts/journal-phase-probe.sh`, dense across the whole hour (`DENSE_FROM=0
+DENSE_TO=59`), 17:33Z–18:21Z on 2026-08-24 — bracketing **both** retired windows, `:04`–`:12`
+and `:13`–`:17`, because a run that brackets only one of them cannot tell absence from a
+phase move. Result: *see the table below.*
 
 ### The same-hour interlock — two instruments, neither aware of the other
 
@@ -557,25 +632,29 @@ that, the exact 2× block-read factor less so.
   bought headroom against a driver we do not control — pre-swap the excursion reached
   9.97 s, 0.03 s under the old 10 s default. Do not retune that timeout down on the strength
   of the post-swap numbers.
-- **Do not tune the fold against this driver.** Insulating the fold from a cold cache (the
-  index declined in #36, a materialised day fold, a smaller working set) is still a
-  legitimate *engineering* question, but it is no longer motivated by this excursion: the
-  excursion will move or vanish when `direction` is fixed.
-- **The gate on *speccing* a day fold is DISCHARGED — but wait for data, not for permission.**
-  For one day this bullet said "do not spec a materialised day fold until ac has ruled on the
-  `max_wal_size` change". **Ac ruled and it is applied** (2026-08-24T11:20:07Z; *The lever*,
-  above), so the ruling is no longer the thing to wait for. What replaces it is weaker and
-  empirical: the driver just got quieter, so **a few hours of post-change readings should
-  land before anything is specced against the old behaviour** — the size of the problem
-  insulation would solve is exactly what just changed. **First hour is in** (*Post-change
-  reading*, above): forced checkpoints 4/hour → 1, each twice as big, phase moved to
-  `:13`–`:17`. That is the checkpoint layer; the fold-latency half is the clean-day Gatus
-  series infra is taking.
-- **A window-keyed check is now a check that cannot fail.** `:04`–`:12` was derived under
-  `max_wal_size = 4 GB` and the trigger moved with the setting. Before trusting any probe,
-  grep or alert window in this document, confirm it was re-derived after 2026-08-24T11:20Z —
-  otherwise its silence is an artefact. Repo rule it instantiates: *name the reading that
-  would make it FAIL*.
+- **Do not tune the fold against this driver — and as of 2026-08-24 there is no driver.**
+  Insulating the fold from a cold cache (the index declined in #36, a materialised day fold,
+  a smaller working set) was already only an *engineering* question rather than an incident
+  response; now the excursion is gone at the source (*The storm is over*). Any such work
+  must be justified by the fold's cost on a **quiet** instance, measured after 2026-08-24,
+  not by the numbers in this document.
+- **The gate on *speccing* a day fold is FULLY DISCHARGED — both halves.** For one day the
+  hold was "do not spec a materialised day fold until ac has ruled on the `max_wal_size`
+  change"; ac ruled 2026-08-24 (**keep 8 GB, no revert**, infra#126 closed). The weaker
+  empirical replacement — *wait for a few hours of post-change readings, because the size of
+  the problem insulation would solve is exactly what just changed* — is satisfied too: four
+  post-fix hours at **zero** forced checkpoints, `direction`'s churn at ins +0 / del +0.
+  Nothing is being waited on. What that leaves is not permission to build it but a **much
+  smaller problem**: re-measure the fold on the quiet instance first, and let that number
+  decide.
+- **A window-keyed check is now a check that cannot fail — and re-running one measures
+  absence, not phase.** `:04`–`:12` was derived under `max_wal_size = 4 GB`; the trigger
+  moved it to `:13`–`:17` on 2026-08-24T11:20Z; the producer then stopped altogether around
+  12:00Z and **both** windows now match nothing. So a grep, probe window or alert keyed to
+  either one is silent for three different reasons that look identical from outside. Before
+  trusting any window in this document, confirm it was re-derived against a *current* phase
+  — and if there is no current phase, say so rather than reporting the silence. Repo rule it
+  instantiates: *name the reading that would make it FAIL*.
 - **The `03:00–07:00Z` 15.001 s block on 2026-08-24 is a hub-side open question, not part of
   this thread.** Four hours of the Gatus check hitting its own timeout, on our side of the
   fence, currently not reproducing (2.286 s at 12:33Z). It must be excluded from any
@@ -583,11 +662,17 @@ that, the exact 2× block-read factor less so.
 - **The pg1-side knobs are not symmetric, and the earlier "both worse than the upstream fix"
   is superseded.** `max_wal_size` 4 GB → 8 GB was infra's *cheap lever* and is **applied**;
   `shared_buffers` is the one they would not take. Detail and numbers: *The lever*, above.
+  **The lever is now inert** — 8 GB is ~11 days of WAL at the post-fix rate — and it is kept
+  because reverting costs a change, not because it buys anything.
 - **If the peak changes magnitude over the coming days, that is `direction` changing, not a
-  cchv regression.** Read it that way before opening anything.
+  cchv regression.** Read it that way before opening anything. As of 2026-08-24 the expected
+  peak is **no peak**; an hourly excursion *reappearing* is `direction` regressing, and the
+  first thing to check is `/api/version` on `direction-prod` against 0.99.3.
 - **Leaving the `:05` poll in place is the informative choice.** Dropping it would make the
-  excursion disappear from our series honestly, but right now the fold is the only
-  instrument on that box that notices the storm at all.
+  excursion disappear from our series honestly, and the fold was for a while the only
+  instrument on that box that noticed the storm at all. That argument is now dormant rather
+  than wrong: with the producer fixed the poll measures our own fold, which is what it was
+  always for.
 - **Falsifier 2 is answered — see *Falsifier 2 — CONFIRMED* above.** Both falsifiers this
   document handed back came home: one from a log already on disk, one from a live capture,
   neither needing a credential this side did not have. That is the pattern worth keeping —

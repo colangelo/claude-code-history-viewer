@@ -18,7 +18,10 @@
 # excursion being measured. 150s is offset from Gatus's 300s.
 
 set -u
-H="https://m4m.cat-bluegill.ts.net:8788"
+# No default host: `origin` is the PUBLIC fork and internal hostnames stay out of the tree
+# (the 2026-08-02 scrub; this script and scripts/journal-phase-probe.sh had re-introduced
+# one). Pass it in: H=https://<hub-host>:8788 docs/measurements/journal-excursion-differential-probe.sh
+H="${H:?set H to the hub base URL, e.g. https://<hub-host>:8788}"
 OUT=/tmp/cchv-journal-phase-probe.tsv
 END=$(( $(date -u +%s) + 3600 ))   # ~17:22Z
 
