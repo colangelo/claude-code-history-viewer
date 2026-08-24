@@ -71,9 +71,24 @@ pub async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
 ///
 /// All three scope by `exclude` and set the window globally, which is what makes
 /// per-machine thresholds possible with no hub change — keep that composition.
-/// The deploy gate additionally asserts `m4m.local` is *present* in the body it
-/// passed on, because a scoped-to-one-host query that lost that host entirely
-/// would otherwise be a vacuous 200.
+///
+/// **All three now also assert the scoped host is *present* in the body**, because
+/// a scoped-to-one-host query that lost that host entirely would otherwise be a
+/// vacuous 200. The deploy gate has done this since infra `4233ef0`; both Gatus
+/// checks only since infra `135fb42`, 23 min later the same day (2026-08-24) —
+/// the tool was fixed and the rule written down generally, and the config half
+/// was only swept because infra then applied that rule back to themselves.
+///
+/// That assertion is a **raw-substring match on `<host>.local`**, which binds the
+/// `hostname` field below to the verbatim stored mDNS name. `normalize_host`
+/// strips `.local` for *matching only*; normalizing the response field too — the
+/// obvious tidy-up, since the helper sits right there — would break all three
+/// consumers at once: two Gatus pages plus a healthy webapp deploy auto-restored
+/// to its pre-swap backup. Presence is only *sufficient* because each URL's
+/// exclude set is fixed — the body lists excluded machines too. Measured here
+/// 2026-08-24 against the live m4m-scoped URL: all three machines present,
+/// `m4m.local` at `excluded:false` and the other two at `excluded:true`, so the
+/// substring proves the host is *reported*, never that it is being *judged*.
 const DEFAULT_STALE_AFTER_SECS: i64 = 7200;
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +110,10 @@ pub struct IngestHealthParams {
 #[derive(Debug, Serialize)]
 pub struct IngestMachineHealth {
     pub machine_id: Uuid,
+    /// The stored mDNS name, emitted **verbatim** (`m4m.local`) — three off-repo
+    /// checks substring-match `<host>.local` against the raw body, one of them a
+    /// deploy gate that rolls back on failure. Do not run this through
+    /// `normalize_host`; see `DEFAULT_STALE_AFTER_SECS` above.
     pub hostname: String,
     pub last_seen: DateTime<Utc>,
     pub last_message_at: Option<DateTime<Utc>>,
@@ -797,6 +816,67 @@ mod tests {
     fn parse_positive_rejects_zero_and_negative() {
         assert!(parse_positive(Some("0"), "grace_secs", 7200).is_err());
         assert!(parse_positive(Some("-1"), "within_days", 7).is_err());
+    }
+
+    /// `exclude` parsing is named in `DEFAULT_STALE_AFTER_SECS`'s contract as
+    /// something three off-repo consumers encode, and it had no test at all.
+    /// The live URLs pass bare operator names (`ac-mbp`, `m4m`) against stored
+    /// mDNS hostnames (`ac-mbp.local`), so the suffix tolerance is load-bearing:
+    /// lose it and every exclude entry silently stops matching, which turns the
+    /// scoped checks red on a machine they were told to ignore.
+    #[test]
+    fn exclude_matching_tolerates_the_mdns_suffix_and_case() {
+        // The real m4m-scoped URL: `?exclude=ac-mbp,ac-mbm5`.
+        let set = parse_exclude(Some("ac-mbp,ac-mbm5"));
+        assert!(set.contains(&normalize_host("ac-mbp.local")));
+        assert!(set.contains(&normalize_host("AC-MBM5.local")));
+
+        // Discrimination control — the row that makes the two above mean
+        // something. `m4m` is deliberately NOT in this exclude set, so if this
+        // passed, the assertions above would prove nothing.
+        assert!(
+            !set.contains(&normalize_host("m4m.local")),
+            "a host outside the exclude set must not match, or exclusion is vacuous"
+        );
+    }
+
+    /// Only ONE trailing `.local` is stripped, and stripping is idempotent for
+    /// the names we actually store — so a hostname is not chewed down to a
+    /// different machine's name by repeated normalization.
+    #[test]
+    fn normalize_host_strips_one_suffix_and_trims() {
+        assert_eq!(normalize_host("  M4M.local "), "m4m");
+        assert_eq!(normalize_host("m4m"), "m4m");
+        assert_eq!(normalize_host(&normalize_host("m4m.local")), "m4m");
+        assert_eq!(normalize_host("m4m.local.local"), "m4m.local");
+    }
+
+    /// Empty entries are dropped, so `?exclude=` excludes nothing rather than
+    /// matching a machine whose normalized hostname is somehow empty.
+    #[test]
+    fn parse_exclude_drops_empty_entries() {
+        assert!(parse_exclude(Some("")).is_empty());
+        assert!(parse_exclude(None).is_empty());
+        assert_eq!(parse_exclude(Some("m4m,,")).len(), 1);
+    }
+
+    /// The three off-repo checks substring-match `<host>.local` against the raw
+    /// response body, so their discrimination depends on no stored hostname
+    /// containing another's pattern. Verified against the live machine set
+    /// 2026-08-24; this pins it so a future machine name that breaks it fails
+    /// here rather than by silently satisfying someone else's check.
+    #[test]
+    fn local_patterns_do_not_cross_match_between_machines() {
+        let hosts = ["m4m.local", "ac-mbm5.local", "ac-mbp.local"];
+        for probe in hosts {
+            for other in hosts {
+                assert_eq!(
+                    other.contains(probe),
+                    other == probe,
+                    "{other:?} must contain the pattern {probe:?} only when it IS that host"
+                );
+            }
+        }
     }
 
     /// Between midnight and the fold hour, the logical day is still yesterday —
