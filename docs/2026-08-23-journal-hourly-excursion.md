@@ -524,7 +524,35 @@ read 0.083 s against 0.30–0.60 s there).
 Probe: `scripts/journal-phase-probe.sh`, dense across the whole hour (`DENSE_FROM=0
 DENSE_TO=59`), 17:33Z–18:21Z on 2026-08-24 — bracketing **both** retired windows, `:04`–`:12`
 and `:13`–`:17`, because a run that brackets only one of them cannot tell absence from a
-phase move. Result: *see the table below.*
+phase move.
+
+**Flat. No excursion in either window, and no excursion anywhere else in the hour.**
+
+| | n | min | max | mean | spread |
+|---|---|---|---|---|---|
+| `/v1/healthz/journal` (fold) | 16 | 2.080 s | 2.331 s | **2.148 s** | 12 % |
+| `/v1/healthz` (control) | 48 | 0.059 s | 0.093 s | 0.075 s | — |
+
+The samples landing inside the retired windows are unremarkable: `:03:38` 2.173, `:06:41`
+**2.331** (the run's max, and 1.09× the mean — against 1.5–1.7× for a real burst sample),
+`:09:44` 2.080, `:12:48` 2.158, `:15:51` 2.158. Zero HTTP errors, zero timeouts.
+
+Four caveats, so the number is not over-read:
+
+- **Loopback, so absolute values are not comparable to the mbm5 series above.** The control
+  reads 0.059–0.093 s here against 0.30–0.60 s from ac-mbm5 — that difference is the tailnet
+  path, not pg1. Compare *shape* across vantage points, magnitudes only within one.
+- **It is one hour.** The storm was reliably hourly, and both candidate windows were covered,
+  so a flat hour is a real test rather than a lucky gap — but it is n=1 hour on our
+  instrument, and the day-level statement belongs to infra's Gatus series.
+- **150 s dense sampling keeps pg1's buffers warm**, which is why this is a floor (the same
+  note that made 4.15 s here read against 5.36 s at Gatus). With no eviction driver left,
+  the warming has much less to bite on — but it does mean 2.148 s is the *warm* cost, and a
+  cold first fold will read higher.
+- **This is now the number that matters for the day-fold question.** The fold costs ~2.1 s
+  on a quiet instance from loopback. Any insulation work — materialised day fold, a narrower
+  working set — has to beat that, not the 4–10 s figures this document opens with, which
+  were measurements of somebody else's write burst.
 
 ### The same-hour interlock — two instruments, neither aware of the other
 
@@ -710,8 +738,10 @@ that, the exact 2× block-read factor less so.
   the problem insulation would solve is exactly what just changed* — is satisfied too: four
   post-fix hours at **zero** forced checkpoints, `direction`'s churn at ins +0 / del +0.
   Nothing is being waited on. What that leaves is not permission to build it but a **much
-  smaller problem**: re-measure the fold on the quiet instance first, and let that number
-  decide.
+  smaller problem**, and it is now measured: **~2.15 s of warm fold from m4m loopback, flat
+  across a whole hour** (*First-hand*, above; raw TSV
+  `docs/measurements/2026-08-24-journal-quiet-hour.tsv`). That is the number any insulation
+  work has to beat.
 - **A window-keyed check is now a check that cannot fail — and re-running one measures
   absence, not phase.** `:04`–`:12` was derived under `max_wal_size = 4 GB`; the trigger
   moved it to `:13`–`:17` on 2026-08-24T11:20Z; the producer then stopped altogether around
