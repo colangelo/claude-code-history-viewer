@@ -54,6 +54,26 @@ pub async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Daemons scan hourly; the default threshold is 2x that.
+///
+/// **Off-repo consumers encode these semantics — changing this constant, or how
+/// `exclude`/`stale_after_secs` parse, needs a relay to infra before it ships.**
+/// As of 2026-08-24 three live things in home-network query this route with a
+/// hand-built URL (infra `39d277a`, `4233ef0`):
+///
+/// - Gatus `cchv-ingest-m4m` — `?exclude=ac-mbp,ac-mbm5&stale_after_secs=129600`
+/// - Gatus `cchv-ingest-mbm5` — `?exclude=ac-mbp,m4m&stale_after_secs=129600`
+/// - `tools/cchv-webapp-deploy`, same URL as the m4m check — and there it is a
+///   **pass/fail gate whose failure auto-restores the pre-swap backup**, so a
+///   semantics change here does not merely mislead a reader: it silently reverts
+///   a healthy webapp deploy and reports the rollback as a verification failure.
+///   (That gate quoted the bare `?exclude=ac-mbp` until 2026-08-24, where the
+///   2 h default plus a sleeping `ac-mbm5` made it red for ordinary reasons.)
+///
+/// All three scope by `exclude` and set the window globally, which is what makes
+/// per-machine thresholds possible with no hub change — keep that composition.
+/// The deploy gate additionally asserts `m4m.local` is *present* in the body it
+/// passed on, because a scoped-to-one-host query that lost that host entirely
+/// would otherwise be a vacuous 200.
 const DEFAULT_STALE_AFTER_SECS: i64 = 7200;
 
 #[derive(Debug, Deserialize)]

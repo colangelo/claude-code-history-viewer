@@ -1448,6 +1448,26 @@ Post-swap verification (no restart involved, so all of it is client-visible):
     the hub runs on, the one that is genuinely always ingesting — is
     `stale:false`. Judge on that, or pass `&stale_after_secs=129600` to ask the
     question Gatus actually asks.
+  - **The same bullet had an executable twin on infra's side, and it was a
+    gate.** `tools/cchv-webapp-deploy` used the bare `?exclude=ac-mbp` as
+    pass/fail, and a failed probe there **auto-restores the pre-swap backup** —
+    so following it would not merely mislead a reader, it would silently revert
+    a healthy deploy of *our* release and report the rollback as a verification
+    failure. Fixed to `?exclude=ac-mbp,ac-mbm5&stale_after_secs=129600` (infra
+    `4233ef0`, 2026-08-24), matching `cchv-ingest-m4m` so the gate and the
+    monitor assert the same thing instead of disagreeing by 18×. Infra added
+    one assertion we did not ask for and should keep in mind whenever we scope a
+    check to a single host: scoped-to-m4m-at-36h can no longer fail for any
+    ordinary cause, so an answer that had lost `m4m.local` from `machines[]`
+    would be a **vacuous 200** — the tool therefore asserts that host is present
+    in the body it just passed on. Their historical deploy entries still quote
+    the bare `?exclude=ac-mbp` deliberately: those are records of what was run,
+    and are not retrofitted. Ours below are the same, for the same reason.
+  - **The coupling runs both ways.** Two Gatus checks and that deploy gate now
+    encode this endpoint's current semantics in hand-built URLs. If a hub
+    release changes `DEFAULT_STALE_AFTER_SECS` or how `exclude`/`stale_after_secs`
+    parse, relay it to infra *before* it ships — the trigger is recorded at the
+    constant itself in `crates/hub/src/health.rs`.
 - `/v1/healthz/journal` present (200 or a *legitimate* 503 — a real undrained
   in-window day; check the body's `groups`). A 404 here means the deployed
   binary predates `distiller-self-healing` (cchv-v0.13.0) — the swap didn't take.
