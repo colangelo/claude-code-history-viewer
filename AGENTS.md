@@ -231,6 +231,19 @@ release and the query-floor measurements).
   measured it. Also from that message: `auto` is a **shared** wildcard queue
   (`relay.msg.*.auto`), not per-host routing, so one green relay smoke test proves nothing
   about the other Mac.
+- **An incoming CORRECTION is a reading too — ask which query produced it before you edit a
+  figure you derived.** 2026-08-24: infra corrected our `shared_buffers = 196608 × 8 kB =
+  1.5 GB` to *"1.875 GB"*, and this side accepted it in ~20 minutes and rescaled every
+  share-of-cache percentage in `docs/2026-08-23-journal-hourly-excursion.md` by 0.8×. **Our
+  number was right.** Theirs came from `SELECT setting || coalesce(unit,'')`, which for a
+  setting whose `unit` is `8kB` glues value to unit — `196608` + `8kB` → `1966088kB` — a
+  *plausible, well-formed* number answering a different question. Same family as
+  `--is-ancestor` collapsing 1 and 128, with a new edge: **it took a correct statement down
+  with it**, and the bullet above is what let it — "we never measured it, they did" is not
+  "their reading is sound". Arithmetic we performed outranks a transcription we did not see
+  the query for. Read an `8kB`-unit setting as
+  `pg_size_pretty(setting::bigint * 8192)`, and when a correction contradicts something
+  *derived*, ask for the query before rewriting the document.
 - **The release ceremony's own guards are in § Release Process and they are load-bearing**
   — `gh run list --commit <tag-sha>` across all workflows (not just `server-release.yml`),
   and a publication proof that reads `rc` by `case` because `--is-ancestor` exits 1 for

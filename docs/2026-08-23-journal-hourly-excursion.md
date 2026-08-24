@@ -6,7 +6,7 @@ This note records **what has been ruled out and how**, so the next reader starts
 the surviving candidates rather than re-walking the whole surface.
 
 **The thread is closed.** The mechanism is an hourly WAL-checkpoint storm on pg1 that
-flushes up to 38 % of the instance-wide buffer cache in ~84 s (*The cause*, below), and the
+flushes up to 47 % of the instance-wide buffer cache in ~84 s (*The cause*, below), and the
 producer is named: the `direction` database's client rewrites its whole document corpus
 once an hour (*Attribution*, below — infra's live capture, thread `b1d5226a`). Both
 falsifiers were answered, one on each side of the fence. Everything above those sections is
@@ -211,25 +211,45 @@ of the hour, 22 consecutive hours, lands at `:04:33`–`:04:48`. A minute-of-hou
 over a full day is `:04`=16 `:05`=11 `:06`=6 `:07`=14 `:08`=14 `:09`=3 `:10`=1 `:12`=1,
 and **zero outside `:04`–`:12`**.
 
-`shared_buffers` on pg1 is **1,966,088 kB = 1.875 GB** (245,761 buffers). In the 17:00Z hour
-one checkpoint wrote **92,825 buffers = 37.8 % of the entire instance buffer cache in 84 s**.
-pg1 turns over 7–9 GB of WAL per hour — ~180 GB/day — inside that five-minute window, ~150×
-the baseline rate; the timed checkpoints between bursts cover 10–47 MB.
+`shared_buffers` on pg1 is `196608 × 8 kB` = **1.5 GB** (1536 MB, 196,608 buffers). In the
+17:00Z hour one checkpoint wrote **92,825 buffers = 47.2 % of the entire instance buffer
+cache in 84 s**. pg1 turns over 7–9 GB of WAL per hour — ~180 GB/day — inside that
+five-minute window, ~150× the baseline rate; the timed checkpoints between bursts cover
+10–47 MB.
 
-> **Correction, 2026-08-24 (infra, thread `745a573f`).** This document published
-> `shared_buffers` as `196608 × 8 kB = 1.5 GB`. The value read on pg1 is `1966088 kB`. Infra
-> calls the smaller number our premise, and nothing on this side ever measured it — which is
-> this repo's *say who took a reading* rule biting on a number small enough that nobody
-> thought to ask. The stale divisor is **0.8×** the real one, so **every share-of-cache
-> percentage first published here is 1.25× too large**; multiply an old figure by 0.8 for the
-> corrected one (47.2 % → 37.8 %, 27.0 % → 21.6 %, 16.3 % → 13.0 %). Corrected in place
-> below. Raw buffer counts, WAL volumes and every latency reading are unaffected, and so is
-> the conclusion — one checkpoint still flushes better than a third of the instance cache.
+> **Correction withdrawn, 2026-08-24 (infra, thread `745a573f`) — the figure above is the
+> original one and it is right.** For about two hours this document carried
+> `shared_buffers = 1,966,088 kB = 1.875 GB` and every share-of-cache percentage scaled by
+> 0.8×, on infra's correction. **Infra withdrew it the same day: the value is 1536 MB.**
+>
+> Their instrument was `SELECT setting || coalesce(unit,'')`, which for a setting whose unit
+> is `8kB` **glues the number to the unit** and yields a well-formed kB figure that answers a
+> different question: `setting=196608`, `unit=8kB` concatenates to `1966088kB`, read as
+> 1.875 GB. The real value is `196608 × 8 kB = 1536 MB`. **Every 8kB-unit setting relayed on
+> that thread is wrong the same way** — `effective_cache_size` is **4096 MB** (not
+> `5242888kB`) and `wal_buffers` is **16 MB** (not `20488kB`). Settings whose unit is
+> `MB`/`kB`/`s` were unaffected because the concatenation happened to be harmless, so
+> `max_wal_size 4096MB`, `min_wal_size 80MB`, `work_mem 4096kB`,
+> `maintenance_work_mem 65536kB`, `checkpoint_timeout 900s` and
+> `checkpoint_completion_target 0.9` all stand, as do the checkpoint counters below (a
+> different query).
+>
+> **Read a pg setting as `pg_size_pretty(setting::bigint * 8192)` when its `unit` is `8kB`**,
+> and re-derive rather than transcribe any relayed number that is load-bearing for a change.
+>
+> The episode is worth more than the number. This is the `--is-ancestor` family — an
+> instrument returning a *plausible* value instead of an error — with one new edge: it did not
+> merely produce a wrong answer, it **overturned a correct one**. The withdrawn correction
+> was accepted here in ~20 minutes on the strength of this repo's own *say who took a reading*
+> rule, which cut the wrong way: "we never measured it, they did" is not the same as "their
+> reading is sound", and a peer's number is a reading that needs a source too. Where a
+> correction contradicts a figure we *derived* (196608 × 8 kB is arithmetic, not a guess),
+> ask which query produced theirs before editing ours.
 
 So the eviction candidate has a named, measured cause. The architectural fact underneath it
 is the one to carry forward: **the archive DB does not have a buffer cache of its own.**
-`shared_buffers` is instance-wide, cchv shares that 1.875 GB with every other database on
-pg1, and the fold's working set is large enough to be the thing that notices when a third of
+`shared_buffers` is instance-wide, cchv shares that 1.5 GB with every other database on
+pg1, and the fold's working set is large enough to be the thing that notices when half of
 it is flushed. **That is not fixable by sizing on this hardware** — see *The lever* below.
 
 ### Why the checkpoints are `wal` and not `time` — the WAL is saturated
@@ -257,21 +277,33 @@ concluded "the producer is a database *client* writing, not a scheduler firing o
 was right but left the 15-minute `checkpoint_timeout` as an unexplained near-coincidence.
 There is no coincidence: the timer is not what fires.
 
-### The lever — pg1-side, disk not RAM, and it is ac's call
+### The lever — pg1-side, disk not RAM. **`max_wal_size` 4 GB → 8 GB is APPLIED**
 
-Infra's own read, recorded because it is the reason the *do not tune the fold* rule below now
-carries a date rather than being open-ended:
+- **Doubling `max_wal_size` 4 GB → 8 GB was the cheap lever, and ac approved it.** It converts
+  size-forced checkpoints back into timed ones, which *do* get spread by
+  `completion_target 0.9`. `/var/lib/postgresql` is 47 GB with 27 GB free (40 % used), so the
+  4 GB of headroom exists. **Applied by infra 2026-08-24T11:20:07Z** — `ALTER SYSTEM` +
+  `pg_reload_conf()`, **no restart** (`context=sighup`, `pending_restart=false`, postmaster
+  uptime unbroken at 1d23h); all five tenant DBs reachable afterwards and every pg1-dependent
+  Gatus check green. The log caught the storm minutes before the reload — three `checkpoint
+  starting: wal` at 11:06:02 / 11:07:46 / 11:09:14, each carrying `distance ~2.19 GB`
+  (`estimate 2196115 kB`), i.e. the checkpointer had settled on cycling every ~2.2 GB of WAL
+  against a 4 GB ceiling.
+- **No stats reset, deliberately.** `pg_stat_checkpointer.stats_reset` still reads
+  2026-05-10, so the 22,353 / 6,761 baseline above is intact and the effect is measurable as
+  a **delta** rather than needing a clean slate. (This side's standing `pg_stat_reset()`
+  warning applies to pg1 too; infra did not repeat that suggestion.)
+- **Raising `shared_buffers` is the option infra would not take, and did not.** 1536 MB is
+  ~19 % of the box's 7.7 GiB total (4 vCPU), `free` shows 169 MiB genuinely free with 6.9 GiB
+  in buff/cache, and the same box runs gitea, woodpecker, `direction` and gatus. There is no
+  comfortable RAM to give the archive a bigger cache — so *the archive DB has no cache of its
+  own* is the standing fact, un-contradicted.
 
-- **Doubling `max_wal_size` 4 GB → 8 GB is the cheap lever.** It converts size-forced
-  checkpoints back into timed ones, which *do* get spread by `completion_target 0.9`.
-  `/var/lib/postgresql` is 47 GB with 27 GB free (40 % used), so the 4 GB of headroom exists.
-  `ALTER SYSTEM` + reload, no restart, reversible.
-- **Raising `shared_buffers` is the option infra would not take.** 1.875 GB is already ~24 %
-  of the box's 7.7 GiB total (4 vCPU), `free` shows 169 MiB genuinely free with 6.9 GiB in
-  buff/cache, and the same box runs gitea, woodpecker, `direction` and gatus. There is no
-  comfortable RAM to give the archive a bigger cache.
-- **Not applied.** Prod tuning on infra's box is ac's decision, not a side effect of
-  answering our question. Infra has put the numbers to them.
+**A post-change measurement is not comparable to the pre-change series above.** The driver
+just got quieter. If the phase probe is re-run, state the prediction first, which is infra's:
+the `:04`–`:12` excursions become **less frequent** (fewer size-forced checkpoints) rather
+than smaller when they do occur. If they vanish entirely, that is the coupling confirmed a
+third way. Give the new setting a few hours before reading anything into either.
 
 ### The same-hour interlock — two instruments, neither aware of the other
 
@@ -284,15 +316,15 @@ different reasons, so the alignment is evidence rather than fitting:
 | 17:02:07Z | — | 2.350 s |
 | **17:04:43Z** | **start: wal** | |
 | 17:05:11Z | *(writing)* | **4.148 s** |
-| 17:06:22Z | complete — 53,135 buf, 21.6 % | |
+| 17:06:22Z | complete — 53,135 buf, 27.0 % | |
 | 17:06:36Z | start: wal | |
-| 17:08:00Z | complete — 92,825 buf, **37.8 %** | |
+| 17:08:00Z | complete — 92,825 buf, **47.2 %** | |
 | 17:08:10Z | start: wal | |
 | 17:08:17Z | *(writing)* | 3.479 s |
-| **17:09:47Z** | **complete — 32,047 buf, 13.0 % → burst ends** | |
+| **17:09:47Z** | **complete — 32,047 buf, 16.3 % → burst ends** | |
 | 17:11:23Z | — | 2.567 s |
 | 17:14:27Z | — | 2.579 s |
-| 17:23:10Z | start: **time** — 600 buf, 0.2 % | |
+| 17:23:10Z | start: **time** — 600 buf, 0.3 % | |
 
 Every fold sample taken **inside** the burst window (17:04:43–17:09:47) is elevated; every
 sample outside it is baseline. No exceptions in either direction. That also sharpens
@@ -416,9 +448,9 @@ capture):
 
 Baseline slices are 99.7–100 %; through the burst the archive DB runs 50–70 %. Sharper than
 the dip: **the same fold read 474,655 blocks from outside `shared_buffers` at `:00` and
-979,363 at `:05`** — same hour, ~5 min apart, a little over twice as many. With 1.875 GB of
+979,363 at `:05`** — same hour, ~5 min apart, a little over twice as many. With 1.5 GB of
 `shared_buffers` for the whole instance and `direction` churning half a million rows through
-it hourly (this hour's checkpoints wrote 23.8 %, 27.8 % and 41.5 % of it), our working set
+it hourly (this hour's checkpoints wrote 29.7 %, 34.8 % and 51.9 % of it), our working set
 is simply not resident when the `:05` poll arrives. **So eviction is measured, not
 inferred.**
 
@@ -444,16 +476,19 @@ that, the exact 2× block-read factor less so.
   bought headroom against a driver we do not control — pre-swap the excursion reached
   9.97 s, 0.03 s under the old 10 s default. Do not retune that timeout down on the strength
   of the post-swap numbers.
-- **Do not tune the fold against this driver, and as of 2026-08-24 do not *spec* it either.**
-  Insulating the fold from a cold cache (the index declined in #36, a materialised day fold,
-  a smaller working set) is still a legitimate *engineering* question, but it is no longer
-  motivated by this excursion: the excursion will move or vanish when `direction` is fixed.
-  Infra's instruction is explicit and it has a gate — **do not spec a materialised day fold
-  until ac has ruled on the `max_wal_size` change**, or we may build insulation against a
-  driver that is about to get quieter. That ruling is the thing to check for before this
-  bullet expires; it is not on a timer.
+- **Do not tune the fold against this driver.** Insulating the fold from a cold cache (the
+  index declined in #36, a materialised day fold, a smaller working set) is still a
+  legitimate *engineering* question, but it is no longer motivated by this excursion: the
+  excursion will move or vanish when `direction` is fixed.
+- **The gate on *speccing* a day fold is DISCHARGED — but wait for data, not for permission.**
+  For one day this bullet said "do not spec a materialised day fold until ac has ruled on the
+  `max_wal_size` change". **Ac ruled and it is applied** (2026-08-24T11:20:07Z; *The lever*,
+  above), so the ruling is no longer the thing to wait for. What replaces it is weaker and
+  empirical: the driver just got quieter, so **a few hours of post-change readings should
+  land before anything is specced against the old behaviour** — the size of the problem
+  insulation would solve is exactly what just changed.
 - **The pg1-side knobs are not symmetric, and the earlier "both worse than the upstream fix"
-  is superseded.** `max_wal_size` 4 GB → 8 GB is now infra's *cheap lever* and is with ac;
+  is superseded.** `max_wal_size` 4 GB → 8 GB was infra's *cheap lever* and is **applied**;
   `shared_buffers` is the one they would not take. Detail and numbers: *The lever*, above.
 - **If the peak changes magnitude over the coming days, that is `direction` changing, not a
   cchv regression.** Read it that way before opening anything.
