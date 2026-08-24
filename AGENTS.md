@@ -155,7 +155,15 @@ addresses a role.**
    headless handler, and a failed message leaves the work queue with only
    `RELAY_AUDIT` remembering it; measured 2026-08-19 on an onboarding ask that died
    unseen) only for work safe to run with nobody present; `interactive` when the
-   answer must come back to a person.
+   answer must come back to a person. **`interactive` is attended-only by
+   construction, so its latency is unbounded — an idle peer is a stalled queue, not
+   a fast one.** Measured 2026-08-24: two of our messages sat undrained on
+   `interactive-infra` **17 hours** while this side was blocked on a two-value read
+   that took infra seconds to answer (infra said so themselves, thread `745a573f`).
+   So question 1 has a sharper edge than "is a live session holding this context":
+   **a blocking question with a cheap answer belongs on Channel 0 even when the
+   relay would also work** — the queue is right for what must survive the
+   receiver's absence, not for what you are waiting on.
 
 ## Repo rules (learned 2026-08-21 — evidence in `docs/2026-08-21-journal-day-bucketing.md`
 and `docs/2026-08-21-identity-surfaces-and-query-floor.md`)
