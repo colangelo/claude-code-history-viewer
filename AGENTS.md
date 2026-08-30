@@ -282,13 +282,26 @@ release and the query-floor measurements).
   separately.** `max_wal_size` is both a forced-checkpoint trigger *and* the cap on the
   recycled WAL pool. Infra measured the trigger (0.03 GB/hour → ~11 days to fill 8 GB),
   correctly called it inert, and then asserted inertness of **the setting**, which was one
-  `du` away from being false — the pool had grown 3.5 GB and stayed. The failure is not the
+  `du` away from being false — the pool had grown 3.5 GB. The failure is not the
   measurement, it is the quantifier: a reading of one mechanism was generalised to the knob.
   Same shape as the poller-phase and `setting||unit` errors — a confident number from an
   instrument never pointed at the question actually being answered. Before writing *inert*,
   *free*, *no-op* or *costs nothing* about a setting, enumerate what it controls and say which
   of those you measured. Evidence: `docs/2026-08-23-journal-hourly-excursion.md` § *The disk
-  cost*. And note where the fence actually sits — this side **can** run
+  cost*. **And then the correction over-reached in the other direction, which is the half worth
+  carrying (2026-08-30, relay `279aebbe`, infra#129): the pool DRAINED** — 7.48 → **1.86 GiB**
+  over six days, below what it held at 4 GB, with `df avail` back **above** the July baseline.
+  So the 3.5 GB was real and **temporary**, and our doc's *"permanently"* was never in the
+  reading it cited. The mechanism is why it was invisible: segments leave by **removal at ≲1
+  per checkpoint** (0.617/0.630/0.563 across three windows, `0 recycled` every time) — **linear
+  in checkpoints, not exponential in the distance estimate** — which is ~12 segments of 483
+  across the ~20 checkpoints the original claim watched, i.e. indistinguishable from noise.
+  The "28× theory gap" both sides filed as unexplained was a category error: the EMA governs
+  the *estimate*, a bounded per-checkpoint removal governs the *pool*. **A plateau observed on
+  a lever too short to resolve the curve is not a plateau** — and note the asymmetry in who got
+  burned: infra hedged at the time (*"whether it drains is UNRESOLVED"*), we did not, so the
+  stronger word entered the record on our side. When a peer hedges a number and you are
+  paraphrasing it, the hedge is part of the number. And note where the fence actually sits — this side **can** run
   `ssh ac@pg1… df -h /var/lib/postgresql` headless, so "every pg1 number is relayed" was
   itself too broad: `du` on the 0700 data dir is infra's, `df` is ours.
 - **The release ceremony's own guards are in § Release Process and they are load-bearing**

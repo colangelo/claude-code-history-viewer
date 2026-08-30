@@ -478,6 +478,39 @@ Nothing is pinning it — `pg_replication_slots` empty, `wal_keep_size` 0, `arch
 `min_wal_size` 80 MB — it is the recycle pool sized against the new ceiling. **A cost to
 name, not a risk:** `/var/lib/postgresql` has 24 G free of 47 G (49 % used).
 
+> **RESOLVED 2026-08-30 — the pool DRAINED, and the cost above was temporary, not
+> permanent.** Everything in this section was a correct reading of five hours; the word this
+> document then reached for — *permanently*, above — was not in it. Infra's 24 h sampler ran
+> to completion and a live reading five days past its end (relay `279aebbe`, infra#129):
+>
+> | when | segments | `pg_wal` | `df avail` |
+> |---|---|---|---|
+> | 2026-08-24T18:01Z | 479 | 7.48 GiB | 23.17 GiB |
+> | 2026-08-25T17:56Z | 420 | 6.56 GiB | 23.97 GiB |
+> | **2026-08-30T16:49Z** | **119** | **1.86 GiB** | **28.19 GiB** |
+>
+> `pg_wal` is now **below** the 4.1 GB it held at `max_wal_size = 4 GB`, and free space is
+> **above** the July baseline. Accepted under this repo's own test — *can I rebuild the number
+> from what the message contains, and does a second instrument agree?* — 119 × 16 MiB =
+> 1.859 GiB reproduces the headline, and `df avail` (**+5.02 GiB**, a different command) agrees
+> with `du` (**−5.62 GiB**); the gap between them is other tenants' activity. Controls came with
+> it: `max_wal_size` still 8 GB and the postmaster predates the change, so nothing restarted
+> underneath the series, and 64 timed / **0** forced checkpoints on a log written minutes
+> earlier — a silent log excluded, not assumed.
+>
+> **Why five hours looked like a plateau, which is the transferable part.** Segments leave by
+> *removal*, at **≲1 per checkpoint** (0.617 / 0.630 / 0.563 seg/checkpoint across three
+> independent windows, `0 recycled` on every checkpoint). That is **linear in checkpoints, not
+> exponential in the distance estimate** — ~7 % over a day and ~75 % over six. Across the ~20
+> checkpoints this section watched it predicts ~12 segments of 483, which is indistinguishable
+> from noise. The 28× "theory gap" both sides recorded as unexplained was a category error:
+> the EMA governs the **estimate**, a bounded per-checkpoint removal governs the **pool**.
+>
+> So this section's numbers were right and its *quantifier* was wrong — the same failure the
+> `AGENTS.md` bullet it feeds is about, one level up. A plateau called on a lever too short to
+> resolve the curve is not a plateau. Infra hedged at the time ("whether it drains is
+> UNRESOLVED"); this document did not, and that is the part worth not repeating.
+
 **The disk half is first-hand here; the attribution is not.** This side cannot run the `du` —
 `/var/lib/postgresql/18/main` is `0700 postgres` and our tailnet login is `ac` — but `df`
 needs no privilege, and a probe **from this repo at 2026-08-24T17:49:50Z**, twelve minutes
