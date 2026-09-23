@@ -382,3 +382,103 @@ fn a_corrupt_mirror_is_moved_aside_and_replaced() {
         "and preserved verbatim, so it can actually be diagnosed"
     );
 }
+
+/// cchv #44. A mirror whose *own file* is failing must heal without anyone
+/// running `hub mirror rebuild` by hand. In production a COMMIT over
+/// `memory_limit` wedged it and every later refresh failed for hours; here the
+/// fault is a dropped table, which fails every refresh the same way (a
+/// `DuckDB` error, not a Postgres one) and is deterministic.
+#[tokio::test]
+async fn a_mirror_whose_file_keeps_failing_is_rebuilt_by_the_refresher() {
+    let good = pool().await;
+    let (machine, _project, session) = seed(&good, "selfheal").await;
+    add_message(&good, machine, session, "m1", 42).await;
+
+    let mirror = Arc::new(Mirror::open_or_create(&cfg("selfheal")).expect("open"));
+    mirror.refresh(&good).await.expect("initial refresh");
+    assert_eq!(usage_tokens(&mirror, session), 42);
+
+    // Break the mirror itself. Every refresh from here on is a mirror fault.
+    mirror
+        .connection()
+        .expect("connection")
+        .execute_batch("DROP TABLE messages")
+        .expect("drop");
+    assert!(
+        mirror.refresh(&good).await.is_err(),
+        "the broken mirror must fail a refresh, or this test proves nothing"
+    );
+
+    add_message(&good, machine, session, "m2", 58).await;
+    let refresher = tokio::spawn(mirror::run_refresher(
+        mirror.clone(),
+        good.clone(),
+        Duration::from_millis(50),
+    ));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let healed = loop {
+        let tokens = mirror.connection().ok().and_then(|c| {
+            c.query_row(
+                "SELECT coalesce(sum(input_tokens) FILTER (WHERE usage_row), 0)::BIGINT
+                   FROM messages WHERE session_id = ?",
+                [session],
+                |r| r.get::<_, i64>(0),
+            )
+            .ok()
+        });
+        if tokens == Some(100) {
+            break true;
+        }
+        if std::time::Instant::now() > deadline {
+            break false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    refresher.abort();
+    assert!(
+        healed,
+        "the refresher kept retrying a broken mirror file instead of rebuilding it"
+    );
+    assert!(mirror.state().is_ready(), "a healed mirror is ready");
+}
+
+/// A Postgres outage must never trigger a rebuild. The mirror is fine and
+/// waiting is the right answer (design D6); only faults in the mirror's own
+/// file count.
+#[test]
+fn only_mirror_faults_count_toward_a_rebuild() {
+    let mut faults = mirror::MirrorFaults::default();
+    let pg: anyhow::Error = anyhow::anyhow!(sqlx::Error::PoolTimedOut);
+    for _ in 0..10 {
+        assert!(
+            !faults.record_failure(&pg),
+            "a Postgres fault triggered a rebuild"
+        );
+    }
+
+    let duck = duckdb::Connection::open_in_memory()
+        .expect("duckdb")
+        .execute_batch("SELECT * FROM no_such_table")
+        .map_err(anyhow::Error::from)
+        .expect_err("a DuckDB error");
+    for n in 1..mirror::MIRROR_FAULTS_BEFORE_REBUILD {
+        assert!(
+            !faults.record_failure(&duck),
+            "rebuilt after only {n} faults"
+        );
+    }
+    // An interleaved Postgres fault neither counts nor resets the streak.
+    assert!(!faults.record_failure(&pg));
+    assert!(
+        faults.record_failure(&duck),
+        "no rebuild after {} consecutive mirror faults",
+        mirror::MIRROR_FAULTS_BEFORE_REBUILD
+    );
+
+    faults.reset();
+    assert!(
+        !faults.record_failure(&duck),
+        "reset did not clear the streak"
+    );
+}

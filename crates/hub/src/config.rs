@@ -105,8 +105,12 @@ fn default_overlap_rows() -> i64 {
     50_000
 }
 
+/// Still a cap, not tuning. 1 GB was too tight once the mirror reached ~6 GB
+/// on disk: on 2026-09-23 a routine incremental COMMIT failed with "failed to
+/// pin block (953.5 MiB/953.6 MiB used)", which is what wedged the mirror
+/// (cchv #44). 4 GB is 1/16 of m4m's RAM.
 fn default_memory_limit() -> String {
-    "1GB".to_string()
+    "4GB".to_string()
 }
 
 fn default_threads() -> u32 {

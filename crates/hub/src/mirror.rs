@@ -633,6 +633,7 @@ pub async fn rebuild(cfg: &MirrorConfig, pg: &PgPool) -> anyhow::Result<RefreshR
     };
 
     std::fs::rename(&staging, &live)?;
+    set_aside_orphaned_wal(&live);
     tracing::info!(
         path = %live.display(),
         messages = report.messages_inserted,
@@ -647,6 +648,78 @@ fn wal_path(db: &Path) -> PathBuf {
     let mut name = db.file_name().unwrap_or_default().to_os_string();
     name.push(".wal");
     db.with_file_name(name)
+}
+
+/// After a rebuild's rename, any WAL still at `<live>.wal` belongs to the file
+/// that was just replaced, never to the new one (the staging WAL is cleared
+/// before the rename). Left in place, the next open of `live` would replay a
+/// foreign log into the fresh file. A healthy hub checkpoints after every pass,
+/// so this is normally a no-op; it matters exactly when the old mirror is the
+/// broken one being replaced — a failed CHECKPOINT is how the WAL survives.
+/// Moved aside, not deleted, like every other mirror artefact.
+fn set_aside_orphaned_wal(live: &Path) {
+    let wal = wal_path(live);
+    if !wal.exists() {
+        return;
+    }
+    let aside = aside_path(&wal);
+    match std::fs::rename(&wal, &aside) {
+        Ok(()) => tracing::warn!(
+            moved_to = %aside.display(),
+            "stats mirror: the replaced file left a WAL behind; moved it aside so the \
+             rebuilt mirror does not replay it"
+        ),
+        Err(e) => tracing::error!(
+            error = %e,
+            wal = %wal.display(),
+            "stats mirror: could not move the replaced file's WAL aside"
+        ),
+    }
+}
+
+/// True when `e` came from the local `DuckDB` file rather than from Postgres.
+///
+/// The distinction decides recovery. A Postgres fault leaves the mirror intact,
+/// so waiting it out is right (design D6). A `DuckDB` fault means the mirror
+/// itself is what's broken, and waiting only repeats the failure.
+fn is_mirror_fault(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|cause| cause.downcast_ref::<duckdb::Error>().is_some())
+}
+
+/// A `DuckDB` FATAL invalidates the database instance: every later statement
+/// on it fails. No number of retries recovers from that.
+fn is_fatal_mirror_fault(e: &anyhow::Error) -> bool {
+    is_mirror_fault(e) && {
+        let msg = format!("{e:#}");
+        msg.contains("FATAL") || msg.contains("invalidated")
+    }
+}
+
+/// Consecutive mirror-side refresh failures after which the refresher rebuilds
+/// the mirror in-process instead of retrying the same broken file forever.
+pub const MIRROR_FAULTS_BEFORE_REBUILD: u32 = 3;
+
+/// Counts consecutive mirror-side failures and decides when to rebuild.
+///
+/// Only `DuckDB` faults count. Postgres faults neither count nor reset, so a
+/// network blip in the middle of a run of mirror faults doesn't hide them.
+#[derive(Debug, Default)]
+pub struct MirrorFaults(u32);
+
+impl MirrorFaults {
+    /// Record a failed refresh; returns whether to rebuild now.
+    pub fn record_failure(&mut self, e: &anyhow::Error) -> bool {
+        if !is_mirror_fault(e) {
+            return false;
+        }
+        self.0 += 1;
+        is_fatal_mirror_fault(e) || self.0 >= MIRROR_FAULTS_BEFORE_REBUILD
+    }
+
+    pub fn reset(&mut self) {
+        self.0 = 0;
+    }
 }
 
 /// Identity of the file currently at `path`, for noticing an out-of-process
@@ -689,6 +762,7 @@ fn file_identity(path: &Path) -> Option<u64> {
 /// sleeps only *after* a refresh returns: one attempt that never returns is
 /// not a slow tick, it is the last tick this process will ever run.
 pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::time::Duration) {
+    let mut faults = MirrorFaults::default();
     loop {
         // Before anything else: a `hub mirror rebuild` may have swapped the
         // file since the last tick.
@@ -704,7 +778,8 @@ pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::tim
             std::time::Duration::from_secs(mirror.cfg.refresh_timeout_secs)
         };
         match mirror.refresh_bounded(&pool, budget).await {
-            Ok(RefreshOutcome::Ran(_) | RefreshOutcome::Skipped) => {}
+            Ok(RefreshOutcome::Ran(_)) => faults.reset(),
+            Ok(RefreshOutcome::Skipped) => {}
             Ok(RefreshOutcome::TimedOut) => {
                 tracing::warn!(
                     budget_secs = budget.as_secs(),
@@ -723,9 +798,44 @@ pub async fn run_refresher(mirror: Arc<Mirror>, pool: PgPool, interval: std::tim
                      credential rejection; it does not count toward the database \
                      watchdog's exit strikes."
                 );
+                if faults.record_failure(&e) {
+                    self_heal(&mirror, &pool).await;
+                    faults.reset();
+                }
             }
         }
         tokio::time::sleep(interval).await;
+    }
+}
+
+/// Rebuild a mirror that has itself gone bad, then adopt the result.
+///
+/// The same path as `hub mirror rebuild`, so statistics keep being served from
+/// whatever the old file can still answer while the new one builds. Without
+/// this, a mirror-side fault (a COMMIT over `memory_limit`, a `DuckDB` FATAL)
+/// fails every later refresh until someone runs the rebuild by hand. That was
+/// 2026-09-23: about four hours red before anyone noticed (cchv #44).
+async fn self_heal(mirror: &Mirror, pool: &PgPool) {
+    tracing::error!(
+        path = %mirror.path.display(),
+        "stats mirror: the mirror file itself is failing; rebuilding it in-process"
+    );
+    let budget = std::time::Duration::from_secs(mirror.cfg.cold_build_timeout_secs);
+    match tokio::time::timeout(budget, rebuild(&mirror.cfg, pool)).await {
+        Ok(Ok(_)) => {
+            if let Err(e) = mirror.adopt_replacement() {
+                tracing::error!(error = %e, "stats mirror: could not adopt the self-healed file");
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "stats mirror: self-heal rebuild failed; will retry");
+        }
+        Err(_elapsed) => {
+            tracing::error!(
+                budget_secs = budget.as_secs(),
+                "stats mirror: self-heal rebuild exceeded its time budget; will retry"
+            );
+        }
     }
 }
 
@@ -793,18 +903,21 @@ where
     F: FnOnce() -> anyhow::Result<()>,
 {
     conn.execute_batch("BEGIN TRANSACTION")?;
-    match body() {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")?;
-            Ok(())
-        }
-        Err(e) => {
-            if let Err(rollback) = conn.execute_batch("ROLLBACK") {
-                tracing::error!(error = %rollback, "stats mirror: rollback failed");
-            }
-            Err(e)
+    let outcome = match body() {
+        // A failing COMMIT needs the rollback arm as much as a failing body
+        // does. Production 2026-09-23: a COMMIT hit `memory_limit` ("failed to
+        // pin block"), returned early with no ROLLBACK, and every refresh after
+        // it failed on a phantom duplicate key until a DuckDB FATAL invalidated
+        // the instance two hours later (cchv #44).
+        Ok(()) => conn.execute_batch("COMMIT").map_err(anyhow::Error::from),
+        Err(e) => Err(e),
+    };
+    if outcome.is_err() {
+        if let Err(rollback) = conn.execute_batch("ROLLBACK") {
+            tracing::error!(error = %rollback, "stats mirror: rollback failed");
         }
     }
+    outcome
 }
 
 /// Progress percentage for the cold-build log, guarding the empty-archive case.
