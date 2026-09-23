@@ -180,6 +180,11 @@ pub async fn healthz_ingest(
     let stale_after_secs = parse_stale_after_secs(params.stale_after_secs.as_deref())?;
     let exclude = parse_exclude(params.exclude.as_deref());
 
+    // One probe per machine, not one GROUP BY over every message: with
+    // `messages_machine_created_idx` (0010) each LATERAL max() is a single
+    // backward index scan. The GROUP BY form was a full sequential scan,
+    // ~9.5 s on pg1 and past Gatus's 10 s timeout (#45). Postgres has no loose
+    // index scan, so the index alone does not rescue the GROUP BY.
     let rows = sqlx::query!(
         r#"
         SELECT mac.machine_id AS "machine_id!",
@@ -187,11 +192,11 @@ pub async fn healthz_ingest(
                mac.last_seen  AS "last_seen!",
                lm.last_message_at
         FROM machines mac
-        LEFT JOIN (
-            SELECT machine_id, MAX(created_at) AS last_message_at
-            FROM messages
-            GROUP BY machine_id
-        ) lm ON lm.machine_id = mac.machine_id
+        LEFT JOIN LATERAL (
+            SELECT MAX(m.created_at) AS last_message_at
+            FROM messages m
+            WHERE m.machine_id = mac.machine_id
+        ) lm ON true
         ORDER BY mac.machine_id
         "#
     )

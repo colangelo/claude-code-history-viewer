@@ -1428,3 +1428,67 @@ async fn journal_tick_age_alerts_only_when_a_budget_is_supplied() {
         "the age is still reported, only the verdict changed"
     );
 }
+
+// ingest liveness health — GET /v1/healthz/ingest (#42, #45)
+
+/// Pins what the per-machine probe must return, independent of how the query is
+/// shaped. #45 rewrote it from one GROUP BY over all of `messages` (a full seq
+/// scan, ~9.5 s on pg1, past Gatus's 10 s client timeout) to one index probe
+/// per machine. The answer must not change: the newest `created_at` of the
+/// machine's own messages, and null for a machine with none.
+#[tokio::test]
+async fn ingest_health_reports_each_machines_latest_message() {
+    let hub = spawn().await;
+    let project = format!("/w/ih-{}", hub.hostname);
+    ingest(
+        &hub,
+        &batch(
+            &hub,
+            vec![proj(&project, "ih")],
+            vec![sess("ih-s1", &project)],
+            vec![
+                msg("ih-s1", "ih-k1", 0, "2026-01-01T00:00:00Z", "first"),
+                msg("ih-s1", "ih-k2", 1, "2026-01-01T00:01:00Z", "second"),
+            ],
+        ),
+    )
+    .await;
+    let pool = connect_pool().await;
+    let newest: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT max(created_at) FROM messages WHERE machine_id = $1")
+            .bind(hub.machine_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    // A machine that has checked in but never sent a message.
+    let silent = Uuid::new_v4();
+    sqlx::query("INSERT INTO machines (machine_id, hostname) VALUES ($1, $2)")
+        .bind(silent)
+        .bind(format!("silent-{}", &silent.simple().to_string()[..12]))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let resp = get(&hub, "/v1/healthz/ingest", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    let machine = |id: Uuid| {
+        body["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["machine_id"] == id.to_string())
+            .cloned()
+            .unwrap_or_else(|| panic!("machine {id} missing from {body}"))
+    };
+
+    let ours = machine(hub.machine_id);
+    assert_eq!(ours["hostname"], hub.hostname);
+    let reported: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(ours["last_message_at"].clone()).expect("last_message_at");
+    assert_eq!(
+        reported, newest,
+        "must be the newest created_at of this machine's messages"
+    );
+    assert_eq!(machine(silent)["last_message_at"], Value::Null);
+}
