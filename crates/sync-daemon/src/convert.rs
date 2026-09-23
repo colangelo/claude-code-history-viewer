@@ -26,10 +26,33 @@ fn token(v: Option<u32>) -> Option<i64> {
     v.map(i64::from)
 }
 
+/// True when history-core made up this record's uuid: `<random v4>-line-<n>`.
+///
+/// It does that for records the provider wrote without one — Claude Code's
+/// state records (`permission-mode`, `custom-title`, `mode`, …). Those records
+/// carry no `timestamp` either, and history-core fills that with `now()`, so
+/// for them the timestamp is exactly as unstable as the uuid.
+fn has_synthesized_uuid(m: &ClaudeMessage) -> bool {
+    m.uuid
+        .rsplit_once("-line-")
+        .is_some_and(|(head, line)| head.len() == 36 && line.parse::<u64>().is_ok())
+}
+
 /// Deterministic dedup key for a message at a stable position in its session.
+///
+/// The timestamp is left out when the uuid was synthesized: there it is a
+/// parse-time `now()`, so hashing it gave every re-parse of a growing file a
+/// fresh key for every state record, and the hub stored each one again
+/// (17.96M of 19.32M archived rows on 2026-09-23). Position, type and content
+/// still identify the record.
 pub fn message_key(provider: &str, session_id: &str, seq: i32, m: &ClaudeMessage) -> String {
+    let timestamp = if has_synthesized_uuid(m) {
+        ""
+    } else {
+        m.timestamp.as_str()
+    };
     let mut h = Sha256::new();
-    for field in [provider, session_id, &m.timestamp, &m.message_type] {
+    for field in [provider, session_id, timestamp, &m.message_type] {
         h.update(field.as_bytes());
         h.update([0]);
     }

@@ -368,3 +368,47 @@ async fn config_loads_from_url_and_token_without_db() {
     assert_eq!(cfg.hub_token, "secret");
     // There is no database field on DaemonConfig — daemons never hold DB creds.
 }
+
+/// Claude Code writes state records (`permission-mode`, `custom-title`, `mode`, …)
+/// with no `uuid` and no `timestamp`. history-core fills both at parse time, the
+/// timestamp with `now()`. While `message_key` hashed that timestamp, every
+/// re-parse of a growing file re-keyed every such record, and the hub stored
+/// each one again. Measured 2026-09-23: 17.96M of 19.32M archived rows were
+/// these copies, collapsing to 165k real records. A re-parse must re-send
+/// the same key for the same record.
+#[tokio::test]
+#[serial]
+async fn a_record_without_uuid_or_timestamp_keeps_its_key_across_reparses() {
+    let fx = fixture();
+    let file = two_message_session(&fx.home);
+    let mut content = std::fs::read_to_string(&file).unwrap();
+    content.push_str(
+        "{\"type\":\"permission-mode\",\"permissionMode\":\"bypassPermissions\",\"sessionId\":\"sess-1\"}\n",
+    );
+    std::fs::write(&file, &content).unwrap();
+
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    let before = hub.message_keys();
+    assert_eq!(before.len(), 3, "two turns plus the state record");
+
+    // The file grows, so the whole session is parsed again.
+    content.push_str(&format!(
+        "{}\n",
+        user_line(
+            "u3",
+            "sess-1",
+            "2026-01-02T00:00:00Z",
+            "a third turtle message",
+            "/Users/test/proj"
+        )
+    ));
+    std::fs::write(&file, &content).unwrap();
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    // The mock keeps every key it ever received, so a re-keyed record shows up
+    // as a fifth key rather than as a missing one.
+    let after = hub.message_keys();
+    assert_eq!(after.len(), 4, "exactly one new key: the appended turn");
+}
