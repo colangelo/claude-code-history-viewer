@@ -100,3 +100,6 @@ agent-relay/
 
 # python bytecode from scripts/
 __pycache__/
+
+# herdr-compact Keep/Drop files a session writes for its own nightly compaction
+.compact-*.txt
