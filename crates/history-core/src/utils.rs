@@ -256,9 +256,10 @@ pub fn decode_project_path_verified(session_storage_path: &str) -> Option<String
 
     // 2. Decode the encoded folder name, verifying each segment against the
     //    filesystem. Returns `None` if the decoded path does not exist.
-    const MARKER: &str = ".claude/projects/";
-    let marker_pos = session_storage_path.find(MARKER)?;
-    let encoded = &session_storage_path[marker_pos + MARKER.len()..];
+    //    Only the folder's own name is decoded, wherever projects/ lives: an
+    //    earlier `.claude/projects/` marker check turned this step off for any
+    //    CLAUDE_CONFIG_DIR layout (e.g. ~/.config/claude/projects/), silently.
+    let encoded = Path::new(session_storage_path).file_name()?.to_str()?;
     let stripped = encoded.strip_prefix('-')?;
     decode_with_filesystem_check(stripped)
 }
@@ -897,6 +898,29 @@ mod tests {
         let real = format!("{root}/claude-code-history-viewer/src-tauri");
         std::fs::create_dir_all(&real).unwrap();
         assert_eq!(verified(&real), Some(real.clone()));
+    }
+
+    #[test]
+    fn test_decode_verified_independent_of_config_dir_location() {
+        // CLAUDE_CONFIG_DIR puts projects/ under e.g. ~/.config/claude, which
+        // has no `.claude/projects/` in it. The decoder must not care where the
+        // projects dir lives: it decodes the folder NAME. Found 2026-09-28 on
+        // ac-mbm5, where a scan via ~/.config/claude silently fell back to the
+        // transcript cwd for every project.
+        let (_d, root) = real_tmp();
+        let real = format!("{root}/_sync/dev/_aruba/mpic-lambda");
+        std::fs::create_dir_all(&real).unwrap();
+        for base in [
+            "/Users/whoever/.claude/projects",
+            "/Users/whoever/.config/claude/projects",
+            "/opt/custom-claude-home/projects",
+        ] {
+            assert_eq!(
+                decode_project_path_verified(&format!("{base}/{}", slug(&real))),
+                Some(real.clone()),
+                "{base}"
+            );
+        }
     }
 
     #[test]
