@@ -1,1 +1,2 @@
+bash scripts/check-index-matches-worktree.sh
 pnpm exec lint-staged
