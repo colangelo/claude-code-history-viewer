@@ -274,81 +274,85 @@ pub(crate) fn decode_with_filesystem_check(encoded: &str) -> Option<String> {
     decode_recursive(encoded, "")
 }
 
-/// Recursively decode hyphen-separated path segments by checking filesystem existence.
+/// Claude Code's project-folder encoding of one path segment: every
+/// non-alphanumeric character becomes `-`. So `_sync`, `.config` and
+/// `gestore-lab` encode as `-sync`, `-config` and `gestore-lab`.
+fn encode_segment(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Recursively decode an encoded project folder name against the filesystem.
 ///
-/// For each hyphen in `encoded`, tries treating it as a `/` separator.
-/// When a valid directory is found, recurses on the remaining string.
-/// This handles nested directories like "claude-code-history-viewer-src-tauri"
-/// → "claude-code-history-viewer/src-tauri".
+/// The encoding is lossy (`/`, `_`, `.` and `-` all become `-`), so guessing
+/// what each `-` was cannot work in general: the old splitter only tried `/`
+/// or a literal `-`, and returned `None` for every path containing `_` or `.`
+/// (e.g. anything under `~/_sync`), which silently handed the project path to
+/// the newest transcript's `cwd` instead. This walks the real tree instead: at
+/// each level it lists the directory and keeps the entries whose own encoding
+/// is a prefix of what remains. That is exact wherever the path exists.
+///
+/// Symlinks are never followed or returned, same policy as before. When two
+/// entries encode identically (`a-b` and `a_b`), the literal-hyphen name wins
+/// (it is what the old decoder returned), then the longer match, then name
+/// order, so the result is deterministic. Works for any encoding that maps a
+/// path separator to `-` and keeps or dashes the other characters.
 fn decode_recursive(encoded: &str, base_path: &str) -> Option<String> {
-    decode_recursive_inner(encoded, base_path, 0)
+    // Normalise the input the same way as the entries. Claude's encoding is
+    // already normalised; other providers (CodeBuddy) replace only `/` and keep
+    // `.`/`_` literally, and this makes both compare equal to the real name.
+    decode_recursive_inner(&encode_segment(encoded), base_path, 0)
 }
 
 fn decode_recursive_inner(encoded: &str, base_path: &str, depth: usize) -> Option<String> {
-    if depth > 20 {
+    if depth > 40 || encoded.is_empty() {
         return None;
     }
-    if encoded.is_empty() {
-        if !base_path.is_empty() && Path::new(base_path).exists() {
-            return Some(base_path.to_string());
-        }
+    let dir = if base_path.is_empty() { "/" } else { base_path };
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return None;
-    }
+    };
 
-    let hyphen_positions: Vec<usize> = encoded
-        .char_indices()
-        .filter(|(_, c)| *c == '-')
-        .map(|(i, _)| i)
+    let mut candidates: Vec<(String, String)> = entries
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let enc = encode_segment(&name);
+            let fits = encoded == enc
+                || (encoded.len() > enc.len()
+                    && encoded.starts_with(&enc)
+                    && encoded.as_bytes()[enc.len()] == b'-');
+            fits.then_some((name, enc))
+        })
         .collect();
+    candidates.sort_by(|(a, ea), (b, eb)| {
+        let literal = |n: &str, e: &str| n == e;
+        literal(b, eb)
+            .cmp(&literal(a, ea))
+            .then(eb.len().cmp(&ea.len()))
+            .then(a.cmp(b))
+    });
 
-    // Try each hyphen as a potential path separator
-    for &pos in &hyphen_positions {
-        let segment = &encoded[..pos];
-        if segment.is_empty() {
+    for (name, enc) in candidates {
+        let candidate = format!("{base_path}/{name}");
+        let Ok(meta) = std::fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
             continue;
         }
-
-        let candidate = if base_path.is_empty() {
-            format!("/{segment}")
-        } else {
-            format!("{base_path}/{segment}")
-        };
-
-        // Use symlink_metadata to avoid following symlinks
-        let is_real_dir = std::fs::symlink_metadata(&candidate)
-            .map(|m| m.file_type().is_dir())
-            .unwrap_or(false);
-
-        if is_real_dir {
-            let remaining = &encoded[pos + 1..];
-            if remaining.is_empty() {
-                return Some(candidate);
-            }
-
-            // First try: remaining as a single leaf (no more splitting needed)
-            let full_path = format!("{candidate}/{remaining}");
-            let full_path_is_real = std::fs::symlink_metadata(&full_path)
-                .map(|m| !m.file_type().is_symlink())
-                .unwrap_or(false);
-            if full_path_is_real {
-                return Some(full_path);
-            }
-
-            // Recurse: remaining may itself contain hyphens that are path separators
-            if let result @ Some(_) = decode_recursive_inner(remaining, &candidate, depth + 1) {
-                return result;
+        if encoded.len() == enc.len() {
+            return Some(candidate);
+        }
+        if meta.file_type().is_dir() {
+            if let Some(found) =
+                decode_recursive_inner(&encoded[enc.len() + 1..], &candidate, depth + 1)
+            {
+                return Some(found);
             }
         }
     }
-
-    // No hyphen worked as separator — treat entire encoded as a single segment
-    if !base_path.is_empty() {
-        let full_path = format!("{base_path}/{encoded}");
-        if Path::new(&full_path).exists() {
-            return Some(full_path);
-        }
-    }
-
     None
 }
 
@@ -810,6 +814,89 @@ mod tests {
             ),
             None
         );
+    }
+
+    // ===== Slug decoding against the real filesystem (fork: `_`/`.` in paths) =====
+
+    /// Claude Code's project-folder encoding: every non-alphanumeric character
+    /// becomes `-` (so `/Users/ac/_sync/dev/gestore-lab` is
+    /// `-Users-ac--sync-dev-gestore-lab`).
+    fn slug(path: &str) -> String {
+        path.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect()
+    }
+
+    /// A canonical temp root, so no symlinked ancestor (macOS `/var` →
+    /// `/private/var`) trips the symlink policy.
+    fn real_tmp() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonicalize");
+        (dir, root.to_string_lossy().to_string())
+    }
+
+    fn verified(root_path: &str) -> Option<String> {
+        decode_project_path_verified(&format!(
+            "/Users/whoever/.claude/projects/{}",
+            slug(root_path)
+        ))
+    }
+
+    #[test]
+    fn test_decode_verified_underscore_dir_and_hyphenated_leaf() {
+        // The three shapes measured on m4m 2026-09-28, all under `_sync`:
+        // every one decoded to None before, so the project path fell back to
+        // whatever cwd the newest transcript happened to start in.
+        let (_d, root) = real_tmp();
+        for leaf in ["gestore-lab", "claude-code-history-viewer"] {
+            std::fs::create_dir_all(format!("{root}/_sync/dev/{leaf}")).unwrap();
+        }
+        for leaf in ["gestore-lab", "claude-code-history-viewer"] {
+            let real = format!("{root}/_sync/dev/{leaf}");
+            assert_eq!(verified(&real), Some(real.clone()), "{leaf}");
+        }
+    }
+
+    #[test]
+    fn test_decode_verified_rejects_symlinked_alias() {
+        // `master -> gestore-lab`: the alias is not a real directory. The
+        // scanner already skips a symlinked slug dir (canonical dedupe), and the
+        // decoder keeps refusing to name a project after a symlink.
+        let (_d, root) = real_tmp();
+        std::fs::create_dir_all(format!("{root}/_sync/dev/gestore-lab")).unwrap();
+        std::os::unix::fs::symlink("gestore-lab", format!("{root}/_sync/dev/master")).unwrap();
+        assert_eq!(verified(&format!("{root}/_sync/dev/master")), None);
+    }
+
+    #[test]
+    fn test_decode_verified_dot_dirs_and_mixed_names() {
+        let (_d, root) = real_tmp();
+        let real = format!("{root}/.config/my_tool.v2/sub-dir");
+        std::fs::create_dir_all(&real).unwrap();
+        assert_eq!(verified(&real), Some(real.clone()));
+    }
+
+    #[test]
+    fn test_decode_verified_prefers_literal_hyphen_on_a_tie() {
+        // `a-b` and `a_b` encode identically. Decoding must be deterministic,
+        // and the literal-hyphen name is the one the old decoder returned.
+        let (_d, root) = real_tmp();
+        std::fs::create_dir_all(format!("{root}/x/a-b")).unwrap();
+        std::fs::create_dir_all(format!("{root}/x/a_b")).unwrap();
+        assert_eq!(
+            verified(&format!("{root}/x/a-b")),
+            Some(format!("{root}/x/a-b"))
+        );
+    }
+
+    #[test]
+    fn test_decode_verified_nested_hyphenated_dirs() {
+        // The case the old splitter was written for: hyphens that are real
+        // separators inside a hyphenated parent.
+        let (_d, root) = real_tmp();
+        let real = format!("{root}/claude-code-history-viewer/src-tauri");
+        std::fs::create_dir_all(&real).unwrap();
+        assert_eq!(verified(&real), Some(real.clone()));
     }
 
     #[test]
