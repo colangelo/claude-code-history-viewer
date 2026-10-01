@@ -172,6 +172,7 @@ next swap turns every release into a false alarm.
 - **WHEN** the hub binary is replaced by one built at a newer release
 - **THEN** the `version` field changes to the newer release on the first poll after
   the swap, and a release that adds no new route is proven the same way
+
 ### Requirement: Search scope and journal results
 
 The `GET /v1/search` endpoint SHALL accept a `scope` parameter with values
@@ -290,3 +291,17 @@ byte-compatible.
 
 - **WHEN** any pre-change request (no `mode`) is replayed
 - **THEN** the response is byte-identical to pre-change behavior
+
+### Requirement: Session rows carry a conversation-item count
+
+Each row of the sessions list SHALL carry `conversation_count`, the number of the
+session's stored rows whose `content` is present (content-less state records such as
+`attachment`, `mode` or `permission-mode` are not conversation items). The hub MUST
+compute it per returned row from that session's own rows, not by aggregating across
+sessions. `message_count` keeps its existing meaning and value; `conversation_count` is
+additive and MUST NOT change how `message_count` is produced or defined.
+
+#### Scenario: State records are not counted as conversation items
+
+- **WHEN** a session stores N rows with content and M content-less rows (at least one of type `attachment`) and `/v1/sessions` is queried
+- **THEN** that session's row reports `conversation_count == N`

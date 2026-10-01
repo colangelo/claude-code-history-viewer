@@ -675,6 +675,9 @@ strings -a "$LIVE" | grep -c '<the rev marker from the handoff>'   # expect 1, w
 # 7. bootout + bootstrap — NOT `kickstart -k` (which can wedge in
 #    "spawn scheduled"). If a prior kickstart hung, kill it first.
 launchctl bootout  gui/$(id -u)/dev.cchv.hub 2>/dev/null || true
+#    bootout returns before the job is gone; an immediate bootstrap then fails with
+#    "Bootstrap failed: 5: Input/output error" (infra, v0.22.0 swap 2026-10-01).
+until ! launchctl print gui/$(id -u)/dev.cchv.hub >/dev/null 2>&1; do sleep 1; done
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.cchv.hub.plist
 ```
 
