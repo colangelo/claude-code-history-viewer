@@ -89,7 +89,12 @@ export interface HubSession {
   summary: string | null;
   file_path: string | null;
   entrypoint: string | null;
+  /** RECORDS: every archived row, including content-less state records
+   *  (attachment, mode, permission-mode, …). Not a count of conversation turns. */
   message_count: number;
+  /** Conversation items: rows with content. Absent on a hub older than the release
+   *  that added it — the webapp and the hub are swapped separately. */
+  conversation_count?: number;
   first_message_time: string | null;
   last_message_time: string | null;
   has_tool_use: boolean;
@@ -97,6 +102,13 @@ export interface HubSession {
   project_name: string | null;
   project_path: string | null;
   machine_hostname: string;
+}
+
+/** The count a session row leads with: conversation items, or records against an older hub. */
+export function sessionHeadlineCount(
+  s: Pick<HubSession, "message_count" | "conversation_count">
+): number {
+  return s.conversation_count ?? s.message_count;
 }
 
 /** Row shape of `GET /v1/sessions/{id}/messages` (crates/hub/src/browse.rs `MessageRow`). */

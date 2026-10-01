@@ -11,7 +11,11 @@ import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { JournalEntry, HubSession } from "../../services/hubApi";
+import {
+  sessionHeadlineCount,
+  type JournalEntry,
+  type HubSession,
+} from "../../services/hubApi";
 import type { SessionOpenContext } from "./index";
 
 interface JournalEntryCardProps {
@@ -172,10 +176,16 @@ export function JournalEntryCard({
                     >
                       <span className="truncate">{sessionLabel(id)}</span>
                       {match && (
-                        <span className="text-px12 text-muted-foreground">
+                        <span
+                          className="text-px12 text-muted-foreground"
+                          title={t(
+                            "settings.archiveHub.browser.sessions.recordsTooltip",
+                            { count: match.message_count }
+                          )}
+                        >
                           {" · "}
                           {t("settings.archiveHub.journal.sessionMessages", {
-                            count: match.message_count,
+                            count: sessionHeadlineCount(match),
                           })}
                         </span>
                       )}

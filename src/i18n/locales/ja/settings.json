@@ -548,6 +548,7 @@
   "settings.archiveHub.browser.sessions.loading": "セッションを読み込み中...",
   "settings.archiveHub.browser.sessions.empty": "このプロジェクトにはアーカイブされたセッションがありません",
   "settings.archiveHub.browser.sessions.messageCountUnit": "件のメッセージ",
+  "settings.archiveHub.browser.sessions.recordsTooltip": "アーカイブ内のレコード {{count}} 件（添付やモード変更など、会話ではない状態レコードを含む）",
   "settings.archiveHub.browser.selectProject": "アーカイブされたセッションを表示するにはプロジェクトを選択してください",
   "settings.archiveHub.browser.backToProjects": "プロジェクト",
   "settings.archiveHub.browser.backToSessions": "セッション",

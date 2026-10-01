@@ -9,7 +9,7 @@ import { ChevronLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { formatCount, humanizeTimestamp } from "@/utils/journalFormat";
-import type { HubSession } from "../../services/hubApi";
+import { sessionHeadlineCount, type HubSession } from "../../services/hubApi";
 
 export interface SessionsPaneProps {
   sessions: HubSession[];
@@ -90,8 +90,13 @@ export function SessionsPane({
               }`}
             >
               <p className="truncate">{session.summary ?? session.session_id}</p>
-              <p className="text-px12 text-muted-foreground truncate">
-                {formatCount(session.message_count)}{" "}
+              <p
+                className="text-px12 text-muted-foreground truncate"
+                title={t("settings.archiveHub.browser.sessions.recordsTooltip", {
+                  count: session.message_count,
+                })}
+              >
+                {formatCount(sessionHeadlineCount(session))}{" "}
                 {t("settings.archiveHub.browser.sessions.messageCountUnit")}
                 {session.last_message_time
                   ? ` · ${humanizeTimestamp(session.last_message_time)}`
