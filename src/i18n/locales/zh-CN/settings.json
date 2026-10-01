@@ -548,7 +548,7 @@
   "settings.archiveHub.browser.sessions.loading": "正在加载会话...",
   "settings.archiveHub.browser.sessions.empty": "此项目没有归档的会话",
   "settings.archiveHub.browser.sessions.messageCountUnit": "条消息",
-  "settings.archiveHub.browser.sessions.recordsTooltip": "归档中共 {{count}} 条记录，包含附件、模式切换等非对话的状态记录",
+  "settings.archiveHub.browser.sessions.recordsTooltip": "仅统计对话轮次——附件、模式切换等状态记录不计入",
   "settings.archiveHub.browser.selectProject": "选择一个项目以查看其归档的会话",
   "settings.archiveHub.browser.backToProjects": "项目",
   "settings.archiveHub.browser.backToSessions": "会话",

@@ -149,9 +149,8 @@ pub struct SessionRow {
     pub summary: Option<String>,
     pub file_path: Option<String>,
     pub entrypoint: Option<String>,
-    /// **Records**: every row archived for the session, including content-less state
-    /// records (`attachment`, `permission-mode`, …). Not a count of conversation turns —
-    /// see `conversation_count`.
+    /// The session's stored counter — not a count of stored rows, and it can exceed
+    /// them (#47). Not a count of conversation turns either; see `conversation_count`.
     pub message_count: i32,
     /// Rows of this session with `content IS NOT NULL`: the conversation items.
     /// Additive beside `message_count` (#41); computed per returned row.

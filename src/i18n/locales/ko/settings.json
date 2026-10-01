@@ -548,7 +548,7 @@
   "settings.archiveHub.browser.sessions.loading": "세션 불러오는 중...",
   "settings.archiveHub.browser.sessions.empty": "이 프로젝트에 아카이브된 세션이 없습니다",
   "settings.archiveHub.browser.sessions.messageCountUnit": "개 메시지",
-  "settings.archiveHub.browser.sessions.recordsTooltip": "아카이브에 기록 {{count}}건 (첨부, 모드 변경 같은 대화가 아닌 상태 기록 포함)",
+  "settings.archiveHub.browser.sessions.recordsTooltip": "대화 턴만 집계합니다 — 첨부, 모드 변경 같은 상태 기록은 포함되지 않습니다",
   "settings.archiveHub.browser.selectProject": "아카이브된 세션을 보려면 프로젝트를 선택하세요",
   "settings.archiveHub.browser.backToProjects": "프로젝트",
   "settings.archiveHub.browser.backToSessions": "세션",

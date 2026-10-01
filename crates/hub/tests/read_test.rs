@@ -377,7 +377,9 @@ async fn session_rows_count_conversation_items_apart_from_records() {
 
     let s1 = by_id("s1");
     assert_eq!(s1["conversation_count"], 2, "conversation items only");
-    assert_eq!(s1["message_count"], 5, "message_count stays records");
+    // Set by ingest's incremental counter for this fixture — pinned to show the field
+    // is untouched, NOT a guarantee that message_count equals the stored rows (#47).
+    assert_eq!(s1["message_count"], 5, "message_count is unchanged");
 
     let s2 = by_id("s2");
     assert_eq!(s2["conversation_count"], 1);

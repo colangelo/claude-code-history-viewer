@@ -92,9 +92,7 @@ export function SessionsPane({
               <p className="truncate">{session.summary ?? session.session_id}</p>
               <p
                 className="text-px12 text-muted-foreground truncate"
-                title={t("settings.archiveHub.browser.sessions.recordsTooltip", {
-                  count: session.message_count,
-                })}
+                title={t("settings.archiveHub.browser.sessions.recordsTooltip")}
               >
                 {formatCount(sessionHeadlineCount(session))}{" "}
                 {t("settings.archiveHub.browser.sessions.messageCountUnit")}

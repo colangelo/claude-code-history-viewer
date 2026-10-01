@@ -548,7 +548,7 @@
   "settings.archiveHub.browser.sessions.loading": "正在載入工作階段...",
   "settings.archiveHub.browser.sessions.empty": "此專案沒有封存的工作階段",
   "settings.archiveHub.browser.sessions.messageCountUnit": "則訊息",
-  "settings.archiveHub.browser.sessions.recordsTooltip": "封存中共 {{count}} 筆記錄，包含附件、模式切換等非對話的狀態記錄",
+  "settings.archiveHub.browser.sessions.recordsTooltip": "僅統計對話輪次——附件、模式切換等狀態記錄不計入",
   "settings.archiveHub.browser.selectProject": "選擇專案以檢視其封存的工作階段",
   "settings.archiveHub.browser.backToProjects": "專案",
   "settings.archiveHub.browser.backToSessions": "工作階段",

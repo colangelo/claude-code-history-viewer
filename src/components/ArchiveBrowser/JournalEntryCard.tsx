@@ -179,8 +179,7 @@ export function JournalEntryCard({
                         <span
                           className="text-px12 text-muted-foreground"
                           title={t(
-                            "settings.archiveHub.browser.sessions.recordsTooltip",
-                            { count: match.message_count }
+                            "settings.archiveHub.browser.sessions.recordsTooltip"
                           )}
                         >
                           {" · "}

@@ -55,13 +55,13 @@ function renderPane(sessions: HubSession[]) {
 }
 
 describe("SessionsPane count headline", () => {
-  it("renders conversation_count, with records in the tooltip", () => {
+  it("renders conversation_count (not message_count), with an explanatory tooltip", () => {
     renderPane([session({ conversation_count: 7, message_count: 15 })]);
     const line = screen.getByText(/messageCountUnit/);
     expect(line.textContent).toContain("7");
     expect(line.textContent).not.toContain("15");
     expect(line.getAttribute("title")).toBe(
-      "settings.archiveHub.browser.sessions.recordsTooltip|15"
+      "settings.archiveHub.browser.sessions.recordsTooltip"
     );
   });
 

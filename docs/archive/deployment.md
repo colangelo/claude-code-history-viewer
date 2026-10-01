@@ -76,17 +76,18 @@ The analytics-side conversation-only count is deliberately **not** solved here: 
 an API change with its own surface and its own decision about what "a message" means
 to a reader. Tracked on #41.
 
-**Session rows now carry both units (`conversation_count`, #41).** `GET /v1/sessions`
-returns `message_count` — **records**, every row archived for the session, state records
-included, unchanged so no client breaks — and `conversation_count`, the rows with
-`content IS NOT NULL`, which is what a person would call the messages of that session.
-The webapp's session rows lead with the conversation count and put the record count in
-the tooltip. A record is not a conversation item: `attachment` alone is ~73 % of the
-content-less rows, and since #30's cleanup the share is ~50 % of `claude` rows
-(1,010,831 of 2,039,210 on pg1, 2026-10-01), not the 91 % quoted above, so a raw
-`message_count` overstates a session by about 2x now rather than 11x. It is also why the
+**Session rows now carry `conversation_count` (#41).** `GET /v1/sessions` keeps
+`message_count` unchanged and adds `conversation_count`, the stored rows with
+`content IS NOT NULL` — what a person would call the messages of that session. The
+webapp's session rows lead with it. **`message_count` is not a count of stored rows**: it
+is a per-session counter that can exceed them (#47 — in one project 69 of 209 sessions
+carry more than they store), so never read it as a row count and do not size anything
+from it. The row-level figures are separate and still hold: `attachment` is ~73 % of the
+content-less rows, and since #30's cleanup ~50 % of `claude` rows are content-less
+(1,010,831 of 2,039,210 on pg1, 2026-10-01), not the 91 % quoted above — so counting
+**rows** as messages overstates a session by about 2x now, not 11x. That is also why the
 journal legitimately skips about half of its days: a day made only of state records has
-nothing to distil. The project-level counts (`/v1/projects`) are still records —
+nothing to distil. The project-level counts (`/v1/projects`) are untouched —
 aggregating every session per project is the expensive shape and nobody has asked for it.
 
 ### pg1 analytics schema (`0005`) — applied 2026-07-25, infra-verified

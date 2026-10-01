@@ -89,8 +89,8 @@ export interface HubSession {
   summary: string | null;
   file_path: string | null;
   entrypoint: string | null;
-  /** RECORDS: every archived row, including content-less state records
-   *  (attachment, mode, permission-mode, …). Not a count of conversation turns. */
+  /** The session's stored counter — not a count of stored rows, and it can exceed
+   *  them (#47). Not a count of conversation turns either: use `conversation_count`. */
   message_count: number;
   /** Conversation items: rows with content. Absent on a hub older than the release
    *  that added it — the webapp and the hub are swapped separately. */
