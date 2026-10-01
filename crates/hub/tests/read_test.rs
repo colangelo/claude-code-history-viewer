@@ -1492,3 +1492,142 @@ async fn ingest_health_reports_each_machines_latest_message() {
     );
     assert_eq!(machine(silent)["last_message_at"], Value::Null);
 }
+
+// ---------------------------------------------------------------------------
+// ingest health handler — GET /v1/healthz/ingest (#42)
+//
+// Three off-repo consumers (two Gatus checks and a deploy gate that rolls back
+// on failure) depend on the handler, not just the param parsing. The endpoint
+// is global, so isolation is by TIME: fixtures sit 30 years in the past and are
+// judged against a 20-year threshold, which no other test's machine (last_seen
+// defaults to now()) can cross. Fixtures are swept by prefix before and after,
+// because a leftover ancient row would turn every later 20-year reading red.
+// ---------------------------------------------------------------------------
+
+const IHX_THRESHOLD: &str = "631152000"; // 20 years in seconds
+
+async fn ihx_sweep(pool: &sqlx::PgPool) {
+    sqlx::query("DELETE FROM machines WHERE hostname ILIKE 'ihx-%'")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// An ancient (stale under `IHX_THRESHOLD`) machine with a verbatim mDNS-style
+/// hostname in mixed case, so a normalized echo would be visible.
+async fn ihx_ancient_machine(pool: &sqlx::PgPool) -> (Uuid, String, String) {
+    let id = Uuid::new_v4();
+    let short = format!("ihx-{}", &id.simple().to_string()[..12]);
+    let stored = format!("{}.Local", short.to_uppercase());
+    sqlx::query(
+        "INSERT INTO machines (machine_id, hostname, last_seen)
+         VALUES ($1, $2, now() - interval '30 years')",
+    )
+    .bind(id)
+    .bind(&stored)
+    .execute(pool)
+    .await
+    .unwrap();
+    (id, short, stored)
+}
+
+fn ihx_machine(body: &Value, id: Uuid) -> Value {
+    body["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["machine_id"] == id.to_string())
+        .cloned()
+        .unwrap_or_else(|| panic!("machine {id} missing from {body}"))
+}
+
+#[tokio::test]
+async fn ingest_health_exclude_decides_the_verdict_and_hostname_is_verbatim() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    ihx_sweep(&pool).await;
+    let (id, short, stored) = ihx_ancient_machine(&pool).await;
+
+    // Control: the same stale machine, NOT excluded, must page. Without this the
+    // 200 below could come from a fixture that was never stale.
+    let resp = get(
+        &hub,
+        "/v1/healthz/ingest",
+        &[("stale_after_secs", IHX_THRESHOLD)],
+        None,
+    )
+    .await;
+    assert_eq!(resp.status(), 503);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "stale");
+    let m = ihx_machine(&body, id);
+    assert_eq!(m["stale"], true);
+    assert_eq!(m["excluded"], false);
+
+    // Excluded by its bare lowercase name: still listed, still reported stale,
+    // but it no longer flips the endpoint (`any_stale |= stale && !excluded`).
+    let resp = get(
+        &hub,
+        "/v1/healthz/ingest",
+        &[("stale_after_secs", IHX_THRESHOLD), ("exclude", &short)],
+        None,
+    )
+    .await;
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["stale_after_secs"], 631_152_000_i64);
+    let m = ihx_machine(&body, id);
+    assert_eq!(
+        m["stale"], true,
+        "excluded machines keep their real stale flag"
+    );
+    assert_eq!(m["excluded"], true, "excluded machines stay listed");
+    // Verbatim, NOT normalize_host: consumers substring-match `<host>.local`
+    // against the raw body, one of them a deploy gate that rolls back on failure.
+    assert_eq!(m["hostname"], Value::String(stored.clone()));
+    assert_ne!(m["hostname"], Value::String(short.clone()));
+
+    ihx_sweep(&pool).await;
+}
+
+#[tokio::test]
+async fn ingest_health_echoes_the_window_and_rejects_bad_ones() {
+    let hub = spawn().await;
+
+    let resp = get(&hub, "/v1/healthz/ingest", &[], None).await;
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["stale_after_secs"], 7200,
+        "default window is 2x the hourly scan"
+    );
+
+    let resp = get(
+        &hub,
+        "/v1/healthz/ingest",
+        &[("stale_after_secs", "129600")],
+        None,
+    )
+    .await;
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["stale_after_secs"], 129_600,
+        "the Gatus window, echoed as parsed"
+    );
+
+    for bad in ["abc", "0", "-5", ""] {
+        let resp = get(
+            &hub,
+            "/v1/healthz/ingest",
+            &[("stale_after_secs", bad)],
+            None,
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "stale_after_secs={bad:?} must be rejected"
+        );
+    }
+}
