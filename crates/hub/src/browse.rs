@@ -149,7 +149,13 @@ pub struct SessionRow {
     pub summary: Option<String>,
     pub file_path: Option<String>,
     pub entrypoint: Option<String>,
+    /// **Records**: every row archived for the session, including content-less state
+    /// records (`attachment`, `permission-mode`, …). Not a count of conversation turns —
+    /// see `conversation_count`.
     pub message_count: i32,
+    /// Rows of this session with `content IS NOT NULL`: the conversation items.
+    /// Additive beside `message_count` (#41); computed per returned row.
+    pub conversation_count: i64,
     pub first_message_time: Option<DateTime<Utc>>,
     pub last_message_time: Option<DateTime<Utc>>,
     pub has_tool_use: bool,
@@ -200,6 +206,9 @@ pub async fn list_sessions(
                s.file_path,
                s.entrypoint,
                s.message_count      AS "message_count!",
+               (SELECT count(*) FROM messages m
+                 WHERE m.session_id = s.id AND m.content IS NOT NULL)
+                                    AS "conversation_count!",
                s.first_message_time,
                s.last_message_time,
                s.has_tool_use       AS "has_tool_use!",
@@ -241,6 +250,7 @@ pub async fn list_sessions(
                     file_path: r.file_path,
                     entrypoint: r.entrypoint,
                     message_count: r.message_count,
+                    conversation_count: r.conversation_count,
                     first_message_time: r.first_message_time,
                     last_message_time: r.last_message_time,
                     has_tool_use: r.has_tool_use,

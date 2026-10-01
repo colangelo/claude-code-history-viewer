@@ -323,6 +323,67 @@ async fn projects_list_carries_provenance_and_aggregates() {
     assert_eq!(arr[0]["message_count"], 2);
 }
 
+/// A content-less state record (`attachment`, `permission-mode`, …): it is a row in
+/// `messages`, but not a conversation turn (#41).
+fn state_record(session: &str, key: &str, seq: i32, ts: &str, kind: &str) -> IngestMessage {
+    IngestMessage {
+        message_type: Some(kind.into()),
+        role: None,
+        content: None,
+        raw: json!({ "type": kind }),
+        search_text: None,
+        ..msg(session, key, seq, ts, "")
+    }
+}
+
+#[tokio::test]
+async fn session_rows_count_conversation_items_apart_from_records() {
+    let hub = spawn().await;
+    // N = 2 conversation rows, M = 3 content-NULL rows (one of them an attachment).
+    let b = batch(
+        &hub,
+        vec![proj("/tmp/a", "alpha")],
+        vec![sess("s1", "/tmp/a"), sess("s2", "/tmp/a")],
+        vec![
+            msg("s1", "k1", 0, "2026-01-01T00:00:00Z", "one"),
+            state_record("s1", "k2", 1, "2026-01-01T00:00:30Z", "attachment"),
+            msg("s1", "k3", 2, "2026-01-01T00:01:00Z", "two"),
+            state_record("s1", "k4", 3, "2026-01-01T00:01:30Z", "permission-mode"),
+            state_record("s1", "k5", 4, "2026-01-01T00:02:00Z", "attachment"),
+            // s2 has no state records: the two counts must agree, and s1's must not leak in.
+            msg("s2", "k6", 0, "2026-01-02T00:00:00Z", "solo"),
+        ],
+    );
+    ingest(&hub, &b).await;
+
+    let resp = get(
+        &hub,
+        "/v1/sessions",
+        &[("machine", &hub.hostname)],
+        Some(&hub.token),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let sessions: Value = resp.json().await.unwrap();
+    let by_id = |id: &str| {
+        sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["session_id"] == id)
+            .unwrap_or_else(|| panic!("session {id} missing from {sessions}"))
+            .clone()
+    };
+
+    let s1 = by_id("s1");
+    assert_eq!(s1["conversation_count"], 2, "conversation items only");
+    assert_eq!(s1["message_count"], 5, "message_count stays records");
+
+    let s2 = by_id("s2");
+    assert_eq!(s2["conversation_count"], 1);
+    assert_eq!(s2["message_count"], 1);
+}
+
 #[tokio::test]
 async fn session_messages_returned_in_order() {
     let hub = spawn().await;
