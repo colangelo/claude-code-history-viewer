@@ -16,5 +16,5 @@
 
 ## 4. Gate
 
-- [ ] 4.1 `just archive-test`, `just archive-lint`, `cargo fmt --all -- --check`, `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`, `pnpm run i18n:validate`
-- [ ] 4.2 `git grep -nE 'cat-bluegill|\.ts\.net'` shows nothing new; push to `internal` only
+- [x] 4.1 `just archive-test`, `just archive-lint`, `cargo fmt --all -- --check`, `pnpm tsc --build .`, `pnpm vitest run`, `pnpm lint`, `pnpm run i18n:validate`
+- [x] 4.2 the AGENTS.md internal-hostname grep shows nothing new (origin is a public fork); push to `internal` only
