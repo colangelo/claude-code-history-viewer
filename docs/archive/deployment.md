@@ -76,6 +76,19 @@ The analytics-side conversation-only count is deliberately **not** solved here: 
 an API change with its own surface and its own decision about what "a message" means
 to a reader. Tracked on #41.
 
+**Session rows now carry both units (`conversation_count`, #41).** `GET /v1/sessions`
+returns `message_count` — **records**, every row archived for the session, state records
+included, unchanged so no client breaks — and `conversation_count`, the rows with
+`content IS NOT NULL`, which is what a person would call the messages of that session.
+The webapp's session rows lead with the conversation count and put the record count in
+the tooltip. A record is not a conversation item: `attachment` alone is ~73 % of the
+content-less rows, and since #30's cleanup the share is ~50 % of `claude` rows
+(1,010,831 of 2,039,210 on pg1, 2026-10-01), not the 91 % quoted above, so a raw
+`message_count` overstates a session by about 2x now rather than 11x. It is also why the
+journal legitimately skips about half of its days: a day made only of state records has
+nothing to distil. The project-level counts (`/v1/projects`) are still records —
+aggregating every session per project is the expensive shape and nobody has asked for it.
+
 ### pg1 analytics schema (`0005`) — applied 2026-07-25, infra-verified
 
 The analytics migration (`message_id` column on `messages`, plus
