@@ -5,15 +5,26 @@
 
 ## 1. Baseline (no code change)
 
-- [ ] 1.1 Record the "before" numbers: `cargo tree -p claude-code-history-viewer
+- [x] 1.1 Record the "before" numbers: `cargo tree -p claude-code-history-viewer
       --features webui-server --target all --prefix none | sort -u | wc -l`, the
       desktop-only lockfile entries, a clean `cargo build --release --features webui-server`
       wall time (under the m4m heavy-job lock), and the release binary size.
-- [ ] 1.2 Capture golden outputs: `--export` of three real sessions (Claude, Codex, one
+      **Done 2026-10-09** on m4m, rustc 1.98, `--features webui-server`, release:
+      dependency graph 664 crates (normal+build edges), **254 with the 12 `tauri*` crates
+      pruned**, so ~410 arrive only through Tauri; 40 desktop-only lockfile names; binary
+      **40,269,912 bytes**; build 162 s wall under `lockf`+`nice -n 15`+6 jobs with 437
+      crates compiled (warm cache, NOT a cold number). 4.6 must rebuild **before and
+      after** from a full `cargo clean` with identical settings to compare times.
+- [x] 1.2 Capture golden outputs: `--export` of three real sessions (Claude, Codex, one
       other provider) as HTML and JSON, kept under `/private/tmp` (they contain transcript
       text: never commit them).
-- [ ] 1.3 List every `isTauri()` branch and `@tauri-apps/*` import in `src/` with its web
-      half: present, or missing and needs a decision.
+      **Done 2026-10-09:** three Claude sessions (16 KB, 492 KB, 50 MB of JSONL), HTML +
+      JSON each, in `/private/tmp/claude-501/cchv-night/web-only-baseline/golden/`, with
+      the inputs copied beside them (retention would otherwise delete them). Control: a
+      repeat export of every one was byte-identical, so 4.3's `cmp -s` can actually fail.
+      `--export` reads Claude JSONL only, so "Codex / other provider" does not apply.
+- [x] 1.3 List every `isTauri()` branch and `@tauri-apps/*` import in `src/` with its web
+      half: present, or missing and needs a decision. Done: design.md appendix.
 
 ## 2. Backend: remove Tauri from `src-tauri`
 
@@ -29,7 +40,12 @@
       quiet on stdout.
 - [ ] 2.5 D3: make `webui-server` the default feature (or fold it in, per Q3).
 - [ ] 2.6 Remove the watcher's `AppHandle` emit path; keep the web stubs as they are.
-- [ ] 2.7 `cargo tree -i tauri --target all` prints nothing; clippy (CI's Rust version)
+- [ ] 2.7 Delete the `--session` startup flag (`cli.rs`, `get_startup_session_hint`,
+      `src/lib/preloadSession.ts`, the `App.tsx` listener). It only preloads a session in
+      the GUI window and never worked in the WebUI (the archive webapp's hash deep links
+      are the browser-side equivalent). The server route
+      added in `638b7bea` goes with it.
+- [ ] 2.8 `cargo tree -i tauri --target all` prints nothing; clippy (CI's Rust version)
       `--all-targets --all-features -D warnings`; `cargo test -- --test-threads=1`.
 
 ## 3. Frontend

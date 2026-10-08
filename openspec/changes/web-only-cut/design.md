@@ -98,3 +98,26 @@ pass after removal.
   break.
 - **Q3.** D3: keep `webui-server` as a default feature, or make axum unconditional?
   Recommendation: default feature.
+
+## Appendix: frontend Tauri inventory (task 1.3, measured 2026-10-09)
+
+The 41 `isTauri` references and 13 `@tauri-apps/*` importers fall into two kinds: branches
+that already have a web half, and desktop-only affordances that have none. Nothing in the
+second kind is a feature the WebUI has today. Removing it removes a button that is already
+hidden in the browser.
+
+| Where | Tauri half | Web half today | After the cut |
+|---|---|---|---|
+| `services/api.ts` | `invoke()` | `fetch('/api/…')` | web half only |
+| `services/storage.ts` | `plugin-store` | `localStorage` (`webui:<name>:` prefix) | web half only. Desktop store contents are not migrated (nobody runs desktop, Q1) |
+| `utils/fileDialog.ts` (save ×3), `ArchiveBrowser` export | `plugin-dialog` save + `write_text_file` | Blob download | web half only |
+| `useLanguageStore.ts` | `plugin-os` locale | `navigator.language` | web half only |
+| `utils/platform.ts` `openExternal` | `plugin-opener` | `window.open` | web half only |
+| `serverSlice.loadServerConfig` | hard-codes not-read-only | `get_server_config` | web half only |
+| `ArchiveBrowser` "open folder", `useSessionEditing` "reveal in Finder" | `revealItemInDir` | **none**: button hidden | delete; a browser can't reveal a path on the server's disk |
+| `CustomDirectoriesSection`, `FolderSelector` folder picker | `plugin-dialog` open | **none**: text input only | delete the picker button; typing the path stays |
+| `useFileWatcher.ts` | `listen()` on watcher events | **none**: manual refresh | unchanged (Non-Goal: SSE wiring is separate) |
+| `App.tsx` `cli-session-hint` listener | single-instance second launch | **none**: already catches and warns | delete together with `--session` (task 2.7) |
+| `WslSection.tsx` | Windows + Tauri only | **none**: hidden | delete the section; the server-side WSL scan in `commands/wsl.rs` stays |
+| `Header.tsx` traffic-light inset, `PlatformProvider` `desktop` flag | macOS window chrome | n/a | delete |
+| `useUpdater.ts`, `SimpleUpdateModal.tsx` | updater plugin | n/a | delete (D4) |
