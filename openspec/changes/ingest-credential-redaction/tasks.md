@@ -1,6 +1,6 @@
 # Tasks
 
-> **Gate:** groups 2–4 wait on design.md Q-a/Q-b (ac) and Q-c (infra). Group 1 is
+> **Gate:** groups 2–4 wait on design.md Q-a/Q-b (ac); Q-c is answered. Group 1 is
 > fixture work and safe to start.
 
 ## 1. Fixtures and rule harness (no ingest change)
@@ -35,9 +35,13 @@
 
 - [ ] 3.1 `GET /v1/findings/summary?since=` → counts by rule, no text; read-auth like
       the other `/v1` reads.
-- [ ] 3.2 `cchv-hub redact-existing --dry-run [--rule] [--since]`: id-batched scan
-      reporting counts by rule and key name plus value-shape buckets. Test that its output
-      contains no fixture value.
+- [ ] 3.2 `cchv-hub redact-existing --dry-run [--rule] [--since] [--expect <sid>:<mid>]…`:
+      id-batched scan. Per hit: rule, key name, session id, message id, host, timestamp,
+      value shape. Totals by rule and key name. A reach section: scanned machines, time
+      range, fields, rules, detector version, and the not-reached list (Mac-side JSONL, ingest
+      gaps, outside `--since`, uncovered shapes). Verdict "could not look" when any
+      `--expect` location is not hit. Tests: output contains no fixture value; a missed
+      `--expect` flips the verdict; every hit carries its location.
 - [ ] 3.3 Real run: rewrite, insert findings, re-derive (tool rows, `message_embeddings`
       delete, journal day dirty, mirror rebuild note). Tested on the throwaway PG.
 - [ ] 3.4 Flag-only scan of `journal_entries` text (design Q5 residual).
@@ -50,5 +54,6 @@
 - [ ] 4.3 Infra/ac run `redact-existing --dry-run`, tune the `assign` deny list from the
       key-name counts, then flip the remaining rules to `redact`.
 - [ ] 4.4 Gatus check on `/v1/findings/summary?since=24h` per Q-b.
-- [ ] 4.5 Hand `ac/infra#104` the dry-run result, reported as a **floor**: what it
-      searched and what it cannot reach.
+- [ ] 4.5 Infra runs the dry run on prod as the `ac/infra#104` sweep, with `--expect` set
+      to the `#86`/`#102` locations, and owns every rotation. Its result is reported as
+      a floor.

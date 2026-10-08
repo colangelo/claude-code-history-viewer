@@ -59,17 +59,34 @@ message text, so an external check can alert on new findings.
 
 ### Requirement: Retroactive redaction of stored rows
 The hub SHALL provide an operator command that applies the same rules to messages already
-stored. A dry run SHALL report counts by rule and key name and value shape only. A real run
-SHALL rewrite matching rows and invalidate every copy derived from them.
+stored. A dry run SHALL change nothing and report each hit's rule, key name, location
+(session, message, machine, timestamp) and value shape, never a value. A real run SHALL
+rewrite matching rows and invalidate every copy derived from them.
 
-#### Scenario: Dry run reports no values
+#### Scenario: Dry run reports locations, not values
 - **WHEN** the command runs with `--dry-run`
-- **THEN** it reports counts per rule and per key name, changes nothing, and prints no value
+- **THEN** each hit is reported with its rule, key name, session id, message id, machine and
+  timestamp, nothing is changed, and no value is printed
 
 #### Scenario: Real run invalidates derived copies
 - **WHEN** the command redacts a stored message
 - **THEN** that message's search vector, tool rows and embeddings no longer contain the value,
   and its session's journal day is marked for re-distillation
+
+### Requirement: Dry run proves it can see before it reports
+The dry run SHALL accept expected hit locations and SHALL report the verdict "could not look"
+instead of a result when any expected location is not found. Every report SHALL state what
+it scanned and what it could not reach.
+
+#### Scenario: A known leak is missed
+- **WHEN** the dry run is given `--expect` for a message known to contain a credential and
+  reports no hit at that location
+- **THEN** its verdict is "could not look", not a count or "clean"
+
+#### Scenario: Reach is stated
+- **WHEN** any dry run completes
+- **THEN** its report lists the machines, time range, fields, rules and detector version it
+  scanned, and names what it could not reach
 
 ### Requirement: Rules are proven against fixtures
 Every rule SHALL have at least one known-positive and one known-negative fixture, and the

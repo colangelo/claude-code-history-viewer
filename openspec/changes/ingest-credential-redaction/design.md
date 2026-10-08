@@ -61,8 +61,9 @@ v1 rules, each with an id used in findings and markers:
 
 The `assign` deny list is the part most likely to be wrong, which is why rollout is per rule:
 1. Ship with every rule in `flag` mode.
-2. Run `redact-existing --dry-run` on prod (infra or ac runs it). It reports **counts by rule
-   and by key name, plus value shapes** (length bucket, character classes), never a value.
+2. Run `redact-existing --dry-run` on prod (infra runs it). Per hit it reports the rule, key
+   name, value shape (length bucket, character classes) and location, never a value, plus
+   totals by rule and key name.
    A key name like `tokenizer` showing thousands of hits is an obvious false positive that
    can be read without seeing any secret.
 3. Adjust the deny list, re-measure, then switch each rule to `redact` in `hub.toml`.
@@ -81,6 +82,19 @@ in place, inserts findings, and re-derives:
 
 It never runs automatically. A dry-run result is a **floor, not a verdict**: it says what the
 rules can reach, not that the archive is clean.
+
+**The dry run is also the `ac/infra#104` sweep.** Infra agreed 2026-10-09 and runs it on prod
+after the release; every rotation is theirs. They set three conditions, all binding:
+1. **Locations, never values.** Each hit reports rule, key name, session id, message id,
+   machine (host), message timestamp and value shape. Counts alone can't drive a rotation.
+2. **Positive control first.** The run takes the locations of the two known real leaks
+   (`ac/infra#86`, `#102`) as `--expect <session-id>:<message-id>`, repeatable. If it doesn't
+   find every expected location, the report's verdict is **"could not look"**, not "clean"
+   and not a count. This is the check that can fail: a dry run that misses a known leak
+   proves the instrument is blind.
+3. **Stated reach.** Every report says what it scanned (machines, time range, fields, rules
+   and detector version) and what it could not: Mac-side JSONL never ingested, ingest gaps,
+   rows outside `--since`, and shapes no rule covers.
 
 ### Q5 — embeddings and journal: covered by placement
 
@@ -108,6 +122,5 @@ hit there marks the day for re-distill.
   redact mode on day one, `bearer` and `assign` flag-first.
 - **Q-b.** Who gets notified on a new finding: a Gatus check on
   `/v1/findings/summary?since=24h` paging infra (rec), or a relay message per finding?
-- **Q-c.** Infra: do you want `redact-existing --dry-run` as the sweep instrument for
-  `ac/infra#104`? It scans `raw` with the same rules rather than FTS, so it reaches what a
-  keyword sweep cannot. It is still a floor.
+- **Q-c — answered (infra, 2026-10-09, recorded on `ac/infra#104`):** yes, the dry run is
+  the #104 sweep, under the three conditions in Q4.

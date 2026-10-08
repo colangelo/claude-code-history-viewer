@@ -28,8 +28,9 @@ Infra owns any sweep and every rotation (`ac/infra#104`).
   can tell infra to rotate. Redaction at rest does not un-leak a secret: it also passed
   through the model provider and is still in the source JSONL on the Mac.
 - An operator command, `cchv-hub redact-existing`, applies the same detector to rows already
-  ingested. `--dry-run` reports counts only. A real run re-derives everything built from a
-  changed row. Whether and when to run it on prod is infra/ac's call, never this change's.
+  ingested. `--dry-run` reports each hit's location and never a value. It is infra's
+  `ac/infra#104` sweep and must find the two known leaks before its result counts. A real
+  run re-derives everything built from a changed row. Whether and when to run it on prod is infra/ac's call, never this change's.
 - **BREAKING (spec):** `raw` is no longer guaranteed to round-trip verbatim: redacted spans
   differ, and NUL bytes are already stripped today.
 
