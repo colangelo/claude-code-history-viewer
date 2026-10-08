@@ -5,11 +5,25 @@ on:
     branches: [main, develop]
     paths:
       - "src-tauri/**"
+      # src-tauri depends on crates/history-core by path, and the workspace
+      # lock/manifest decide its dependency graph, so a change there can break
+      # this suite's lint and tests. Without these a crates/** fix cannot
+      # re-run a red rust-tests run (#14).
+      - "crates/history-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/rust-tests.yml"
   pull_request:
     branches: [main, develop]
     paths:
       - "src-tauri/**"
+      # src-tauri depends on crates/history-core by path, and the workspace
+      # lock/manifest decide its dependency graph, so a change there can break
+      # this suite's lint and tests. Without these a crates/** fix cannot
+      # re-run a red rust-tests run (#14).
+      - "crates/history-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/rust-tests.yml"
 
 env:
