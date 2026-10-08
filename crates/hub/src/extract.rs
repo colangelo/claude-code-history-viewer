@@ -228,8 +228,11 @@ mod tests {
     #[test]
     fn no_tool_use_yields_no_rows() {
         let content = json!([{ "type": "text", "text": "hello" }]);
-        assert!(tool_uses(Some("assistant"), Some(&content), &json!({})).is_empty());
-        assert!(tool_results(Some(&content)).is_empty());
+        assert_eq!(
+            tool_uses(Some("assistant"), Some(&content), &json!({})),
+            [] as [ToolUseRow; 0]
+        );
+        assert_eq!(tool_results(Some(&content)), [] as [ToolResultRow; 0]);
     }
 
     #[test]
@@ -285,7 +288,10 @@ mod tests {
     #[test]
     fn non_assistant_messages_contribute_no_content_array_invocations() {
         let content = json!([{ "type": "tool_use", "id": "t", "name": "Read", "input": {} }]);
-        assert!(tool_uses(Some("user"), Some(&content), &json!({})).is_empty());
+        assert_eq!(
+            tool_uses(Some("user"), Some(&content), &json!({})),
+            [] as [ToolUseRow; 0]
+        );
     }
 
     #[test]
@@ -351,13 +357,16 @@ mod tests {
             { "type": "tool_result", "is_error": true },
             { "type": "tool_result", "tool_use_id": "", "is_error": true },
         ]);
-        assert!(tool_results(Some(&content)).is_empty());
+        assert_eq!(tool_results(Some(&content)), [] as [ToolResultRow; 0]);
     }
 
     #[test]
     fn string_content_is_tolerated() {
         let content = json!("just a string");
-        assert!(tool_uses(Some("assistant"), Some(&content), &json!({})).is_empty());
-        assert!(tool_results(Some(&content)).is_empty());
+        assert_eq!(
+            tool_uses(Some("assistant"), Some(&content), &json!({})),
+            [] as [ToolUseRow; 0]
+        );
+        assert_eq!(tool_results(Some(&content)), [] as [ToolResultRow; 0]);
     }
 }

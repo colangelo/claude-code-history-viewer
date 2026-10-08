@@ -297,7 +297,16 @@ async fn result_ingested_before_its_invocation_still_resolves() {
         )],
     );
     assert_eq!(post_ingest(&hub, &first).await, 200);
-    assert!(tool_uses(&hub).await.is_empty());
+    assert_eq!(
+        tool_uses(&hub).await,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>,
+            std::option::Option<std::string::String>,
+            std::option::Option<std::string::String>,
+            bool
+        ); 0]
+    );
     assert_eq!(tool_results(&hub).await.len(), 1);
 
     let second = batch(
@@ -409,6 +418,18 @@ async fn messages_without_tool_use_derive_nothing() {
         )],
     );
     assert_eq!(post_ingest(&hub, &b).await, 200);
-    assert!(tool_uses(&hub).await.is_empty());
-    assert!(tool_results(&hub).await.is_empty());
+    assert_eq!(
+        tool_uses(&hub).await,
+        [] as [(
+            std::string::String,
+            std::option::Option<std::string::String>,
+            std::option::Option<std::string::String>,
+            std::option::Option<std::string::String>,
+            bool
+        ); 0]
+    );
+    assert_eq!(
+        tool_results(&hub).await,
+        [] as [(std::string::String, bool); 0]
+    );
 }

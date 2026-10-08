@@ -473,7 +473,10 @@ async fn provenance_drift_makes_a_group_pending_again() {
     let groups = pending_for(&hub, &project, &from).await;
     let ids = groups[0].1.clone();
     assert_eq!(post_entry(&hub, &project, &date, &ids).await.status(), 200);
-    assert!(pending_for(&hub, &project, &from).await.is_empty());
+    assert_eq!(
+        pending_for(&hub, &project, &from).await,
+        [] as [(std::string::String, std::vec::Vec<i64>); 0]
+    );
 
     // Rewrite the stored provenance to a stale subset — exactly the shape every
     // entry written under the session-start fold is in. Snapshot-based dirtiness

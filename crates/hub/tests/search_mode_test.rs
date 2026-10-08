@@ -173,7 +173,7 @@ async fn post_entry(hub: &TestHub, path: &str, date: &str, headline: &str, summa
         })
         .map(|s| s["id"].as_i64().unwrap())
         .collect();
-    assert!(!ids.is_empty());
+    assert_ne!(ids, [] as [i64; 0]);
     let resp = client()
         .post(format!("{}/v1/journal/entries", hub.base))
         .bearer_auth(&hub.token)

@@ -175,7 +175,7 @@ mod tests {
     fn a_range_shorter_than_one_step_still_yields_a_span() {
         let tz = parse("Europe/Rome").unwrap();
         let s = spans(tz, dt("2026-07-01T10:00:00Z"), dt("2026-07-01T10:00:00Z"));
-        assert!(!s.is_empty());
+        assert_ne!(s, [] as [TzSpan; 0]);
         assert_eq!(s[0].offset_secs, 7200);
     }
 

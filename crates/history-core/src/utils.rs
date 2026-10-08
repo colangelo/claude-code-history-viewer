@@ -551,7 +551,7 @@ mod tests {
     fn test_find_line_ranges_empty() {
         let data = b"";
         let ranges = find_line_ranges(data);
-        assert!(ranges.is_empty());
+        assert_eq!(ranges, [] as [(usize, usize); 0]);
     }
 
     #[test]
@@ -587,7 +587,7 @@ mod tests {
     fn test_find_line_ranges_only_newlines() {
         let data = b"\n\n\n";
         let ranges = find_line_ranges(data);
-        assert!(ranges.is_empty());
+        assert_eq!(ranges, [] as [(usize, usize); 0]);
     }
 
     #[test]

@@ -150,7 +150,7 @@ async fn session_ids(hub: &TestHub, path: &str) -> Vec<i64> {
 /// POST a journal row for `path`/`date`. `status` is `entry` or `skip`.
 async fn post_entry(hub: &TestHub, path: &str, date: &str, status: &str, summary: &str) {
     let ids = session_ids(hub, path).await;
-    assert!(!ids.is_empty());
+    assert_ne!(ids, [] as [i64; 0]);
     let mut payload = json!({
         "entry_date": date,
         "project_path": path,

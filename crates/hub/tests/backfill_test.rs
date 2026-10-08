@@ -277,7 +277,17 @@ async fn backfill_reproduces_exactly_what_live_ingest_derived() {
     assert!(!live_uses.is_empty(), "live ingest derived nothing");
 
     wipe_derived(&hub).await;
-    assert!(use_rows(&hub).await.is_empty());
+    assert_eq!(
+        use_rows(&hub).await,
+        [] as [(
+            std::string::String,
+            std::string::String,
+            std::option::Option<std::string::String>,
+            std::option::Option<std::string::String>,
+            std::option::Option<std::string::String>,
+            bool
+        ); 0]
+    );
     assert!(id_rows(&hub).await.iter().all(|(_, id)| id.is_none()));
 
     hub::backfill::run(&hub.pool, 500).await.unwrap();

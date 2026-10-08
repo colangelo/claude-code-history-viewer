@@ -693,7 +693,7 @@ async fn journal_reads_accept_identity_scope() {
             .iter()
             .map(|s| s["id"].as_i64().unwrap())
             .collect();
-        assert!(!ids.is_empty());
+        assert_ne!(ids, [] as [i64; 0]);
         let resp = client()
             .post(format!("{}/v1/journal/entries", hub.base))
             .bearer_auth(&hub.token)
