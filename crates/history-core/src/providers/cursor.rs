@@ -201,6 +201,13 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
 
+    load_messages_from_db(&conn, composer_id)
+}
+
+fn load_messages_from_db(
+    conn: &Connection,
+    composer_id: &str,
+) -> Result<Vec<ClaudeMessage>, String> {
     // Get composer data (ordered bubble list)
     let composer_key = format!("composerData:{composer_id}");
     let composer_data: String = conn
@@ -213,10 +220,22 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
 
     let composer: Value = parse_cursor_json(&composer_data)?;
 
-    let headers = composer
-        .get("fullConversationHeadersOnly")
-        .and_then(Value::as_array)
-        .ok_or("No conversation headers found")?;
+    let Some(headers) = composer.get("fullConversationHeadersOnly") else {
+        // Older composers store full bubbles inline instead of separate rows.
+        let mut messages = Vec::new();
+        if let Some(conversation) = composer.get("conversation").and_then(Value::as_array) {
+            for bubble in conversation {
+                let bubble_type = bubble.get("type").and_then(Value::as_u64).unwrap_or(0);
+                if let Some(msg) = convert_cursor_bubble(bubble, bubble_type, composer_id) {
+                    messages.push(msg);
+                }
+            }
+        }
+        return Ok(messages);
+    };
+    let Some(headers) = headers.as_array().filter(|headers| !headers.is_empty()) else {
+        return Ok(Vec::new());
+    };
 
     // Batch load all bubbles for this composer in a single query
     let prefix = format!("bubbleId:{composer_id}:");
@@ -281,13 +300,22 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
 
+    search_from_db(&conn, query, limit)
+}
+
+fn search_from_db(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    // Search through bubble content using SQL LIKE for efficiency
+    // Search separate bubbles and older inline conversations using SQL LIKE.
     let mut stmt = conn
         .prepare(
-            "SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND value LIKE ?1",
+            "SELECT key, value FROM cursorDiskKV
+             WHERE (key LIKE 'bubbleId:%' OR key LIKE 'composerData:%') AND value LIKE ?1",
         )
         .map_err(|e| format!("Query failed: {e}"))?;
 
@@ -307,19 +335,32 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
             Err(_) => continue,
         };
 
-        // Extract composer ID from key: bubbleId:<composerId>:<bubbleId>
-        let parts: Vec<&str> = key.splitn(3, ':').collect();
-        let composer_id = if parts.len() >= 3 { parts[1] } else { "" };
+        let (composer_id, bubbles) = if let Some(id) = key.strip_prefix("composerData:") {
+            // Modern composers are already searched through their bubble rows.
+            if bubble.get("fullConversationHeadersOnly").is_some() {
+                continue;
+            }
+            let Some(conversation) = bubble.get("conversation").and_then(Value::as_array) else {
+                continue;
+            };
+            (id, conversation.as_slice())
+        } else {
+            // Extract composer ID from key: bubbleId:<composerId>:<bubbleId>
+            let parts: Vec<&str> = key.splitn(3, ':').collect();
+            let id = if parts.len() >= 3 { parts[1] } else { "" };
+            (id, std::slice::from_ref(&bubble))
+        };
 
-        let bubble_type = bubble.get("type").and_then(Value::as_u64).unwrap_or(0);
-
-        if let Some(mut msg) = convert_cursor_bubble(&bubble, bubble_type, composer_id) {
-            if let Some(ref c) = msg.content {
-                if search_json_value_case_insensitive(c, &query_lower) {
-                    msg.project_name = Some("Cursor".to_string());
-                    results.push(msg);
-                    if results.len() >= limit {
-                        return Ok(results);
+        for bubble in bubbles {
+            let bubble_type = bubble.get("type").and_then(Value::as_u64).unwrap_or(0);
+            if let Some(mut msg) = convert_cursor_bubble(bubble, bubble_type, composer_id) {
+                if let Some(ref c) = msg.content {
+                    if search_json_value_case_insensitive(c, &query_lower) {
+                        msg.project_name = Some("Cursor".to_string());
+                        results.push(msg);
+                        if results.len() >= limit {
+                            return Ok(results);
+                        }
                     }
                 }
             }
@@ -636,6 +677,155 @@ fn map_cursor_tool_name(name: &str) -> &str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn create_cursor_db(rows: &[(&str, Value)]) -> (tempfile::TempDir, Connection) {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = Connection::open(tmp.path().join("state.vscdb")).unwrap();
+        conn.execute(
+            "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .unwrap();
+        for (key, value) in rows {
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                [*key, &value.to_string()],
+            )
+            .unwrap();
+        }
+        (tmp, conn)
+    }
+
+    #[test]
+    fn test_load_messages_inline_conversation() {
+        let (_tmp, conn) = create_cursor_db(&[(
+            "composerData:old-session",
+            json!({"conversation": [
+                {"type": 1, "bubbleId": "user-1", "text": "Hello"},
+                {"type": 2, "bubbleId": "assistant-1", "text": "Hi"},
+                {"type": 2, "bubbleId": "empty", "text": ""},
+                {"bubbleId": "missing-type", "text": "Skipped"},
+                {"type": 3, "bubbleId": "unknown-type", "text": "Skipped"}
+            ]}),
+        )]);
+
+        let messages = load_messages_from_db(&conn, "old-session").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].uuid, "user-1");
+        assert_eq!(messages[0].message_type, "user");
+        assert_eq!(messages[0].session_id, "old-session");
+        assert_eq!(
+            messages[0].content,
+            Some(json!([{"type": "text", "text": "Hello"}]))
+        );
+        assert_eq!(messages[1].uuid, "assistant-1");
+        assert_eq!(messages[1].message_type, "assistant");
+        assert_eq!(
+            messages[1].content,
+            Some(json!([{"type": "text", "text": "Hi"}]))
+        );
+    }
+
+    #[test]
+    fn test_load_messages_empty_conversations() {
+        let (_tmp, conn) = create_cursor_db(&[
+            ("composerData:old-empty", json!({"conversation": []})),
+            (
+                "composerData:modern-empty",
+                json!({"fullConversationHeadersOnly": []}),
+            ),
+            (
+                "composerData:no-conversation",
+                json!({"composerId": "no-conversation"}),
+            ),
+        ]);
+        for id in ["old-empty", "modern-empty", "no-conversation"] {
+            assert!(load_messages_from_db(&conn, id).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_load_messages_missing_or_invalid_composer() {
+        let (_tmp, conn) = create_cursor_db(&[]);
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+            ["composerData:invalid", "{invalid JSON"],
+        )
+        .unwrap();
+        assert!(load_messages_from_db(&conn, "missing")
+            .unwrap_err()
+            .starts_with("Composer not found:"));
+        assert!(load_messages_from_db(&conn, "invalid")
+            .unwrap_err()
+            .starts_with("JSON parse error:"));
+    }
+
+    #[test]
+    fn test_load_messages_modern_conversation() {
+        let (_tmp, conn) = create_cursor_db(&[
+            (
+                "composerData:modern-session",
+                json!({
+                    "fullConversationHeadersOnly": [
+                        {"type": 1, "bubbleId": "user-1"},
+                        {"type": 2, "bubbleId": "assistant-1"}
+                    ],
+                    "conversation": [{"type": 1, "text": "Ignore inline data"}]
+                }),
+            ),
+            (
+                "bubbleId:modern-session:assistant-1",
+                json!({"bubbleId": "assistant-1", "text": "Hi"}),
+            ),
+            (
+                "bubbleId:modern-session:user-1",
+                json!({"bubbleId": "user-1", "text": "Hello"}),
+            ),
+        ]);
+        let messages = load_messages_from_db(&conn, "modern-session").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].uuid, "user-1");
+        assert_eq!(messages[0].message_type, "user");
+        assert_eq!(messages[1].uuid, "assistant-1");
+        assert_eq!(messages[1].message_type, "assistant");
+    }
+
+    #[test]
+    fn test_search_inline_and_modern_conversations() {
+        let modern_bubble = json!({"type": 2, "bubbleId": "modern-1", "text": "Matching response"});
+        let (_tmp, conn) = create_cursor_db(&[
+            (
+                "composerData:old-session",
+                json!({"conversation": [
+                    {"type": 1, "bubbleId": "user-1", "text": "Matching question"},
+                    {"type": 2, "bubbleId": "assistant-1", "text": "Other response"},
+                    {"type": 3, "bubbleId": "unknown", "text": "Matching ignored"}
+                ]}),
+            ),
+            (
+                "composerData:modern-session",
+                json!({
+                    "fullConversationHeadersOnly": [{"type": 2, "bubbleId": "modern-1"}],
+                    "conversation": [modern_bubble.clone()]
+                }),
+            ),
+            ("bubbleId:modern-session:modern-1", modern_bubble),
+        ]);
+
+        let results = search_from_db(&conn, "MATCHING", 10).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .any(|msg| msg.uuid == "user-1" && msg.session_id == "old-session"));
+        assert!(results
+            .iter()
+            .any(|msg| msg.uuid == "modern-1" && msg.session_id == "modern-session"));
+        assert!(results
+            .iter()
+            .all(|msg| msg.project_name.as_deref() == Some("Cursor")));
+        assert_eq!(search_from_db(&conn, "Matching", 1).unwrap().len(), 1);
+        assert!(search_from_db(&conn, "Absent", 10).unwrap().is_empty());
+    }
 
     #[test]
     fn test_percent_decode_basic() {
