@@ -48,6 +48,7 @@ use self::state::AppState;
 /// This list must stay in sync with the POST routes registered on `protected_api`
 /// in `build_router`; the `read_only_*` tests below pin the current classification.
 const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
+    "/detect_claude_config_dir",
     "/detect_providers",
     "/export_session",
     "/get_all_mcp_servers",
@@ -59,6 +60,7 @@ const READ_ONLY_ALLOWED_API_PATHS: &[&str] = &[
     "/get_claude_json_config",
     "/get_expiring_sessions",
     "/get_git_log",
+    "/get_startup_session_hint",
     "/get_global_stats_summary",
     "/get_mcp_preset",
     "/get_mcp_servers",
@@ -187,6 +189,14 @@ pub fn build_router(
         .route("/get_server_config", post(h::get_server_config))
         // Project commands
         .route("/get_claude_folder_path", post(h::get_claude_folder_path))
+        .route(
+            "/detect_claude_config_dir",
+            post(h::detect_claude_config_dir),
+        )
+        .route(
+            "/get_startup_session_hint",
+            post(h::get_startup_session_hint),
+        )
         .route("/validate_claude_folder", post(h::validate_claude_folder))
         .route(
             "/validate_custom_claude_dir",
@@ -1244,6 +1254,35 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(allowed.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Desktop-only commands the frontend still calls in the `WebUI` (Gitea #8): both
+    /// must answer 200, not 405, and the session hint is always `null` here.
+    #[tokio::test]
+    async fn desktop_only_commands_answer_in_webui() {
+        let app = build_router(test_state(None), "127.0.0.1", 3727, None, "/");
+        for path in [
+            "/api/detect_claude_config_dir",
+            "/api/get_startup_session_hint",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            if path.ends_with("hint") {
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                assert_eq!(&body[..], b"null");
+            }
+        }
     }
 
     #[tokio::test]

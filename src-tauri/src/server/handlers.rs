@@ -376,6 +376,10 @@ handler_no_params!(
     commands::project::get_claude_folder_path
 );
 handler_no_params!(get_system_info, commands::feedback::get_system_info);
+handler_no_params!(
+    detect_claude_config_dir,
+    commands::project::detect_claude_config_dir
+);
 handler_no_params!(detect_providers, commands::multi_provider::detect_providers);
 handler_no_params!(load_presets, commands::settings::load_presets);
 handler_no_params!(load_mcp_presets, commands::mcp_presets::load_mcp_presets);
@@ -387,6 +391,12 @@ handler_no_params!(
     get_metadata_folder_path,
     commands::metadata::get_metadata_folder_path
 );
+
+/// The `--session` preload hint is a desktop CLI flag; the server never has one,
+/// so this always answers `null` — the frontend's "no preload requested".
+pub async fn get_startup_session_hint() -> Json<Value> {
+    Json(Value::Null)
+}
 
 pub async fn get_server_config(
     State(state): State<Arc<AppState>>,
