@@ -1,4 +1,5 @@
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession};
+use crate::providers::walk::{run_with_timeout, WalkBudget, DISCOVERY_TIMEOUT};
 use crate::providers::ProviderInfo;
 use crate::utils::{build_provider_message, is_symlink, search_json_value_case_insensitive};
 use std::fs;
@@ -10,28 +11,31 @@ const SESSION_HEADER_PREFIX: &str = "# aider chat started at ";
 /// Detect Aider by checking top-level project directories for history files.
 /// Only does a shallow (depth-1) check to avoid slow recursive scans at startup.
 pub fn detect() -> Option<ProviderInfo> {
-    let dirs = get_search_dirs();
-    // Shallow check: look for .aider.chat.history.md directly in search dirs
-    // and their immediate children (depth 1 only, no recursive scan)
-    let has_history = dirs.iter().any(|d| {
-        if d.join(HISTORY_FILE).is_file() {
-            return true;
+    let (base_path, has_history) = run_with_timeout(DISCOVERY_TIMEOUT, || {
+        let dirs = get_search_dirs();
+        let mut budget = WalkBudget::new(1);
+        let mut has_history = false;
+        for dir in &dirs {
+            budget.walk(dir, 0, &mut |dir| {
+                has_history = dir.join(HISTORY_FILE).is_file();
+                !has_history
+            });
+            if has_history {
+                break;
+            }
         }
-        // Check one level of subdirectories
-        fs::read_dir(d)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|entry| entry.path().join(HISTORY_FILE).is_file())
-    });
+        let base_path = dirs
+            .first()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (base_path, has_history)
+    })
+    .unwrap_or_default();
 
     Some(ProviderInfo {
         id: "aider".to_string(),
         display_name: "Aider".to_string(),
-        base_path: dirs
-            .first()
-            .map(|d| d.to_string_lossy().to_string())
-            .unwrap_or_default(),
+        base_path,
         is_available: has_history,
     })
 }
@@ -41,8 +45,9 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     let mut projects = Vec::new();
     let mut seen_paths = std::collections::HashSet::new();
 
+    let mut budget = WalkBudget::new(4);
     for search_dir in get_search_dirs() {
-        if let Some(files) = find_history_files(&search_dir, 100) {
+        if let Some(files) = find_history_files(&search_dir, 100, &mut budget) {
             for history_path in files {
                 // Deduplicate across overlapping search directories
                 let canonical = history_path
@@ -192,8 +197,9 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
+    let mut budget = WalkBudget::new(4);
     for search_dir in get_search_dirs() {
-        if let Some(files) = find_history_files(&search_dir, 100) {
+        if let Some(files) = find_history_files(&search_dir, 100, &mut budget) {
             for history_path in files {
                 let content = match fs::read_to_string(&history_path) {
                     Ok(c) => c,
@@ -249,9 +255,9 @@ fn get_search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn find_history_files(dir: &Path, max: usize) -> Option<Vec<PathBuf>> {
+fn find_history_files(dir: &Path, max: usize, budget: &mut WalkBudget) -> Option<Vec<PathBuf>> {
     let mut files = Vec::new();
-    find_history_recursive(dir, &mut files, max, 0, 4);
+    find_history_recursive(dir, &mut files, max, 0, budget);
     if files.is_empty() {
         None
     } else {
@@ -264,51 +270,18 @@ fn find_history_recursive(
     results: &mut Vec<PathBuf>,
     max: usize,
     depth: usize,
-    max_depth: usize,
+    budget: &mut WalkBudget,
 ) {
-    if depth > max_depth || results.len() >= max {
+    if results.len() >= max {
         return;
     }
-    if is_symlink(dir) {
-        return;
-    }
-
-    let history = dir.join(HISTORY_FILE);
-    if history.is_file() && !is_symlink(&history) {
-        results.push(history);
-    }
-
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            if results.len() >= max {
-                return;
-            }
-            let path = entry.path();
-            if path.is_dir() && !is_symlink(&path) {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                // Skip hidden dirs, node_modules, target, etc. Media/system
-                // dirs can be cloud-backed (iCloud, Music library) — stat on
-                // their dataless items can block indefinitely and wedge the
-                // whole scan — and they never contain code checkouts.
-                if !name.starts_with('.')
-                    && name != "node_modules"
-                    && name != "target"
-                    && name != "dist"
-                    && name != "build"
-                    && name != ".git"
-                    && name != "Library"
-                    && name != "Music"
-                    && name != "Movies"
-                    && name != "Pictures"
-                    && name != "Photos"
-                    && name != "Applications"
-                    && name != "Public"
-                {
-                    find_history_recursive(&path, results, max, depth + 1, max_depth);
-                }
-            }
+    budget.walk(dir, depth, &mut |dir| {
+        let history = dir.join(HISTORY_FILE);
+        if history.is_file() && !is_symlink(&history) {
+            results.push(history);
         }
-    }
+        results.len() < max
+    });
 }
 
 struct SessionData {

@@ -31,6 +31,7 @@ pub mod q_conversation;
 pub mod qwen;
 pub mod trae;
 pub mod vscode;
+pub(crate) mod walk;
 pub mod zed;
 
 /// Provider identifier

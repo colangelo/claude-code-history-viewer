@@ -15,6 +15,7 @@
 //! headless server cannot read arbitrary per-project DBs).
 
 use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession};
+use crate::providers::walk::{run_with_timeout, WalkBudget, DISCOVERY_TIMEOUT};
 use crate::providers::ProviderInfo;
 use crate::utils::{build_provider_message, ms_to_iso, search_json_value_case_insensitive};
 use rusqlite::{Connection, OpenFlags};
@@ -32,7 +33,7 @@ const MAX_DEPTH: usize = 4;
 
 /// Detect a Crush installation (shallow scan for any `.crush/crush.db`).
 pub fn detect() -> Option<ProviderInfo> {
-    let dbs = discover_dbs(1);
+    let dbs = run_with_timeout(DISCOVERY_TIMEOUT, || discover_dbs(1))?;
     let base = dbs
         .first()
         .and_then(|p| p.parent())
@@ -293,57 +294,35 @@ fn search_dirs() -> Vec<PathBuf> {
 /// Find up to `max` `.crush/crush.db` files under the common code roots.
 fn discover_dbs(max: usize) -> Vec<PathBuf> {
     let mut results = Vec::new();
+    let mut budget = WalkBudget::new(MAX_DEPTH);
     for root in search_dirs() {
         if results.len() >= max {
             break;
         }
-        find_crush_db(&root, &mut results, max, 0);
+        find_crush_db(&root, &mut results, max, 0, &mut budget);
     }
     results.sort();
     results.dedup();
     results
 }
 
-fn find_crush_db(dir: &Path, results: &mut Vec<PathBuf>, max: usize, depth: usize) {
-    if depth > MAX_DEPTH || results.len() >= max || is_symlink(dir) {
+fn find_crush_db(
+    dir: &Path,
+    results: &mut Vec<PathBuf>,
+    max: usize,
+    depth: usize,
+    budget: &mut WalkBudget,
+) {
+    if results.len() >= max {
         return;
     }
-    let db = dir.join(".crush").join("crush.db");
-    if db.is_file() && !is_symlink(&db) {
-        results.push(db);
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if results.len() >= max {
-            return;
+    budget.walk(dir, depth, &mut |dir| {
+        let db = dir.join(".crush").join("crush.db");
+        if db.is_file() && !is_symlink(&db) {
+            results.push(db);
         }
-        let path = entry.path();
-        if !path.is_dir() || is_symlink(&path) {
-            continue;
-        }
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        // Media/system dirs can be cloud-backed (iCloud, Music library);
-        // read_dir/stat on their dataless items can block indefinitely and
-        // wedge the whole scan — and they never contain code checkouts.
-        if name.starts_with('.')
-            || name == "node_modules"
-            || name == "target"
-            || name == "dist"
-            || name == "build"
-            || name == "Library"
-            || name == "Music"
-            || name == "Movies"
-            || name == "Pictures"
-            || name == "Photos"
-            || name == "Applications"
-            || name == "Public"
-        {
-            continue;
-        }
-        find_crush_db(&path, results, max, depth + 1);
-    }
+        results.len() < max
+    });
 }
 
 // ============================================================================
@@ -628,7 +607,13 @@ mod tests {
         fs::write(crush_dir.join("crush.db"), b"x").unwrap();
 
         let mut found = Vec::new();
-        find_crush_db(tmp.path(), &mut found, 10, 0);
+        find_crush_db(
+            tmp.path(),
+            &mut found,
+            10,
+            0,
+            &mut WalkBudget::new(MAX_DEPTH),
+        );
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with(".crush/crush.db"));
         assert_eq!(project_dir_of(&found[0]).as_deref(), proj.to_str());
