@@ -13,6 +13,7 @@ use archive_protocol::{IngestBatch, IngestResponse};
 use axum::extract::State;
 use axum::Json;
 use chrono::{DateTime, Utc};
+use sqlx::Row;
 
 use crate::auth::AuthedMachine;
 use crate::error::HubError;
@@ -239,14 +240,21 @@ pub async fn ingest(
     // -- sessions ----------------------------------------------------------
     // (provider, session_id) -> surrogate session id, for message linkage.
     let mut session_ids: HashMap<(String, String), i64> = HashMap::new();
+    let mut touched_projects: HashSet<i64> = HashSet::new();
     for s in &batch.sessions {
         let project_id = s
             .project_path
             .as_ref()
             .and_then(|pp| project_ids.get(&(s.provider.clone(), pp.clone())))
             .copied();
-        let row = sqlx::query!(
-            r#"
+        // `prev` reads the pre-statement snapshot, including when the upsert moves
+        // a session. Runtime query: the offline build has no metadata for this SQL.
+        let row = sqlx::query(
+            r"
+            WITH prev AS (
+                SELECT project_id FROM sessions
+                WHERE machine_id = $1 AND provider = $2 AND session_id = $3
+            )
             INSERT INTO sessions
                 (machine_id, provider, session_id, project_id, file_path, entrypoint,
                  summary, has_tool_use, has_errors, storage_type, last_modified, updated_at)
@@ -262,24 +270,33 @@ pub async fn ingest(
                           storage_type = excluded.storage_type,
                           last_modified = excluded.last_modified,
                           updated_at = now()
-            RETURNING id, (xmax = 0) AS "inserted!: bool"
-            "#,
-            token_machine,
-            s.provider,
-            s.session_id,
-            project_id,
-            s.file_path,
-            s.entrypoint,
-            s.summary,
-            s.has_tool_use,
-            s.has_errors,
-            s.storage_type,
-            parse_ts(s.last_modified.as_deref()),
+            RETURNING id, (xmax = 0) AS inserted, project_id,
+                      (SELECT project_id FROM prev) AS previous_project_id
+            ",
         )
+        .bind(token_machine)
+        .bind(&s.provider)
+        .bind(&s.session_id)
+        .bind(project_id)
+        .bind(&s.file_path)
+        .bind(&s.entrypoint)
+        .bind(&s.summary)
+        .bind(s.has_tool_use)
+        .bind(s.has_errors)
+        .bind(&s.storage_type)
+        .bind(parse_ts(s.last_modified.as_deref()))
         .fetch_one(&mut *tx)
         .await?;
-        session_ids.insert((s.provider.clone(), s.session_id.clone()), row.id);
-        if row.inserted {
+        let id: i64 = row.try_get("id")?;
+        let inserted: bool = row.try_get("inserted")?;
+        let project_id: Option<i64> = row.try_get("project_id")?;
+        let previous_project_id: Option<i64> = row.try_get("previous_project_id")?;
+        if previous_project_id != project_id {
+            touched_projects.extend(previous_project_id);
+            touched_projects.extend(project_id);
+        }
+        session_ids.insert((s.provider.clone(), s.session_id.clone()), id);
+        if inserted {
             resp.sessions_inserted += 1;
         } else {
             resp.sessions_skipped += 1;
@@ -570,7 +587,7 @@ pub async fn ingest(
 
     // -- aggregates --------------------------------------------------------
     // Apply the batch's DELTA to every session that gained messages, then roll
-    // those sessions up into their projects.
+    // session counts up into projects touched by messages or session moves.
     // One statement for the whole batch, not one per session, and it carries the
     // journal watermark too. Previously a touched session was rewritten THREE
     // times per batch (upsert, aggregates, watermark) across N+1 round trips;
@@ -624,7 +641,6 @@ pub async fn ingest(
     // this stays one statement for the whole batch and touches only `sessions` —
     // `messages` is not read at all. Runtime query (not `query!`): the offline
     // build has no `.sqlx` metadata for new statements.
-    let mut touched_projects: HashSet<i64> = HashSet::new();
     if !deltas.is_empty() {
         let mut d_session: Vec<i64> = Vec::with_capacity(deltas.len());
         let mut d_inserted: Vec<i32> = Vec::with_capacity(deltas.len());
@@ -667,24 +683,26 @@ pub async fn ingest(
     // from (m4m 2026-07-19: 198 tuples read per scan on a unique index whose
     // point lookups should read ~1). Rolling up is O(sessions in the project) on
     // `sessions_project_id_idx` and is still EXACT: every session that gained
-    // messages had `message_count` recomputed from `messages` immediately above,
+    // messages had its exact delta applied to `message_count` immediately above,
     // and an untouched session's stored count was exact when it was last
-    // touched. Runtime query (not `query!`): the offline build has no `.sqlx`
+    // touched. Driving from the touched ids also zeros projects with no sessions
+    // left. Runtime query (not `query!`): the offline build has no `.sqlx`
     // metadata for new statements.
     if !touched_projects.is_empty() {
         let touched: Vec<i64> = touched_projects.iter().copied().collect();
         sqlx::query(
             "UPDATE projects p
-             SET session_count = sub.session_count,
-                 message_count = sub.message_count
-             FROM (
+             SET session_count = COALESCE(sub.session_count, 0),
+                 message_count = COALESCE(sub.message_count, 0)
+             FROM unnest($1::bigint[]) AS touched(project_id)
+             LEFT JOIN (
                  SELECT project_id,
                         count(*)::int                        AS session_count,
                         COALESCE(sum(message_count), 0)::int AS message_count
                  FROM sessions WHERE project_id = ANY($1)
                  GROUP BY project_id
-             ) sub
-             WHERE p.id = sub.project_id",
+             ) sub ON sub.project_id = touched.project_id
+             WHERE p.id = touched.project_id",
         )
         .bind(&touched)
         .execute(&mut *tx)

@@ -592,6 +592,70 @@ async fn project_aggregates_sum_sessions_untouched_by_the_batch() {
     assert_eq!(messages, 5, "replaying an archived batch is a no-op");
 }
 
+/// Moving a session must roll up both projects even when the batch gains no
+/// messages: either every message dedupes, or the batch carries none.
+#[tokio::test]
+async fn project_aggregates_follow_session_moves_without_new_messages() {
+    for resend_messages in [true, false] {
+        let hub = spawn().await;
+        let mut batch = sample_batch(
+            hub.machine_id,
+            "sess-move",
+            vec![
+                msg("sess-move", "k1", Some("u1"), "2026-01-01T00:00:00Z", "one"),
+                msg("sess-move", "k2", Some("u2"), "2026-01-01T00:01:00Z", "two"),
+            ],
+        );
+        let resp = post_ingest(&hub, Some(&hub.token), &batch).await;
+        assert_eq!(resp.status(), 200);
+        let body: IngestResponse = resp.json().await.unwrap();
+        assert_eq!(body.messages_inserted, 2);
+
+        let counts: (i32, i32) = sqlx::query_as(
+            "SELECT session_count, message_count FROM projects
+             WHERE machine_id = $1 AND project_path = '/tmp/proj'",
+        )
+        .bind(hub.machine_id)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap();
+        assert_eq!(counts, (1, 2));
+
+        batch.projects[0].project_path = "/tmp/proj-b".into();
+        // Seed B with zero counts so only the rollup can give it the moved totals.
+        batch.projects[0].session_count = Some(0);
+        batch.projects[0].message_count = Some(0);
+        batch.sessions[0].project_path = Some("/tmp/proj-b".into());
+        batch.sessions[0].file_path = Some("/tmp/proj-b/sess-move.jsonl".into());
+        if !resend_messages {
+            batch.messages.clear();
+            batch.sessions[0].message_count = Some(0);
+        }
+        let resp = post_ingest(&hub, Some(&hub.token), &batch).await;
+        assert_eq!(resp.status(), 200);
+        let body: IngestResponse = resp.json().await.unwrap();
+        assert_eq!(body.sessions_inserted, 0);
+        assert_eq!(body.sessions_skipped, 1);
+        assert_eq!(body.messages_inserted, 0);
+        assert_eq!(body.messages_skipped, if resend_messages { 2 } else { 0 });
+
+        let counts: Vec<(String, i32, i32)> = sqlx::query_as(
+            "SELECT project_path, session_count, message_count FROM projects
+             WHERE machine_id = $1 ORDER BY project_path",
+        )
+        .bind(hub.machine_id)
+        .fetch_all(&hub.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            counts,
+            vec![("/tmp/proj".into(), 0, 0), ("/tmp/proj-b".into(), 1, 2)],
+            "project counts after moving the last session (resend_messages={resend_messages})"
+        );
+        assert_eq!(message_count(&hub).await, 2);
+    }
+}
+
 /// The session aggregate recompute is ONE set-based statement over every
 /// touched session, not a per-session loop. The way a `GROUP BY` rewrite fails
 /// is by smearing the batch's totals across the sessions, so a batch carrying
