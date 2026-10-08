@@ -32,6 +32,17 @@ impl Identity {
             id
         };
         let hostname = resolve_hostname();
+        if std::env::var("CCHV_HOSTNAME").map_or(true, |v| v.trim().is_empty())
+            && looks_bonjour_collided(&hostname)
+        {
+            tracing::warn!(
+                hostname = %hostname,
+                "hostname looks like a Bonjour collision rename (<name>-<N>.local). The hub \
+                 matches healthz/ingest ?exclude= and the deploy gates on the exact name, so \
+                 this machine is now reported under a different one. Pin the real name with \
+                 CCHV_HOSTNAME in the daemon's launchd plist (#43)."
+            );
+        }
         Ok(Identity {
             machine_id,
             hostname,
@@ -45,6 +56,21 @@ fn resolve_hostname() -> String {
     match std::env::var("CCHV_HOSTNAME") {
         Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
         _ => gethostname::gethostname().to_string_lossy().into_owned(),
+    }
+}
+
+/// True when `host` has the shape macOS Bonjour gives a `LocalHostName` it had
+/// to rename on a clash: `<name>-<digits>`, optionally followed by `.local`
+/// (`m4m-2.local`). A heuristic for a warning only: a host genuinely named
+/// `build-2` matches too, which is why nothing acts on it automatically.
+fn looks_bonjour_collided(host: &str) -> bool {
+    let lower = host.to_ascii_lowercase();
+    let base = lower.strip_suffix(".local").unwrap_or(&lower);
+    match base.rsplit_once('-') {
+        Some((name, n)) => {
+            !name.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
     }
 }
 
@@ -73,6 +99,32 @@ mod tests {
         assert_eq!(resolve_hostname(), "ac-mbp");
 
         std::env::remove_var("CCHV_HOSTNAME");
+    }
+
+    #[test]
+    fn bonjour_collision_shape_is_recognised() {
+        // The renames Bonjour applies on a LocalHostName clash (#43), with
+        // and without the `.local` suffix gethostname() usually carries.
+        for collided in [
+            "m4m-2.local",
+            "ac-mbm5-2.local",
+            "ac-mbm5-13",
+            "M4M-2.LOCAL",
+        ] {
+            assert!(looks_bonjour_collided(collided), "{collided}");
+        }
+        for clean in [
+            "m4m.local",
+            "ac-mbm5.local",
+            "ac-mbm5",
+            "m4m",
+            "",
+            "-2.local",
+            "host-.local",
+            "build-2x.local",
+        ] {
+            assert!(!looks_bonjour_collided(clean), "{clean}");
+        }
     }
 
     #[test]

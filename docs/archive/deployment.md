@@ -2230,6 +2230,14 @@ Install (launchd, macOS):
     <!-- house deployment (§3b): mark launchd starts headless so the launcher
          skips the interactive `op` fallback (never prompt Touch-ID under KeepAlive) -->
     <key>CCHV_NONINTERACTIVE</key><string>1</string>
+    <!-- #43: declare the machine's name instead of taking whatever Bonjour
+         negotiated. On a LocalHostName clash macOS renames the Mac to
+         <name>-2.local, and the hub's ?exclude= set and the deploy gates match
+         the exact name, so an unpinned Mac silently changes identity. Use the
+         name the hub already knows (scutil --get LocalHostName, before any
+         clash). The daemon logs a WARN when it is unset and the name looks
+         collided. -->
+    <key>CCHV_HOSTNAME</key><string>YOUR-HOST.local</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
