@@ -5,17 +5,20 @@
 
 ## 1. Fixtures and rule harness (no ingest change)
 
-- [ ] 1.1 Known-positive fixtures, one per rule and form: PEM (OpenSSH, RSA), each token
+- [x] 1.1 Known-positive fixtures, one per rule and form: PEM (OpenSSH, RSA), each token
       prefix, `Bearer`, and `assign` in env, YAML, JSON (`bao kv get -format=json` shape)
       and NATS `authorization { … }` form. All values are **synthetic**: generated
       random strings, never a real credential, and never copied from the archive.
-- [ ] 1.2 Known-negative fixtures drawn from shapes this archive is full of: token counts,
+- [x] 1.2 Known-negative fixtures drawn from shapes this archive is full of: token counts,
       `max_tokens`, `tokenizer`, `input_tokens`/`cache_*_tokens`, placeholders (`$VAR`,
       `${VAR}`, `<token>`, `***`), already-redacted markers, and prose about passwords.
-- [ ] 1.3 Rule module with a `RegexSet` pre-filter. Tests assert every positive fires
+- [x] 1.3 Rule module with a `RegexSet` pre-filter. Tests assert every positive fires
       its rule and every negative fires nothing. Failure messages name the rule and the
       fixture id, never the value. Benchmark the per-message cost on a real day's batch
       shape (sizes only, synthetic content).
+      **Done 2026-10-09** (`crates/hub/src/redact.rs`): 4 rules, 13 tests + 1 ignored bench;
+      8 MiB synthetic scan 73 ms (debug build). Review added the code-expression guard
+      (`let token = generate_token();`, `process.env.API_KEY`, `${{ secrets.X }}`).
 
 ## 2. Ingest integration
 

@@ -57,7 +57,7 @@ v1 rules, each with an id used in findings and markers:
 | `pem` | `-----BEGIN … PRIVATE KEY-----` … `END` | none needed; the whole block is replaced |
 | `prefix` | `gh[pousr]_…{36,}`, `github_pat_…`, `sk-ant-…`, `sk-(proj-)?…{20,}`, `xox[abposr]-…`, `AKIA[0-9A-Z]{16}`, `hv[sbr]\.…{20,}` | length floors per prefix |
 | `bearer` | `Bearer <token>` | token ≥ 20 chars, base64url/JWT charset |
-| `assign` | key matching `PASSWORD`, `PASSWD`, `SECRET`, `TOKEN`, `API_KEY`, `PRIVATE_KEY`, `CREDENTIAL` (case-insensitive) followed by `=`/`:` in env, YAML, JSON or NATS-block form | value ≥ 8 chars; not all digits (`max_tokens: 4096`); not a placeholder (`$VAR`, `${…}`, `<…>`, `***`, `[REDACTED…]`); key not on a deny list (`tokenizer`, `token_count`, `tokens`, `input_tokens`, `output_tokens`, `cache_*_tokens`, `secret_name`) |
+| `assign` | key matching `PASSWORD`, `PASSWD`, `SECRET`, `TOKEN`, `API_KEY`, `PRIVATE_KEY`, `CREDENTIAL` (case-insensitive) followed by `=`/`:` in env, YAML, JSON or NATS-block form | value ≥ 8 chars; not all digits (`max_tokens: 4096`); not a placeholder (`$VAR`, `${…}`, `${{ … }}`, `<…>`, `***`, `[REDACTED…]`); an unquoted value is not code (a call, an index, or a dotted identifier path like `process.env.API_KEY`); key not on a deny list (`tokenizer`, `token_count`, `tokens`, `input_tokens`, `output_tokens`, `cache_*_tokens`, `secret_name`) |
 
 The `assign` deny list is the part most likely to be wrong, which is why rollout is per rule:
 1. Ship with every rule in `flag` mode.

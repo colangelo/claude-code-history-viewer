@@ -3294,6 +3294,7 @@ dependencies = [
  "chrono-tz",
  "duckdb",
  "history-core",
+ "regex",
  "reqwest 0.12.20",
  "serde",
  "serde_json",

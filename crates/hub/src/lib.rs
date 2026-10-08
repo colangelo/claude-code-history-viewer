@@ -21,6 +21,7 @@ pub mod ingest;
 pub mod journal;
 pub mod mirror;
 pub mod pagination;
+pub mod redact;
 pub mod search;
 pub mod state;
 pub mod stats;
