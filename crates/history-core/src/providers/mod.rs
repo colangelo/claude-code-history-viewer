@@ -368,6 +368,19 @@ pub fn load_sessions(
     Ok(sessions)
 }
 
+/// The on-disk file whose size/mtime reflects changes to a session, for change
+/// detection. Most providers use a real path as `file_path`, so that path is
+/// returned unchanged; a provider whose `file_path` is a virtual locator maps it
+/// back to its backing file here (a locator with no single backing file, e.g.
+/// Cursor's, is returned as-is and simply does not stat).
+pub fn source_file(provider: ProviderId, session_path: &str) -> String {
+    match provider {
+        ProviderId::Aider => aider::source_file(session_path),
+        _ => None,
+    }
+    .unwrap_or_else(|| session_path.to_string())
+}
+
 /// Load the messages of a session for the given provider (provider-stamped).
 pub fn load_messages(
     provider: ProviderId,

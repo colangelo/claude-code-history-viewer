@@ -179,7 +179,8 @@ pub async fn run_once<C: HubClient>(
         for session in &sessions {
             stats.sessions_scanned += 1;
             let file = &session.file_path;
-            let meta = file_meta(file);
+            // `file` may be a virtual locator; change detection stats its backing file.
+            let meta = file_meta(&providers::source_file(provider, file));
             let (size, mtime) = meta.unwrap_or((0, 0));
             if meta.is_some() && checkpoint.is_unchanged(file, size, mtime) {
                 stats.sessions_skipped += 1;

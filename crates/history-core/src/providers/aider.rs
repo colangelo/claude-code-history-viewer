@@ -137,11 +137,15 @@ pub fn load_sessions(
     for (index, session) in sessions_data.iter().enumerate().rev() {
         let message_count = count_messages(&session.content);
         let timestamp = session.timestamp.clone().unwrap_or_default();
+        let locator = session_locator(&history_path.to_string_lossy(), index);
 
         sessions.push(ClaudeSession {
-            session_id: format!("aider://{}#{}", history_path.to_string_lossy(), index),
+            session_id: locator.clone(),
             actual_session_id: format!("session-{index}"),
-            file_path: history_path.to_string_lossy().to_string(),
+            // The locator `load_messages` accepts, one per section, so a caller
+            // that only holds `file_path` (the sync daemon, the desktop) can load
+            // the session and keys per-section state (checkpoints) distinctly.
+            file_path: locator,
             project_name: project_name.clone(),
             message_count,
             first_message_time: timestamp.clone(),
@@ -183,7 +187,9 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
         .ok_or_else(|| format!("Session index {session_index} out of range"))?;
 
     let base_timestamp = session.timestamp.clone().unwrap_or_default();
-    let session_id = format!("aider-session-{session_index}");
+    // Unique per file AND section: `aider-session-<n>` alone would merge section n
+    // of every project into one hub session (unique per machine+provider+id).
+    let session_id = session_locator(&file_path, session_index);
 
     Ok(parse_messages(
         &session.content,
@@ -215,7 +221,7 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
 
                 for (index, session) in split_sessions(&content).iter().enumerate() {
                     let base_ts = session.timestamp.clone().unwrap_or_default();
-                    let session_id = format!("aider-session-{index}");
+                    let session_id = session_locator(&history_path.to_string_lossy(), index);
 
                     for mut msg in parse_messages(&session.content, &session_id, &base_ts) {
                         if let Some(ref c) = msg.content {
@@ -463,6 +469,18 @@ fn parse_messages(content: &str, session_id: &str, base_timestamp: &str) -> Vec<
     messages
 }
 
+/// The `aider://<history file>#<section index>` locator of one section.
+fn session_locator(history_path: &str, index: usize) -> String {
+    format!("aider://{history_path}#{index}")
+}
+
+/// The real on-disk file behind a session locator (so a caller can stat it for
+/// change detection), or `None` if `locator` is not an aider section locator.
+pub fn source_file(locator: &str) -> Option<String> {
+    locator.strip_prefix("aider://")?;
+    parse_session_path(locator).ok().map(|(file, _)| file)
+}
+
 fn parse_session_path(session_path: &str) -> Result<(String, usize), String> {
     let path = session_path
         .strip_prefix("aider://")
@@ -561,6 +579,67 @@ def fix():
             parse_session_path("aider:///home/user/project/.aider.chat.history.md#3").unwrap();
         assert_eq!(file, "/home/user/project/.aider.chat.history.md");
         assert_eq!(idx, 3);
+    }
+
+    /// Write `SAMPLE_HISTORY` into `<root>/<name>/.aider.chat.history.md`
+    /// and return the project dir.
+    fn write_history(root: &Path, name: &str) -> PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(HISTORY_FILE), SAMPLE_HISTORY).unwrap();
+        dir
+    }
+
+    /// #51: every section of one history file used to share the bare history
+    /// path as `file_path`, which `load_messages` rejects (it needs `#<index>`),
+    /// and which gave all sections one checkpoint key in the sync daemon.
+    #[test]
+    fn each_section_has_its_own_loadable_file_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = write_history(tmp.path(), "proj");
+
+        let sessions = load_sessions(&dir.to_string_lossy(), false).unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_ne!(sessions[0].file_path, sessions[1].file_path);
+
+        // newest first: index 1 is "New session message", index 0 the long one
+        let mut counts = Vec::new();
+        for s in &sessions {
+            let msgs = load_messages(&s.file_path)
+                .unwrap_or_else(|e| panic!("load_messages({}) failed: {e}", s.file_path));
+            counts.push((s.summary.clone().unwrap_or_default(), msgs.len()));
+        }
+        assert_eq!(counts[0], ("New session message".to_string(), 1));
+        assert_eq!(counts[1].0, "What does this function do?");
+        assert!(counts[1].1 >= 4);
+    }
+
+    /// Messages of two history files must not collapse into one hub session:
+    /// the session id they carry has to be unique per file AND section.
+    #[test]
+    fn message_session_ids_are_unique_across_files_and_sections() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = write_history(tmp.path(), "a");
+        let b = write_history(tmp.path(), "b");
+
+        let mut ids = Vec::new();
+        for dir in [&a, &b] {
+            for s in load_sessions(&dir.to_string_lossy(), false).unwrap() {
+                let msgs = load_messages(&s.file_path).unwrap();
+                ids.push(msgs[0].session_id.clone());
+            }
+        }
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), 4, "session ids: {ids:?}");
+    }
+
+    #[test]
+    fn source_file_maps_a_locator_to_the_history_file() {
+        assert_eq!(
+            source_file("aider:///home/u/p/.aider.chat.history.md#3"),
+            Some("/home/u/p/.aider.chat.history.md".to_string())
+        );
+        assert_eq!(source_file("/home/u/p/.aider.chat.history.md"), None);
     }
 
     #[test]

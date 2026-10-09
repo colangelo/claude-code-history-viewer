@@ -674,3 +674,46 @@ fn a_legacy_checkpoint_json_still_loads_without_a_digest() {
     let c: Checkpoint = serde_json::from_str(json).expect("legacy checkpoint must parse");
     assert_eq!(c.files["f"].prefix_digest, None);
 }
+
+/// #51: aider keeps every session of a project in ONE markdown file. Each
+/// section must be loadable by the daemon, delivered under its own session, and
+/// checkpointed under its own key — and an unchanged file must be skipped.
+#[tokio::test]
+#[serial]
+async fn aider_sections_are_each_delivered_and_checkpointed() {
+    let fx = fixture();
+    let dir = fx.home.join("projects/aiderproj");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(".aider.chat.history.md"),
+        "# aider chat started at 2025-03-26 14:32:01\n\n#### first question\n\nfirst answer\n\n\
+         # aider chat started at 2025-03-26 15:10:00\n\n#### second question\n\nsecond answer\n",
+    )
+    .unwrap();
+
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    let stats = sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    assert_eq!(stats.errors, 0, "no load_messages failures");
+    assert_eq!(stats.sessions_synced, 2, "both sections synced");
+    assert_eq!(hub.total_messages(), 4, "question + answer per section");
+    let texts = hub.search_texts().join("\n");
+    assert!(texts.contains("first answer") && texts.contains("second answer"));
+    let session_ids: HashSet<String> = hub
+        .state
+        .lock()
+        .unwrap()
+        .batches
+        .iter()
+        .flat_map(|b| b.sessions.iter().map(|s| s.session_id.clone()))
+        .collect();
+    assert_eq!(session_ids.len(), 2, "one hub session per section");
+    assert_eq!(cp.files.len(), 2, "one checkpoint entry per section");
+
+    // Change detection stats the real history file, so an untouched file is skipped.
+    let hub2 = MockHub::default();
+    let stats = sync::run_once(&hub2, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(hub2.total_messages(), 0, "unchanged history not re-sent");
+    assert_eq!(stats.sessions_skipped, 2);
+}
