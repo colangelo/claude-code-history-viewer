@@ -77,6 +77,23 @@ fn strip_nul_value(v: &mut serde_json::Value) {
 /// (`ts_headline` over `search_text`) can only quote indexed text anyway.
 const SEARCH_TEXT_MAX_BYTES: usize = 64 * 1024;
 
+/// Providers whose messages are also deduplicated by what they ARE, not only by
+/// `message_key` (Gitea #52).
+///
+/// `message_key` hashes the message's position (`seq`) in its parsed session,
+/// so a source file rewritten in place (Codex rewrote its old rollouts around
+/// 2026-09-04, dropping legacy event lines) shifts every later position and the
+/// next sync stores each shifted message a second time under a new key. For
+/// these providers ingest also skips a message when its session already holds a
+/// row with the same timestamp, type, content, `toolUse` and `toolUseResult`.
+///
+/// Keys are unchanged, so rows already archived keep matching their re-sends;
+/// rows with no timestamp are never skipped by this (NULL never equals). Safe
+/// for Codex because a rollout never repeats an identical event at the same
+/// timestamp: 0 such repeats in 13,370 parsed messages across both Macs (#52).
+/// Rows already duplicated stay until the separate cleanup.
+const SHIFT_GUARDED_PROVIDERS: &[&str] = &["codex"];
+
 /// Truncate a string in place to at most `max` bytes on a char boundary.
 fn clamp_utf8(s: &mut String, max: usize) {
     if s.len() <= max {
@@ -460,6 +477,18 @@ pub async fn ingest(
                         input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
                         cost_usd, duration_ms, is_sidechain, content, raw, search_text,
                         message_id)
+            WHERE NOT (
+                t.provider = ANY($24::text[])
+                AND EXISTS (
+                    SELECT 1 FROM messages m
+                    WHERE m.session_id = t.session_id
+                      AND m."timestamp" = t."timestamp"
+                      AND m.type IS NOT DISTINCT FROM t.type
+                      AND m.content IS NOT DISTINCT FROM t.content
+                      AND m.raw -> 'toolUse' IS NOT DISTINCT FROM t.raw -> 'toolUse'
+                      AND m.raw -> 'toolUseResult' IS NOT DISTINCT FROM t.raw -> 'toolUseResult'
+                )
+            )
             ON CONFLICT (session_id, message_key) DO NOTHING
             RETURNING id, session_id, message_key, "timestamp"
             "#,
@@ -487,6 +516,7 @@ pub async fn ingest(
         .bind(&c_raw)
         .bind(&c_search_text)
         .bind(&c_message_id)
+        .bind(SHIFT_GUARDED_PROVIDERS)
         .fetch_all(&mut *tx)
         .await?;
 

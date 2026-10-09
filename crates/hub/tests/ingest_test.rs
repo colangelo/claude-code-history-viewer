@@ -1130,3 +1130,183 @@ async fn tail_and_overlapping_batches_store_each_message_once() {
         "count follows inserted rows only"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #52: position-shifted re-sends of a rewritten source file
+// ---------------------------------------------------------------------------
+
+/// A Codex-shaped message as the daemon sends it: the key is opaque to the hub
+/// but, like the daemon's, changes with `seq`.
+fn codex_msg(session: &str, seq: i32, ts: Option<&str>, text: &str) -> IngestMessage {
+    let mut m = msg(
+        session,
+        &format!("k-{seq}-{text}"),
+        None,
+        ts.unwrap_or(""),
+        text,
+    );
+    m.provider = "codex".into();
+    m.seq = seq;
+    m.timestamp = ts.map(Into::into);
+    m.raw = json!({ "uuid": Uuid::new_v4().to_string(), "toolUse": null, "toolUseResult": null, "text": text });
+    m
+}
+
+fn batch_for(
+    hub: &TestHub,
+    provider: &str,
+    session: &str,
+    messages: Vec<IngestMessage>,
+) -> IngestBatch {
+    let mut b = sample_batch(hub.machine_id, session, messages);
+    b.projects[0].provider = provider.into();
+    b.sessions[0].provider = provider.into();
+    for m in &mut b.messages {
+        m.provider = provider.into();
+    }
+    b
+}
+
+async fn ingest(hub: &TestHub, b: &IngestBatch) -> IngestResponse {
+    post_ingest(hub, Some(&hub.token), b)
+        .await
+        .json()
+        .await
+        .unwrap()
+}
+
+const TS: [&str; 4] = [
+    "2026-03-01T10:00:00Z",
+    "2026-03-01T10:00:01Z",
+    "2026-03-01T10:00:02Z",
+    "2026-03-01T10:00:03Z",
+];
+
+/// The rewrite #52 found: a line near the top is dropped, every later message
+/// moves up one position, so the daemon re-sends them under new keys.
+#[tokio::test]
+async fn codex_shifted_resend_stores_nothing_new() {
+    let hub = spawn().await;
+    let s = "codex-shift";
+    let before: Vec<_> = (0..3)
+        .map(|i| codex_msg(s, i, Some(TS[i as usize]), &format!("m{i}")))
+        .collect();
+    assert_eq!(
+        ingest(&hub, &batch_for(&hub, "codex", s, before))
+            .await
+            .messages_inserted,
+        3
+    );
+
+    // m0 dropped by the rewrite: m1, m2 now sit at seq 0, 1 with new keys.
+    let shifted = vec![
+        codex_msg(s, 0, Some(TS[1]), "m1"),
+        codex_msg(s, 1, Some(TS[2]), "m2"),
+    ];
+    let r = ingest(&hub, &batch_for(&hub, "codex", s, shifted.clone())).await;
+    assert_eq!(
+        r.messages_inserted, 0,
+        "a shifted re-send must store nothing"
+    );
+    assert_eq!(message_count(&hub).await, 3);
+
+    // The file keeps growing after the rewrite: only the new message lands.
+    let mut grown = shifted;
+    grown.push(codex_msg(s, 2, Some(TS[3]), "m3"));
+    let r = ingest(&hub, &batch_for(&hub, "codex", s, grown)).await;
+    assert_eq!(r.messages_inserted, 1);
+    assert_eq!(message_count(&hub).await, 4);
+}
+
+/// What the first sync after this ships does to rows archived BEFORE it:
+/// keys are unchanged, so an unchanged file matches its rows exactly as it did
+/// before; a shifted file is caught by the content guard; and duplicate groups
+/// already in the archive are left as they are (the cleanup is separate), with
+/// no further copy added to them.
+#[tokio::test]
+async fn first_sync_after_ship_leaves_existing_codex_rows_alone() {
+    let hub = spawn().await;
+    let s = "codex-existing";
+    let archived: Vec<_> = (0..3)
+        .map(|i| codex_msg(s, i, Some(TS[i as usize]), &format!("m{i}")))
+        .collect();
+    ingest(&hub, &batch_for(&hub, "codex", s, archived.clone())).await;
+
+    // A duplicate the old hub already stored: m2 again under a shifted key.
+    sqlx::query(
+        "INSERT INTO messages (session_id, machine_id, provider, message_key, seq, \"timestamp\", type, role,
+                               is_sidechain, content, raw, search_text)
+         SELECT session_id, machine_id, provider, 'pre-fix-copy', 7, \"timestamp\", type, role,
+                is_sidechain, content, raw, search_text
+         FROM messages WHERE machine_id = $1 AND message_key = $2",
+    )
+    .bind(hub.machine_id)
+    .bind(&archived[2].message_key)
+    .execute(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(message_count(&hub).await, 4);
+
+    // Unchanged file: same keys, nothing new (the pre-#52 path, untouched).
+    let r = ingest(&hub, &batch_for(&hub, "codex", s, archived)).await;
+    assert_eq!((r.messages_inserted, r.messages_skipped), (0, 3));
+    // Rewritten file: shifted keys, still nothing new.
+    let shifted = vec![
+        codex_msg(s, 0, Some(TS[1]), "m1"),
+        codex_msg(s, 1, Some(TS[2]), "m2"),
+    ];
+    assert_eq!(
+        ingest(&hub, &batch_for(&hub, "codex", s, shifted))
+            .await
+            .messages_inserted,
+        0
+    );
+    // The existing duplicate group is neither grown nor removed.
+    let group: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM messages WHERE machine_id = $1 AND \"timestamp\" = $2::timestamptz",
+    )
+    .bind(hub.machine_id)
+    .bind(TS[2])
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(group, 2);
+    assert_eq!(message_count(&hub).await, 4);
+}
+
+/// The guard is scoped: other providers keep pure key dedup, and a message
+/// without a timestamp is never matched by content.
+#[tokio::test]
+async fn shift_guard_is_scoped_to_codex_with_timestamps() {
+    let hub = spawn().await;
+    let s = "claude-shift";
+    let first: Vec<_> = (0..2)
+        .map(|i| codex_msg(s, i, Some(TS[i as usize]), &format!("m{i}")))
+        .collect();
+    ingest(&hub, &batch_for(&hub, "claude", s, first)).await;
+    let shifted = vec![codex_msg(s, 5, Some(TS[1]), "m1")];
+    assert_eq!(
+        ingest(&hub, &batch_for(&hub, "claude", s, shifted))
+            .await
+            .messages_inserted,
+        1,
+        "claude is not shift-guarded"
+    );
+
+    let s = "codex-no-ts";
+    ingest(
+        &hub,
+        &batch_for(&hub, "codex", s, vec![codex_msg(s, 0, None, "x")]),
+    )
+    .await;
+    assert_eq!(
+        ingest(
+            &hub,
+            &batch_for(&hub, "codex", s, vec![codex_msg(s, 1, None, "x")])
+        )
+        .await
+        .messages_inserted,
+        1,
+        "a timestampless row is never matched by content"
+    );
+}
