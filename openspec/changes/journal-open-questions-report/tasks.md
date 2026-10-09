@@ -1,13 +1,24 @@
 # Tasks
 
+> **Gate (since 1.2):** groups 2–3 are on hold until ac decides design.md Q1, which the
+> measurement turned from optional into the main path.
+
 ## 1. Measure before building
 
-- [ ] 1.1 Embed one busy project's last-30-day questions locally (the same bge model,
+- [x] 1.1 Embed one busy project's last-30-day questions locally (the same bge model,
       from the hub's model dir), offline, without writing to pg1.
-- [ ] 1.2 Hand-label about 100 question pairs from that project as same-thread or
+- [x] 1.2 Hand-label about 100 question pairs from that project as same-thread or
       different. Measure the precision and recall of cosine thresholds 0.80–0.92 and pick
       the threshold that keeps precision ≥ 0.95 (a wrong merge is worse than a duplicate).
       Record the numbers here. If no threshold reaches 0.95 precision, stop and revisit D1.
+      **Done 2026-10-09 — result: STOP, D1 revised (see design.md D1 "Measured").** Busiest
+      project, last 30 days: 107 questions over 23 active days, 5,471 cross-day pairs.
+      Top 100 pairs hand-labelled (ambiguous counted as different): 25 same-thread.
+      Precision by threshold: ≥ 0.85 → 12/12; ≥ 0.84 → 0.92; ≥ 0.80 → 0.82; ≥ 0.77 → 0.71.
+      Recall at the only safe threshold (0.85) is about half of the labelled restatements,
+      and single-link grouping there turns 107 questions into 97 threads. The bulk of
+      unrelated same-project pairs sit at 0.55–0.65, the related-but-different ones at
+      0.72–0.84, overlapping the real restatements.
 
 ## 2. Storage and sweep
 

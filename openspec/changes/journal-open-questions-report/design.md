@@ -36,6 +36,21 @@ window's vectors for the project and merge with single-link clustering at a cosi
 threshold (start at 0.85, tuned in task 1.2), ordered by time. This is a few hundred
 vectors at most, so it runs in memory in milliseconds and needs no index.
 
+**Measured (task 1.2, 2026-10-09): embedding grouping alone is not good enough.** At the
+only threshold with precision ≥ 0.95 (cosine ≥ 0.85), it finds about half of the restatements a
+human marks and turns 107 questions into 97 threads. That is a negligible reduction, and every
+missed merge would show a live thread as `quiet`. Questions that are related but different sit
+at 0.72–0.84, right among the real restatements, so no threshold separates them. bge-small is a
+retrieval model, and short same-project phrases all look alike to it.
+
+**Revised recommendation: thread identity comes from the distiller (Q1 becomes the main path).**
+When the distiller writes a day's entry, it already has the day's work in context. Give it the
+project's open threads from the last N active days (about 30 questions × 61 characters, so under
+1k extra prompt tokens per run) and have it output, for each question, either `continues
+<thread-id>` or new, plus the threads the day **resolved**. That gives exact thread identity and
+the resolution signal D2 couldn't derive. Embeddings stay useful only as a fallback merge at
+≥ 0.85 for entries written before the change.
+
 *Rejected:* exact or normalised-text dedup. The distiller rephrases the same thread daily,
 so exact matching would almost never merge. *Rejected:* asking the model to group, which
 costs model spend on every read.
@@ -71,9 +86,10 @@ auth as `/v1/journal`.
 
 ## Open Questions (ac)
 
-- **Q1.** Should the distiller later get a resolution signal? That means passing the
-  project's recent `recurring` threads into the prompt and asking which the day resolved.
-  It's more prompt tokens per distill on the Codex path. Rec: decide after using this report
-  for a while; it may not be needed.
+- **Q1 (now gating, see D1 "Measured").** Should the distiller get thread continuity and
+  a resolution signal? Rec: **yes**. It is the only approach that measured well enough, and it
+  costs under 1k prompt tokens per distill on the Codex path. It is a distiller prompt and
+  schema change (`scripts/cchv-distill.py` + the journal POST), and the distiller is an
+  installed copy, so it ships only through a release plus an infra reinstall.
 - **Q2.** Webapp surface: a "Threads" panel in the Journal tab? Rec: later, endpoint and
   `cchv-find` first.
