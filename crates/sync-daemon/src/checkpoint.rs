@@ -1,10 +1,12 @@
 //! Crash-safe sync checkpoint.
 //!
 //! Records, per source session file, the file size + mtime + message count + a
-//! timestamp at the moment the hub acknowledged it. A file is considered
-//! unchanged (and skipped) when its current size and mtime match the
-//! checkpoint, so re-runs never re-send already-acknowledged data. Persisted
-//! atomically so a crash mid-write cannot corrupt it.
+//! digest of the acknowledged message keys + a timestamp at the moment the hub
+//! acknowledged it. A file is considered unchanged (and skipped) when its
+//! current size and mtime match the checkpoint; a changed file sends only what
+//! follows the acknowledged prefix (see `sync::tail_start`), so re-runs never
+//! re-send already-acknowledged data. Persisted atomically so a crash
+//! mid-write cannot corrupt it.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,6 +20,12 @@ pub struct FileState {
     pub mtime_ms: u64,
     pub message_count: usize,
     pub last_synced_ms: u64,
+    /// Digest of the first `message_count` message keys the hub acknowledged.
+    /// A pass whose current parse reproduces it sends only what follows; any
+    /// mismatch (rewrite, truncation, re-keying) falls back to a full re-send.
+    /// `None` for entries written before tail-only sync (#49).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_digest: Option<String>,
 }
 
 /// Consecutive whole-session delivery failures attempted at full cost before
@@ -218,6 +226,7 @@ mod tests {
                 mtime_ms: 2,
                 message_count: 3,
                 last_synced_ms: 0,
+                prefix_digest: None,
             },
         );
         assert!(c.failures.is_empty());

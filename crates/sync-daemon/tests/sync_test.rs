@@ -29,6 +29,8 @@ struct MockHub {
 struct MockState {
     batches: Vec<IngestBatch>,
     fail_remaining: usize,
+    /// `Some(n)`: accept the next `n` batches, then fail every later one.
+    fail_after: Option<usize>,
 }
 
 impl HubClient for MockHub {
@@ -52,12 +54,41 @@ impl MockHub {
             s.fail_remaining -= 1;
             anyhow::bail!("simulated hub failure");
         }
+        match s.fail_after {
+            Some(0) => anyhow::bail!("simulated hub failure mid-send"),
+            Some(n) => s.fail_after = Some(n - 1),
+            None => {}
+        }
         s.batches.push(batch.clone());
         Ok(IngestResponse::default())
     }
 
     fn fail_next(&self, n: usize) {
         self.state.lock().unwrap().fail_remaining = n;
+    }
+    fn fail_after(&self, successes: Option<usize>) {
+        self.state.lock().unwrap().fail_after = successes;
+    }
+    /// Every message the hub received, in arrival order, as `(seq, key)`.
+    fn sent(&self) -> Vec<(i32, String)> {
+        self.state
+            .lock()
+            .unwrap()
+            .batches
+            .iter()
+            .flat_map(|b| b.messages.iter().map(|m| (m.seq, m.message_key.clone())))
+            .collect()
+    }
+    /// Sessions carried by every batch, so a tail-only pass can be checked to
+    /// still refresh the session row.
+    fn session_rows(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .batches
+            .iter()
+            .map(|b| b.sessions.len())
+            .sum()
     }
     fn total_messages(&self) -> usize {
         self.state
@@ -411,4 +442,235 @@ async fn a_record_without_uuid_or_timestamp_keeps_its_key_across_reparses() {
     // as a fifth key rather than as a missing one.
     let after = hub.message_keys();
     assert_eq!(after.len(), 4, "exactly one new key: the appended turn");
+}
+
+// ----- #49: send only the tail ----------------------------------------------
+//
+// A changed session used to be re-sent in full on every pass, and the hub threw
+// the already-archived rows away (`ON CONFLICT DO NOTHING`). Measured 2026-10-09:
+// ~522k messages sent in 10 minutes for ~1k new ones, a steady ~4.5 MB/s from
+// the hub to pg1. A pass now sends only what follows the last acknowledged
+// message, and falls back to a full re-send whenever the file is not a plain
+// append of what was sent.
+
+/// `n` user turns with distinct uuids and timestamps.
+fn turns(sid: &str, range: std::ops::Range<usize>) -> Vec<String> {
+    range
+        .map(|i| {
+            user_line(
+                &format!("u{i}"),
+                sid,
+                &format!("2026-01-01T00:{:02}:00Z", i % 60),
+                &format!("turn number {i}"),
+                "/Users/test/proj",
+            )
+        })
+        .collect()
+}
+
+fn session_with(home: &Path, lines: &[String]) -> PathBuf {
+    write_session(home, "-Users-test-proj", "sess-1", lines)
+}
+
+fn append(file: &Path, lines: &[String]) {
+    let mut content = std::fs::read_to_string(file).unwrap();
+    for l in lines {
+        content.push_str(l);
+        content.push('\n');
+    }
+    std::fs::write(file, content).unwrap();
+}
+
+/// The keys a fresh daemon (empty checkpoint) sends for the file as it is now:
+/// what a full re-parse produces, to compare an incremental history against.
+async fn full_parse_keys(fx: &Fixture) -> HashSet<String> {
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::default();
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    hub.message_keys()
+}
+
+#[tokio::test]
+#[serial]
+async fn an_appended_session_sends_only_the_new_tail() {
+    let fx = fixture();
+    let file = session_with(&fx.home, &turns("sess-1", 0..5));
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(hub.sent().len(), 5);
+
+    append(&file, &turns("sess-1", 5..7));
+    let rows_before = hub.session_rows();
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    let sent = hub.sent();
+    let tail: Vec<i32> = sent[5..].iter().map(|(seq, _)| *seq).collect();
+    assert_eq!(
+        tail,
+        vec![5, 6],
+        "only the two appended turns, at their absolute seq"
+    );
+    assert!(
+        hub.session_rows() > rows_before,
+        "the session row is still refreshed"
+    );
+    assert_eq!(
+        hub.message_keys(),
+        full_parse_keys(&fx).await,
+        "tail keys equal the keys a full re-parse produces"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn an_unchanged_append_count_sends_no_messages_but_refreshes_the_session() {
+    // The file changed (mtime/size) but parses to the same messages — e.g. a
+    // trailing partial line, or the stat raced an append that the parse already
+    // saw. Nothing is re-sent; the session row still goes.
+    let fx = fixture();
+    session_with(&fx.home, &turns("sess-1", 0..3));
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    // Pretend the checkpoint's stat predates the parse it recorded.
+    for st in cp.files.values_mut() {
+        st.size -= 1;
+    }
+    let rows_before = hub.session_rows();
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(hub.sent().len(), 3, "no message re-sent");
+    assert!(
+        hub.session_rows() > rows_before,
+        "the session row is still refreshed"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn a_shrunk_file_is_resent_in_full() {
+    let fx = fixture();
+    let file = session_with(&fx.home, &turns("sess-1", 0..4));
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    // Truncated to two turns, then one new turn: fewer bytes than before.
+    std::fs::write(&file, "").unwrap();
+    append(&file, &turns("sess-1", 0..2));
+    append(&file, &turns("sess-1", 9..10));
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    let pass2: Vec<i32> = hub.sent()[4..].iter().map(|(s, _)| *s).collect();
+    assert_eq!(
+        pass2,
+        vec![0, 1, 2],
+        "a shrink re-sends everything from seq 0"
+    );
+
+    // And the next append is a tail again.
+    append(&file, &turns("sess-1", 10..11));
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    let pass3: Vec<i32> = hub.sent()[7..].iter().map(|(s, _)| *s).collect();
+    assert_eq!(pass3, vec![3]);
+}
+
+#[tokio::test]
+#[serial]
+async fn a_rewritten_prefix_is_resent_in_full() {
+    // Same or larger size, more messages, but an EARLIER message changed: a
+    // naive "send past message_count" would silently miss the rewrite.
+    let fx = fixture();
+    let file = session_with(&fx.home, &turns("sess-1", 0..3));
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    let mut lines = turns("sess-1", 0..4);
+    lines[1] = user_line(
+        "u1",
+        "sess-1",
+        "2026-01-01T00:01:00Z",
+        "turn number 1, edited in place with a longer text",
+        "/Users/test/proj",
+    );
+    std::fs::write(&file, format!("{}\n", lines.join("\n"))).unwrap();
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    let pass2: Vec<i32> = hub.sent()[3..].iter().map(|(s, _)| *s).collect();
+    assert_eq!(
+        pass2,
+        vec![0, 1, 2, 3],
+        "a rewritten prefix re-sends the whole session"
+    );
+    assert!(
+        full_parse_keys(&fx).await.is_subset(&hub.message_keys()),
+        "the edited turn's new key reached the hub"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn a_send_interrupted_mid_tail_resumes_from_the_last_acknowledged_pass() {
+    let fx = fixture();
+    let file = session_with(&fx.home, &turns("sess-1", 0..2));
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    // Three new turns sent one per batch; the hub dies after the first batch.
+    append(&file, &turns("sess-1", 2..5));
+    hub.fail_after(Some(1));
+    let stats = sync::run_once(&hub, &fx.identity, &mut cp, 1, &[]).await;
+    assert!(stats.errors >= 1);
+
+    // Restart: the checkpoint on disk still says "two messages acknowledged".
+    hub.fail_after(None);
+    let mut cp2 = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp2, 1, &[]).await;
+
+    let after_restart: Vec<i32> = hub.sent()[3..].iter().map(|(s, _)| *s).collect();
+    assert_eq!(
+        after_restart,
+        vec![2, 3, 4],
+        "resend starts at the last acknowledged count, not at 0"
+    );
+    assert_eq!(
+        hub.message_keys(),
+        full_parse_keys(&fx).await,
+        "nothing missing"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn a_checkpoint_from_before_tail_sync_resends_once_then_tails() {
+    let fx = fixture();
+    let file = session_with(&fx.home, &turns("sess-1", 0..3));
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+
+    // An entry written by an older daemon has no prefix digest.
+    for st in cp.files.values_mut() {
+        st.prefix_digest = None;
+    }
+    append(&file, &turns("sess-1", 3..4));
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(
+        hub.sent().len(),
+        3 + 4,
+        "no digest to trust: one full re-send"
+    );
+
+    append(&file, &turns("sess-1", 4..5));
+    sync::run_once(&hub, &fx.identity, &mut cp, 500, &[]).await;
+    assert_eq!(hub.sent().len(), 3 + 4 + 1, "then tails again");
+}
+
+#[test]
+fn a_legacy_checkpoint_json_still_loads_without_a_digest() {
+    let json = r#"{"files":{"f":{"size":1,"mtime_ms":2,"message_count":3,"last_synced_ms":4}}}"#;
+    let c: Checkpoint = serde_json::from_str(json).expect("legacy checkpoint must parse");
+    assert_eq!(c.files["f"].prefix_digest, None);
 }

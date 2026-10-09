@@ -1068,3 +1068,65 @@ async fn invalid_root_is_discarded_remote_only_key() {
     assert_eq!(row.git_root_commit, None, "invalid root must not be stored");
     assert_eq!(row.identity_key.as_deref(), Some("r:github.com/acme/foo"));
 }
+
+/// The daemon now sends only a session's unacknowledged tail (#49), and after an
+/// interrupted send it resumes from the last acknowledged count, so a batch can
+/// overlap rows the hub already has. Pin what that relies on: a tail-only batch
+/// and an overlapping one both leave exactly one row per message, and the
+/// session's `message_count` (applied as the batch's inserted delta) ends equal
+/// to the distinct messages, never double-counted and never short.
+#[tokio::test]
+async fn tail_and_overlapping_batches_store_each_message_once() {
+    let hub = spawn().await;
+    let m = |i: usize| {
+        let mut x = msg(
+            "sess-tail",
+            &format!("k{i}"),
+            Some(&format!("u{i}")),
+            &format!("2026-01-01T00:{i:02}:00Z"),
+            &format!("turn {i}"),
+        );
+        x.seq = i32::try_from(i).unwrap();
+        x
+    };
+    async fn session_count(hub: &TestHub) -> i32 {
+        sqlx::query_scalar(
+            "SELECT message_count FROM sessions WHERE machine_id = $1 AND session_id = 'sess-tail'",
+        )
+        .bind(hub.machine_id)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap()
+    }
+
+    // Pass 1: the full session (seq 0..3).
+    let full = sample_batch(hub.machine_id, "sess-tail", (0..3).map(m).collect());
+    assert_eq!(
+        post_ingest(&hub, Some(&hub.token), &full).await.status(),
+        200
+    );
+    // Pass 2: the tail only (seq 3..5), at its absolute seq.
+    let tail = sample_batch(hub.machine_id, "sess-tail", (3..5).map(m).collect());
+    assert_eq!(
+        post_ingest(&hub, Some(&hub.token), &tail).await.status(),
+        200
+    );
+    assert_eq!(message_count(&hub).await, 5);
+    assert_eq!(session_count(&hub).await, 5);
+
+    // A resumed send that overlaps what the hub already has (seq 2..7).
+    let overlap = sample_batch(hub.machine_id, "sess-tail", (2..7).map(m).collect());
+    let resp: IngestResponse = post_ingest(&hub, Some(&hub.token), &overlap)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resp.messages_inserted, 2, "only seq 5 and 6 are new");
+    assert_eq!(resp.messages_skipped, 3);
+    assert_eq!(message_count(&hub).await, 7, "no duplicate rows");
+    assert_eq!(
+        session_count(&hub).await,
+        7,
+        "count follows inserted rows only"
+    );
+}

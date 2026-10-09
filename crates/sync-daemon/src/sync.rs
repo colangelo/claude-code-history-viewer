@@ -2,18 +2,26 @@
 //! changed session's records to the hub (which dedups), and advance the
 //! checkpoint only after the hub acknowledges.
 //!
-//! Backfill and incremental are the same pass: a session with no checkpoint, or
-//! whose file size/mtime changed, is (re)delivered in full; the hub's idempotent
-//! ingest makes re-delivery free of duplicates. A file that disappears is simply
-//! not seen again — the daemon never issues deletes (cumulative archive).
+//! Backfill and incremental are the same pass: a session with no checkpoint is
+//! delivered in full. A changed session is re-parsed in full, but only the
+//! messages after the last acknowledged one are SENT, when the current parse
+//! still starts with exactly what the hub acknowledged (`tail_start`); anything
+//! else — a shrunk file, a rewritten prefix, an old checkpoint — is re-sent in
+//! full, and the hub's idempotent ingest keeps that free of duplicates. A file
+//! that disappears is simply not seen again — the daemon never issues deletes
+//! (cumulative archive).
 //!
-//! NOTE: byte-offset "parse only appended lines" is a future perf optimization;
-//! today a changed JSONL file is re-parsed in full and re-sent (hub dedups).
+//! Why the tail (#49): re-sending whole sessions meant ~99.8 % of what reached
+//! pg1 was rows it already had — ~522k messages in 10 minutes for ~1k new ones,
+//! a steady ~4.5 MB/s (2026-10-09). Parsing only the appended bytes is a further
+//! optimization, not done: the parse is local and cheap next to the wire.
 
+use std::fmt::Write as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use archive_protocol::{IngestBatch, IngestResponse, MachineInfo};
+use archive_protocol::{IngestBatch, IngestMessage, IngestResponse, MachineInfo};
 use history_core::providers::{self, ProviderId};
+use sha2::{Digest, Sha256};
 
 use crate::checkpoint::{Checkpoint, FileState};
 use crate::client::HubClient;
@@ -62,6 +70,9 @@ pub struct SyncStats {
     /// delivery-failure backoff window (see `checkpoint::FailState`).
     pub sessions_deferred: usize,
     pub messages_delivered: usize,
+    /// Messages of changed sessions NOT sent because the hub had already
+    /// acknowledged them on an earlier pass (#49).
+    pub messages_already_acknowledged: usize,
     pub errors: usize,
 }
 
@@ -83,6 +94,41 @@ fn file_meta(path: &str) -> Option<(u64, u64)> {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     Some((md.len(), mtime))
+}
+
+/// Digest of a run of message keys: the identity of what the hub acknowledged
+/// for a session. Keys are deterministic per position (`convert::message_key`),
+/// so an unchanged prefix reproduces it exactly.
+fn prefix_digest(messages: &[IngestMessage]) -> String {
+    let mut h = Sha256::new();
+    for m in messages {
+        h.update(m.message_key.as_bytes());
+        h.update([0]);
+    }
+    let mut out = String::with_capacity(64);
+    for b in h.finalize() {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+/// Index of the first message this pass must send. Past what the hub already
+/// acknowledged when the current parse is a plain append of it; 0 (a full
+/// re-send, which the hub dedups) whenever that cannot be shown: no checkpoint,
+/// an entry from before #49 with no digest, a file that shrank, fewer messages
+/// than acknowledged, or a prefix whose keys changed (a rewrite).
+fn tail_start(prev: Option<&FileState>, size: u64, messages: &[IngestMessage]) -> usize {
+    let Some(prev) = prev else { return 0 };
+    let Some(acknowledged) = prev.prefix_digest.as_deref() else {
+        return 0;
+    };
+    if size < prev.size || messages.len() < prev.message_count {
+        return 0;
+    }
+    if prefix_digest(&messages[..prev.message_count]) != acknowledged {
+        return 0;
+    }
+    prev.message_count
 }
 
 /// Run one full sync pass and return what happened. `exclude` lists providers
@@ -178,12 +224,17 @@ pub async fn run_once<C: HubClient>(
                 })
                 .collect();
 
+            // Every message is converted (keys and seq stay absolute), but only
+            // the unacknowledged tail goes on the wire. An empty tail still
+            // sends the session row, so its metadata keeps refreshing.
+            let start = tail_start(checkpoint.files.get(file.as_str()), size, &ing_messages);
+            stats.messages_already_acknowledged += start;
             let ok = deliver_session(
                 client,
                 &machine,
                 &ing_project,
                 &ing_session,
-                &ing_messages,
+                &ing_messages[start..],
                 batch_max,
                 &mut stats,
             )
@@ -195,8 +246,9 @@ pub async fn run_once<C: HubClient>(
                     FileState {
                         size,
                         mtime_ms: mtime,
-                        message_count: messages.len(),
+                        message_count: ing_messages.len(),
                         last_synced_ms: now_ms(),
+                        prefix_digest: Some(prefix_digest(&ing_messages)),
                     },
                 );
                 if let Err(e) = checkpoint.save() {
