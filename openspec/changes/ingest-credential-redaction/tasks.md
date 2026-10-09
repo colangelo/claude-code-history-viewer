@@ -22,29 +22,40 @@
 
 ## 2. Ingest integration
 
-- [ ] 2.1 Migration: `credential_findings(id, message_ref, field, rule, detector_version,
+- [x] 2.1 Migration: `credential_findings(id, message_ref, field, rule, detector_version,
       detected_at)` with a unique key on `(message_ref, field, rule, detector_version)`
       so a re-sent batch adds nothing.
-- [ ] 2.2 Call the detector from `sanitize_batch`. In `redact` mode, replace the value in
+- [x] 2.2 Call the detector from `sanitize_batch`. In `redact` mode, replace the value in
       `raw`, `content` and `search_text` before any derivation. Record findings after the
       message rows exist.
-- [ ] 2.3 `hub.toml` `[redaction]` table: per-rule mode, default per Q-a. The detector
+- [x] 2.3 `hub.toml` `[redaction]` table: per-rule mode, default per Q-a. The detector
       version is a constant bumped whenever a rule changes.
-- [ ] 2.4 Integration tests (PG): flag mode stores unchanged plus a finding; redact mode
+- [x] 2.4 Integration tests (PG): flag mode stores unchanged plus a finding; redact mode
       stores the marker in all three fields plus a finding; a re-sent batch is unchanged
       with no duplicate finding; a token-count message yields nothing.
 
+      **Done 2026-10-10** (branch `feat/34-ingest-credential-findings`, flag-only by default, so
+      Q-a's per-rule modes are config, not code): migration `0011_credential_findings.sql`
+      (also `hits`, `key_names`, `redacted`); ingest calls `redact::apply_to_message` per
+      message before extraction and inserts findings only for newly inserted rows;
+      `[redaction] redact = [...]` in `hub.toml` (unknown id = startup error; env-configured
+      hubs are flag-only). Tests: `crates/hub/tests/credential_findings_test.rs` (6, PG).
+
 ## 3. Summary endpoint and retroactive tool
 
-- [ ] 3.1 `GET /v1/findings/summary?since=` → counts by rule, no text; read-auth like
+- [x] 3.1 `GET /v1/findings/summary?since=` → counts by rule, no text; read-auth like
       the other `/v1` reads.
-- [ ] 3.2 `cchv-hub redact-existing --dry-run [--rule] [--since] [--expect <sid>:<mid>]…`:
+- [x] 3.2 `cchv-hub redact-existing --dry-run [--rule] [--since] [--expect <sid>:<mid>]…`:
       id-batched scan. Per hit: rule, key name, session id, message id, host, timestamp,
       value shape. Totals by rule and key name. A reach section: scanned machines, time
       range, fields, rules, detector version, and the not-reached list (Mac-side JSONL, ingest
       gaps, outside `--since`, uncovered shapes). Verdict "could not look" when any
       `--expect` location is not hit. Tests: output contains no fixture value; a missed
       `--expect` flips the verdict; every hit carries its location.
+      **Done 2026-10-10** as `hub findings dry-run [--since 7d|RFC3339] [--rule ID]...
+      [--expect ROW|SESSION:UUID]... [--batch N]` (the `redact-existing` name is kept for the
+      real run, 3.3). Read-only pool (`default_transaction_read_only`, 60 s statement timeout),
+      no migration. Verdicts: UNVERIFIED (no `--expect`) / COULD NOT LOOK / FLOOR.
 - [ ] 3.3 Real run: rewrite, insert findings, re-derive (tool rows, `message_embeddings`
       delete, journal day dirty, mirror rebuild note). Tested on the throwaway PG.
 - [ ] 3.4 Flag-only scan of `journal_entries` text (design Q5 residual).

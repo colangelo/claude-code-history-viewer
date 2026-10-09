@@ -18,6 +18,7 @@ use sqlx::Row;
 use crate::auth::AuthedMachine;
 use crate::error::HubError;
 use crate::extract;
+use crate::redact;
 use crate::state::AppState;
 
 /// Parse an RFC 3339 timestamp leniently; `None`/invalid → `None` (stored NULL).
@@ -378,9 +379,21 @@ pub async fn ingest(
     // ingest, which is what makes re-ingest idempotent.
     let mut derived: Vec<(Vec<extract::ToolUseRow>, Vec<extract::ToolResultRow>)> =
         Vec::with_capacity(message_count);
+    // Credential findings per message, parallel to `derived` and written the
+    // same way: only for rows this insert actually creates (Gitea #34).
+    let mut credential_hits: Vec<Vec<redact::FieldHits>> = Vec::with_capacity(message_count);
 
-    for m in messages {
-        // Derived first: this reads `raw`/`content` before the pushes below move
+    for mut m in messages {
+        // Credentials FIRST: in redact mode the value is replaced here, before
+        // anything below (tool rows, `message_id`, the stored columns) reads
+        // the payload, so no derived copy ever holds it.
+        credential_hits.push(redact::apply_to_message(
+            &mut m.raw,
+            m.content.as_mut(),
+            m.search_text.as_mut(),
+            &state.redact_rules,
+        ));
+        // Derived next: this reads `raw`/`content` before the pushes below move
         // the payload out of `m`.
         c_message_id.push(extract::message_id(&m.raw));
         derived.push((
@@ -503,6 +516,15 @@ pub async fn ingest(
         let mut tr_use_id: Vec<String> = Vec::new();
         let mut tr_is_error: Vec<bool> = Vec::new();
 
+        let mut cf_ref: Vec<i64> = Vec::new();
+        let mut cf_field: Vec<&str> = Vec::new();
+        let mut cf_rule: Vec<&str> = Vec::new();
+        let mut cf_hits: Vec<i32> = Vec::new();
+        // Joined with a separator no key name can contain (they are matched by
+        // `[A-Za-z0-9_.-]`), so one text[] column binds without a 2-D array.
+        let mut cf_keys: Vec<String> = Vec::new();
+        let mut cf_redacted: Vec<bool> = Vec::new();
+
         for (message_pk, session_pk, message_key, ts) in inserted {
             let d = deltas.entry(session_pk).or_default();
             d.inserted += 1;
@@ -534,6 +556,46 @@ pub async fn ingest(
                 tr_use_id.push(r.tool_use_id.clone());
                 tr_is_error.push(r.is_error);
             }
+            for h in &credential_hits[i] {
+                cf_ref.push(message_pk);
+                cf_field.push(h.field);
+                cf_rule.push(h.rule.id());
+                cf_hits.push(i32::try_from(h.hits).unwrap_or(i32::MAX));
+                cf_keys.push(h.key_names.join(" "));
+                cf_redacted.push(h.redacted);
+            }
+        }
+
+        if !cf_ref.is_empty() {
+            // Never the value: rule, hit count and secret-NAMED keys only.
+            tracing::warn!(
+                machine = %batch.machine.hostname,
+                findings = cf_ref.len(),
+                rules = ?cf_rule,
+                "credential-shaped values in ingested messages (see credential_findings)"
+            );
+            sqlx::query(
+                r"
+                INSERT INTO credential_findings
+                    (message_ref, field, rule, hits, key_names, redacted, detector_version)
+                SELECT t.message_ref, t.field, t.rule, t.hits,
+                       COALESCE(string_to_array(NULLIF(t.keys, ''), ' '), '{}'),
+                       t.redacted, $7
+                FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::int[], $5::text[],
+                            $6::boolean[])
+                     AS t(message_ref, field, rule, hits, keys, redacted)
+                ON CONFLICT (message_ref, field, rule, detector_version) DO NOTHING
+                ",
+            )
+            .bind(&cf_ref)
+            .bind(&cf_field)
+            .bind(&cf_rule)
+            .bind(&cf_hits)
+            .bind(&cf_keys)
+            .bind(&cf_redacted)
+            .bind(i32::try_from(redact::DETECTOR_VERSION).unwrap_or(i32::MAX))
+            .execute(&mut *tx)
+            .await?;
         }
 
         // `ON CONFLICT DO NOTHING` on (message_ref, seq) is belt-and-braces: a

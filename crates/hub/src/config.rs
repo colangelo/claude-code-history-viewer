@@ -34,6 +34,33 @@ pub struct HubConfig {
     /// so an existing `hub.toml` keeps running untouched.
     #[serde(default)]
     pub stats_mirror: MirrorConfig,
+    /// Credential-shape detection at ingest (Gitea #34). Every rule always
+    /// DETECTS and records a finding; only the rules listed here also REPLACE
+    /// the value before it is stored. Empty (the default) = flag-only.
+    #[serde(default)]
+    pub redaction: RedactionConfig,
+}
+
+/// `[redaction]` in `hub.toml`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RedactionConfig {
+    /// Rule ids in redact mode: any of `pem`, `prefix`, `bearer`, `assign`.
+    #[serde(default)]
+    pub redact: Vec<String>,
+}
+
+impl RedactionConfig {
+    /// The redact-mode rules, or an error naming an unknown id: a typo here
+    /// must not silently leave a rule in flag mode.
+    pub fn rules(&self) -> anyhow::Result<Vec<crate::redact::Rule>> {
+        self.redact
+            .iter()
+            .map(|id| {
+                crate::redact::Rule::from_id(id)
+                    .ok_or_else(|| anyhow::anyhow!("[redaction] unknown rule id {id:?}"))
+            })
+            .collect()
+    }
 }
 
 /// Settings for the `DuckDB` statistics mirror (change `hub-stats-duckdb-mirror`).
@@ -211,6 +238,8 @@ impl HubConfig {
                 path: std::env::var("HUB_STATS_MIRROR").ok().map(PathBuf::from),
                 ..MirrorConfig::default()
             },
+            // Env-configured hubs are flag-only; redact mode needs `hub.toml`.
+            redaction: RedactionConfig::default(),
         })
     }
 

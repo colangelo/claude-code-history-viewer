@@ -31,6 +31,9 @@ pub struct AppState {
     /// `/v1/stats/*` answers 503, which is the same answer a warming mirror
     /// gives, so there is one degraded shape rather than two.
     pub mirror: Option<Arc<Mirror>>,
+    /// Credential rules in redact mode (`[redaction] redact`). Empty means
+    /// every rule only flags (Gitea #34).
+    pub redact_rules: Arc<Vec<crate::redact::Rule>>,
 }
 
 impl AppState {
@@ -46,7 +49,14 @@ impl AppState {
             embedder: None,
             embed_nudge: Arc::new(Notify::new()),
             mirror: None,
+            redact_rules: Arc::new(Vec::new()),
         }
+    }
+
+    /// Put these credential rules in redact mode (builder-style, same reason).
+    pub fn with_redact_rules(mut self, rules: Vec<crate::redact::Rule>) -> Self {
+        self.redact_rules = Arc::new(rules);
+        self
     }
 
     /// Attach an embedder (builder-style so existing constructions stay valid).

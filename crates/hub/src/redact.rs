@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 
 pub const DETECTOR_VERSION: u32 = 1;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rule {
     Pem,
     Prefix,
@@ -18,6 +18,12 @@ pub enum Rule {
 }
 
 impl Rule {
+    pub const ALL: [Rule; 4] = RULES;
+
+    pub fn from_id(id: &str) -> Option<Rule> {
+        RULES.into_iter().find(|r| r.id() == id)
+    }
+
     pub fn id(&self) -> &'static str {
         match self {
             Self::Pem => "pem",
@@ -276,12 +282,19 @@ pub fn redact_json(v: &mut Value, rules: &[Rule]) -> Vec<Finding> {
         match v {
             Value::String(text) => {
                 let assignment = key.and_then(|key| assignment_finding(key, text, false));
-                let (redacted, leaf_hits) = redact(text, rules);
-                *text = if assignment.is_some() && rules.contains(&Rule::Assign) {
-                    "[REDACTED:assign]".to_owned()
+                let replace_whole = assignment.is_some() && rules.contains(&Rule::Assign);
+                // Flag-only (the ingest default) must not rebuild every string
+                // leaf of every message: scan without allocating a copy.
+                let leaf_hits = if replace_whole || rules.is_empty() {
+                    scan(text)
                 } else {
-                    redacted
+                    let (redacted, leaf_hits) = redact(text, rules);
+                    *text = redacted;
+                    leaf_hits
                 };
+                if replace_whole {
+                    "[REDACTED:assign]".clone_into(text);
+                }
                 hits.extend(assignment);
                 hits.extend(leaf_hits);
             }
@@ -301,6 +314,70 @@ pub fn redact_json(v: &mut Value, rules: &[Rule]) -> Vec<Finding> {
     let mut hits = Vec::new();
     walk(v, None, rules, &mut hits);
     hits
+}
+
+/// One stored field's detections for one rule, as ingest records them.
+/// Like `Finding`, it carries no value, fragment or digest.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FieldHits {
+    /// `raw`, `content` or `search_text`.
+    pub field: &'static str,
+    pub rule: Rule,
+    pub hits: u32,
+    /// Secret-NAMED keys (`assign` only), deduplicated, at most `MAX_KEY_NAMES`.
+    pub key_names: Vec<String>,
+    /// Whether this rule replaced the value(s) before storage.
+    pub redacted: bool,
+}
+
+const MAX_KEY_NAMES: usize = 8;
+
+fn group(field: &'static str, findings: Vec<Finding>, redact_rules: &[Rule]) -> Vec<FieldHits> {
+    let mut out: Vec<FieldHits> = Vec::new();
+    for f in findings {
+        let entry = if let Some(e) = out.iter_mut().find(|e| e.rule == f.rule) {
+            e
+        } else {
+            out.push(FieldHits {
+                field,
+                rule: f.rule,
+                hits: 0,
+                key_names: Vec::new(),
+                redacted: redact_rules.contains(&f.rule),
+            });
+            out.last_mut().expect("just pushed")
+        };
+        entry.hits += 1;
+        if let Some(k) = f.key {
+            if entry.key_names.len() < MAX_KEY_NAMES && !entry.key_names.contains(&k) {
+                entry.key_names.push(k);
+            }
+        }
+    }
+    out
+}
+
+/// Scan the three fields ingest stores for a message, replacing values in
+/// place for `redact_rules` only, and return what was found per field and
+/// rule. With no redact rules nothing is modified (flag-only).
+pub fn apply_to_message(
+    raw: &mut Value,
+    content: Option<&mut Value>,
+    search_text: Option<&mut String>,
+    redact_rules: &[Rule],
+) -> Vec<FieldHits> {
+    let mut out = group("raw", redact_json(raw, redact_rules), redact_rules);
+    if let Some(c) = content {
+        out.extend(group("content", redact_json(c, redact_rules), redact_rules));
+    }
+    if let Some(t) = search_text {
+        let (redacted, findings) = redact(t, redact_rules);
+        if !redact_rules.is_empty() {
+            *t = redacted;
+        }
+        out.extend(group("search_text", findings, redact_rules));
+    }
+    out
 }
 
 #[cfg(test)]

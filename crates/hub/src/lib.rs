@@ -13,6 +13,7 @@ pub mod embed;
 pub mod embed_sweep;
 pub mod error;
 pub mod extract;
+pub mod findings;
 pub mod fts;
 pub mod health;
 pub mod identities;
@@ -109,6 +110,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/healthz/journal", get(health::healthz_journal))
         .route("/v1/healthz/stats", get(health::healthz_stats))
         .route("/v1/ingest", post(ingest::ingest))
+        .route("/v1/findings/summary", get(findings::summary))
         .route("/v1/search", get(search::search))
         .route("/v1/journal/pending", get(journal::pending))
         .route(
@@ -223,6 +225,32 @@ pub async fn run_backfill(batch: i64) -> anyhow::Result<()> {
 /// Deliberately a separate, watched operation rather than a startup sweep: it
 /// is the counterpart to `backfill-analytics` (design D2), not steady state.
 /// The running hub keeps serving from the old mirror while this builds.
+/// `hub findings dry-run`: scan stored messages with the ingest detector and
+/// print the report (Gitea #34, infra#104). Every session on the pool is
+/// read-only, and no migration runs, so the command cannot write to the archive.
+pub async fn run_findings_dry_run(opts: findings::DryRunOptions) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query("SET statement_timeout = '60s'")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    let report = findings::dry_run(&pool, &opts).await?;
+    print!("{}", report.render());
+    Ok(())
+}
+
 pub async fn run_mirror_rebuild() -> anyhow::Result<()> {
     let config = HubConfig::load()?;
     let pool = PgPoolOptions::new()
@@ -258,11 +286,17 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
 
+    let redact_rules = config.redaction.rules()?;
+    tracing::info!(
+        redact = ?redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
+        "credential detection: every rule flags; listed rules also redact"
+    );
     let mut state = AppState::new(
         pool,
         config.token_map(),
         config.trust_tailscale_identity.clone(),
-    );
+    )
+    .with_redact_rules(redact_rules);
     if let Some(dir) = &config.embed_model_dir {
         tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");
         state = state.with_embedder(std::sync::Arc::new(embed::CandleEmbedder::new(dir.clone())));
