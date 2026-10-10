@@ -1,10 +1,8 @@
 name: Frontend Tests
 
 # Gates the React/TypeScript frontend on every PR/push that touches it.
-# `rust-tests.yml` only covers `src-tauri/**` (cargo fmt/clippy/test), and
-# `update-flow-tests.yml` runs vitest for just the 4 update-flow files, so the
-# rest of the ~860 frontend tests (plus tsc/eslint/i18n) were previously
-# ungated — a broad frontend regression could land on develop unnoticed.
+# `rust-tests.yml` only covers `src-tauri/**` (cargo fmt/clippy/test), so
+# without this job the frontend tests (plus tsc/eslint/i18n) would be ungated.
 on:
   push:
     branches: [main, develop]

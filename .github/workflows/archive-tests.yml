@@ -2,7 +2,7 @@ name: Archive Tests
 
 # Tests for the cross-machine history archive crates (history-core, protocol,
 # hub, sync-daemon). These need a Postgres service, which rust-tests.yml (the
-# desktop suite) does not provide. The desktop crate (src-tauri) is intentionally
+# viewer suite) does not provide. The viewer crate (src-tauri) is intentionally
 # NOT built here — it is covered by rust-tests.yml.
 
 on:
@@ -68,7 +68,7 @@ jobs:
         with:
           cache-on-failure: true
 
-      # tauri-build / rust-embed expect a frontend dist to exist for any build
+      # rust-embed expects a frontend dist to exist for any build
       # that touches the workspace root; the archive crates don't use it, but the
       # placeholder keeps a full `cargo` resolve happy.
       - name: Create dist placeholder

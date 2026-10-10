@@ -40,11 +40,10 @@ _post-setup:
     rustup target add x86_64-apple-darwin 2>/dev/null || true
     rustup target add aarch64-apple-darwin 2>/dev/null || true
 
-# Run live-reload dev server
-dev:
-    tauri dev
+# Build the frontend and run the WebUI server against it (http://localhost:3727)
+dev: serve-dev
 
-# Run vite dev server (will not work without tauri, do not run directly)
+# Run the vite dev server alone: frontend only, so use VITE_MOCK=1 for a mock API
 vite-dev:
     vite
 
@@ -65,23 +64,9 @@ frontend-build: sync-version
     pnpm exec tsc --build .
     pnpm exec vite build
 
-[windows]
-tauri-build:
-    tauri build
-[linux]
-tauri-build:
-    tauri build
-[macos]
-tauri-build:
-    tauri build --target universal-apple-darwin
-
-# Copy version number from package.json to Cargo.toml
+# Copy version number from package.json to Cargo.toml and the distiller
 sync-version:
     node scripts/sync-version.cjs
-
-# Run Tauri CLI
-tauri *ARGS:
-    tauri {{ARGS}}
 
 test:
     vitest
