@@ -48,7 +48,7 @@ Pick a primary type and the matching canonical label (these are the repo's real 
 A large share of issues are "please support <AI CLI>" (Kiro, Kimi, Pi, Qoder,
 antigravity, etc.). Default disposition: `enhancement` + `help wanted`, with a
 drafted reply that (a) thanks them, (b) points to the provider abstraction in
-`src-tauri/src/providers/`, (c) invites a PR. Only escalate to in-house work if
+`crates/viewer/src/providers/`, (c) invites a PR. Only escalate to in-house work if
 the maintainer says so.
 
 ## Step 4 — Duplicate / known-issue scan

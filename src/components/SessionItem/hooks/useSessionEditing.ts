@@ -7,7 +7,6 @@ import {
 } from "@/hooks/useSessionMetadata";
 import { useAppStore } from "@/store/useAppStore";
 import { api } from "@/services/api";
-import { isAbsolutePath } from "@/utils/pathUtils";
 import {
   getResumeCommand,
   supportsNativeRename as providerSupportsNativeRename,
@@ -64,7 +63,6 @@ export function useSessionEditing(session: ClaudeSession) {
   );
   const supportsSessionDeletion =
     !isServerReadOnly && providerSupportsSessionDeletion(providerId);
-  const supportsRevealInFinder = isAbsolutePath(session.file_path);
   const isArchivedCodexSession =
     providerId === "codex" &&
     /(?:^|[\\/])archived_sessions(?:[\\/]|$)/.test(session.file_path);
@@ -282,24 +280,6 @@ export function useSessionEditing(session: ClaudeSession) {
     [handleCopyToClipboard, session.file_path, t]
   );
 
-  const handleRevealInFinder = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      setIsContextMenuOpen(false);
-      if (!session.file_path || !supportsRevealInFinder) {
-        toast.error(t("session.revealError", "Could not reveal file"));
-        return;
-      }
-      try {
-        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-        await revealItemInDir(session.file_path);
-      } catch {
-        toast.error(t("session.revealError", "Could not reveal file"));
-      }
-    },
-    [session.file_path, supportsRevealInFinder, t]
-  );
-
   const handleDeleteSession = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -412,7 +392,6 @@ export function useSessionEditing(session: ClaudeSession) {
     supportsNativeRename,
     supportsResumeCommand,
     supportsSessionDeletion,
-    supportsRevealInFinder,
     isArchivedCodexSession,
     isServerReadOnly,
     deleteDialogTitle,
@@ -434,7 +413,6 @@ export function useSessionEditing(session: ClaudeSession) {
     handleCopySessionId,
     handleCopyResumeCommand,
     handleCopyFilePath,
-    handleRevealInFinder,
     handleDeleteSession,
     handleConfirmDeleteSession,
     handleNativeRenameClick,

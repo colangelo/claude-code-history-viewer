@@ -67,10 +67,6 @@ import {
   createArchiveSlice,
 } from "./slices/archiveSlice";
 import {
-  type SessionPickerSlice,
-  createSessionPickerSlice,
-} from "./slices/sessionPickerSlice";
-import {
   type ServerSlice,
   createServerSlice,
 } from "./slices/serverSlice";
@@ -101,7 +97,6 @@ export type AppStore = ProjectSlice &
   NavigatorSlice &
   ProviderSlice &
   ArchiveSlice &
-  SessionPickerSlice &
   ServerSlice;
 
 // ============================================================================
@@ -124,6 +119,5 @@ export const useAppStore = create<AppStore>()((...args) => ({
   ...createNavigatorSlice(...args),
   ...createProviderSlice(...args),
   ...createArchiveSlice(...args),
-  ...createSessionPickerSlice(...args),
   ...createServerSlice(...args),
 }));

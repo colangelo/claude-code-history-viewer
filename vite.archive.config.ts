@@ -1,8 +1,8 @@
 /**
  * Build config for the standalone static archive webapp (`archive.html` →
- * `dist-archive/`). A sibling of the main config on purpose: the Tauri and
- * WebUI builds must keep emitting exactly today's `dist/` (tauri.conf.json
- * and the webui-server rust-embed both point at it), so the static bundle
+ * `dist-archive/`). A sibling of the main config on purpose: the WebUI build
+ * must keep emitting exactly today's `dist/` (the webui-server rust-embed
+ * points at it), so the static bundle
  * gets its own output directory instead of teaching one config two modes.
  *
  * The `just archive-web-build` recipe renames the emitted `archive.html` to

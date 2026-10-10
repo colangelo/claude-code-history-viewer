@@ -2,7 +2,7 @@
  * useCaptureScreenshot Hook
  *
  * Handles screenshot capture using html-to-image and file saving.
- * Supports both Tauri (native save dialog) and web (browser download) modes.
+ * Saves through a browser download.
  *
  * The caller is responsible for managing isCapturing state so the
  * capture renderer can mount before the ref is accessed.

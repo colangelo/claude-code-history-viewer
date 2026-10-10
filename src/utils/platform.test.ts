@@ -176,7 +176,6 @@ describe("platform WebUI base path helpers", () => {
 describe("openExternalUrl", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    delete (window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
     delete window.__WEBUI_API_BASE__;
     delete window.__WEBUI_BASE_PATH__;
   });

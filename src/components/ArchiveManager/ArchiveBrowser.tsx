@@ -6,7 +6,6 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
-  FolderOpen,
   Plus,
   Trash2,
   Pencil,
@@ -28,10 +27,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAppStore } from '@/store/useAppStore';
 import { archiveApi } from '@/services/archiveApi';
-import { api } from '@/services/api';
 import { formatBytes } from '@/utils/formatters';
 import { toast } from 'sonner';
-import { isTauri } from '@/utils/platform';
 import { ArchiveCreateDialog } from './ArchiveCreateDialog';
 import type { ArchiveEntry, ArchiveSessionInfo } from '@/types';
 
@@ -83,18 +80,6 @@ export const ArchiveBrowser: React.FC = () => {
       .catch((error) => console.error('Failed to load archive base path:', error));
   }, [loadArchives]);
 
-  const handleOpenInFileManager = useCallback(async () => {
-    if (!archiveBasePath) return;
-    try {
-      if (isTauri()) {
-        const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
-        await revealItemInDir(archiveBasePath);
-      }
-    } catch {
-      toast.error(t('archive.browse.openFolderFailed'));
-    }
-  }, [archiveBasePath, t]);
-
   const handleExpandArchive = useCallback(
     async (archiveId: string) => {
       if (expandedArchiveIdRef.current === archiveId) {
@@ -145,29 +130,17 @@ export const ArchiveBrowser: React.FC = () => {
       try {
         const content = await exportSession(filePath, 'json');
 
-        if (isTauri()) {
-          const { save } = await import('@tauri-apps/plugin-dialog');
-          const savePath = await save({
-            defaultPath: downloadName,
-            filters: [{ name: 'JSON', extensions: ['json'] }],
-          });
-          if (savePath) {
-            await api('write_text_file', { path: savePath, content });
-            toast.success(t('archive.export.success'));
-          }
-        } else {
-          const blob = new Blob([content], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          try {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = downloadName;
-            a.click();
-          } finally {
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-          }
-          toast.success(t('archive.export.success'));
+        const blob = new Blob([content], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        try {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = downloadName;
+          a.click();
+        } finally {
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
+        toast.success(t('archive.export.success'));
       } catch {
         toast.error(t('archive.error.exportFailed'));
       } finally {
@@ -227,17 +200,6 @@ export const ArchiveBrowser: React.FC = () => {
       {archiveBasePath && (
         <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-muted/40 text-2xs text-muted-foreground">
           <span className="truncate flex-1 font-mono">{archiveBasePath}</span>
-          {isTauri() && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0 shrink-0"
-              onClick={handleOpenInFileManager}
-              aria-label={t('archive.browse.openFolder')}
-            >
-              <FolderOpen className="w-3.5 h-3.5" />
-            </Button>
-          )}
         </div>
       )}
 

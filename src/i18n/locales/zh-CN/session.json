@@ -100,8 +100,6 @@
   "session.copiedResumeCommandNoCwd": "恢复命令已复制（未知工作目录）",
   "session.copiedSessionId": "会话ID已复制",
   "session.copyFilePath": "复制文件路径",
-  "session.showJsonlFile": "显示 JSONL 文件",
-  "session.revealError": "无法显示文件",
   "session.deleteConfirm": "这将删除会话文件及所有相关数据（子代理、工具结果）。如果可能，文件将移至回收站，否则将永久删除。",
   "session.deleteError": "删除会话失败",
   "session.selectError": "打开会话失败",
@@ -212,9 +210,5 @@
   "session.export.success": "导出成功",
   "session.export.error": "导出失败",
   "session.export.exporting": "正在导出...",
-  "sessionPicker.title": "选择会话",
-  "sessionPicker.subtitle": "{{count}} 个会话匹配 \"{{value}}\"",
-  "sessionPicker.empty": "没有匹配的会话",
-  "sessionPicker.cancelled": "启动会话提示已取消",
   "settings.archiveHub.journal.tab.analytics": "分析"
 }

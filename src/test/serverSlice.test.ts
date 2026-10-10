@@ -5,14 +5,9 @@ import {
   type ServerSlice,
 } from "@/store/slices/serverSlice";
 import { api } from "@/services/api";
-import { isTauri } from "@/utils/platform";
 
 vi.mock("@/services/api", () => ({
   api: vi.fn(),
-}));
-
-vi.mock("@/utils/platform", () => ({
-  isTauri: vi.fn(),
 }));
 
 const createTestStore = () =>
@@ -27,7 +22,6 @@ const createTestStore = () =>
 describe("serverSlice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(isTauri).mockReturnValue(false);
   });
 
   it("loads read-only mode from WebUI server config", async () => {
@@ -41,13 +35,13 @@ describe("serverSlice", () => {
     expect(useStore.getState().isServerConfigLoaded).toBe(true);
   });
 
-  it("defaults to writable in Tauri desktop mode", async () => {
-    vi.mocked(isTauri).mockReturnValue(true);
+  it("falls back to writable when the server config cannot be read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(api).mockRejectedValue(new Error("offline"));
     const useStore = createTestStore();
 
     await useStore.getState().loadServerConfig();
 
-    expect(api).not.toHaveBeenCalled();
     expect(useStore.getState().isServerReadOnly).toBe(false);
     expect(useStore.getState().isServerConfigLoaded).toBe(true);
   });

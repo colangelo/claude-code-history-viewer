@@ -86,7 +86,6 @@ export const SessionItem: React.FC<SessionItemProps> = ({
             supportsNativeRename={editing.supportsNativeRename}
             supportsResumeCommand={editing.supportsResumeCommand}
             supportsSessionDeletion={editing.supportsSessionDeletion}
-            supportsRevealInFinder={editing.supportsRevealInFinder}
             inputRef={editing.inputRef}
             ignoreBlurRef={editing.ignoreBlurRef}
             onEditValueChange={editing.setEditValue}
@@ -100,7 +99,6 @@ export const SessionItem: React.FC<SessionItemProps> = ({
             onCopySessionId={editing.handleCopySessionId}
             onCopyResumeCommand={editing.handleCopyResumeCommand}
             onCopyFilePath={editing.handleCopyFilePath}
-            onRevealInFinder={editing.handleRevealInFinder}
             onDeleteSession={editing.handleDeleteSession}
             onContextMenuOpenChange={editing.setIsContextMenuOpen}
           />
@@ -123,7 +121,6 @@ export const SessionItem: React.FC<SessionItemProps> = ({
           supportsNativeRename={editing.supportsNativeRename}
           supportsResumeCommand={editing.supportsResumeCommand}
           supportsSessionDeletion={editing.supportsSessionDeletion}
-          supportsRevealInFinder={editing.supportsRevealInFinder}
           providerId={editing.providerId}
           onClose={handleContextMenuClose}
           onRenameClick={editing.handleRenameClick}
@@ -132,7 +129,6 @@ export const SessionItem: React.FC<SessionItemProps> = ({
           onCopySessionId={editing.handleCopySessionId}
           onCopyResumeCommand={editing.handleCopyResumeCommand}
           onCopyFilePath={editing.handleCopyFilePath}
-          onRevealInFinder={editing.handleRevealInFinder}
           onDeleteSession={editing.handleDeleteSession}
         />
       )}

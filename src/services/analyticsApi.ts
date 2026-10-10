@@ -1,7 +1,7 @@
 /**
  * Analytics API Service
  *
- * Centralized service layer for all analytics-related Tauri API calls.
+ * Centralized service layer for all analytics-related backend calls.
  * Single source of truth for API contracts and data fetching logic.
  */
 

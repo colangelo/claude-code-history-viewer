@@ -312,7 +312,7 @@ release and the query-floor measurements).
 
 ## Project Overview
 
-Claude Code History Viewer is a Tauri-based desktop application that allows users to browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
+Claude Code History Viewer is a web application — a React frontend served by a Rust WebUI server (`crates/viewer`, `--serve`), plus the cross-machine archive stack (`crates/hub`, `crates/sync-daemon`) — that lets users browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
 
 ## Development Commands
 
@@ -322,22 +322,19 @@ This project uses `just` (a command runner). Install with `brew install just` or
 
 ```bash
 just setup          # Install dependencies and configure build environment
-just dev            # Run full Tauri app in development mode (hot reload)
+just dev            # Build the frontend and run the WebUI server on :3727 (serve-dev)
 just lint           # Run ESLint
-just tauri-build    # Build production app (macOS universal binary, Linux native)
+just serve-build    # Release WebUI server binary with the frontend embedded
 just test           # Run vitest in watch mode
 just test-run       # Run tests once with verbose output
-just sync-version   # Sync version from package.json to Cargo.toml, tauri.conf.json, cchv-distill.py
+just sync-version   # Sync version from package.json to Cargo.toml, cchv-distill.py
 ```
 
 ### Alternative (using pnpm directly)
 
 ```bash
 pnpm install                                    # Install dependencies
-pnpm exec tauri dev                             # Development mode
-pnpm exec tauri build --target universal-apple-darwin  # macOS build
-pnpm exec tauri build                           # Linux/Windows build
-pnpm dev                                        # Start Vite dev server only
+pnpm dev                                        # Vite dev server only (VITE_MOCK=1 for a mock API)
 pnpm build                                      # Build frontend with TypeScript checking
 pnpm lint                                       # Run ESLint
 ```
@@ -396,7 +393,7 @@ static webapp + hub static hosting · `v0.5.0` Tailscale-identity read-auth ·
 ### Single Source of Truth
 
 **`package.json`** `version` is the source of truth. `just sync-version`
-propagates it to the Rust workspace, the Tauri config, and the distiller:
+propagates it to the Rust workspace and the distiller:
 
 ```
 package.json (version)
@@ -404,7 +401,6 @@ package.json (version)
 ├── Cargo.toml  [workspace.package] version   ← every crate inherits it
 │                                               (version.workspace = true);
 │                                               the hub reports it on /v1/healthz
-├── src-tauri/tauri.conf.json
 └── scripts/cchv-distill.py  DISTILL_VERSION  ← the distiller announces it at every
                                                tick (it is deployed as an installed
                                                COPY — #40). Marker-anchored; a missing
@@ -452,9 +448,9 @@ pnpm lint                       # ESLint (no-explicit-any 등)
 pnpm build                      # webui-server가 dist/를 임베드 — 새 worktree에서는 이게 없으면 clippy --all-features 실패
 
 # ===== Backend 검증 =====
-cd src-tauri && cargo test -- --test-threads=1 && cd ..  # Rust 테스트 (단일 스레드 필수)
-cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings && cd ..  # Rust 린트
-cd src-tauri && cargo fmt --all -- --check && cd ..      # Rust 포맷 체크
+cd crates/viewer && cargo test -- --test-threads=1 && cd ../..  # Rust 테스트 (단일 스레드 필수)
+cd crates/viewer && cargo clippy --all-targets --all-features -- -D warnings && cd ../..  # Rust 린트
+cd crates/viewer && cargo fmt --all -- --check && cd ../..      # Rust 포맷 체크
 
 # ===== i18n 검증 =====
 pnpm run i18n:validate          # 5개 언어 키 동기화 확인 (en, ko, ja, zh-CN, zh-TW)
@@ -479,7 +475,7 @@ breaking → major.
 
 ```bash
 npm version <version> --no-git-tag-version   # e.g. 0.6.0 (no npm publish)
-just sync-version                            # package.json → workspace + tauri.conf
+just sync-version                            # package.json → workspace + distiller
 cargo check -q -p hub                        # REFRESHES Cargo.lock. sync-version does NOT.
                                              # The skill's Phase 2 has carried this line all
                                              # along; the block did not, and the block is the
@@ -508,10 +504,13 @@ pnpm tsc --build . && pnpm vitest run        # re-check after sync
 find . -path ./.git -prune -o -name "*.sync-conflict-*" -print   # expect: nothing
 # Exactly what a version bump touches — four files verified against `chore(release):
 # cchv-v0.18.1` (b8f69d3a), plus `scripts/cchv-distill.py` since build-identity-surfaces
-# (#40, 2026-08-21: the distiller's DISTILL_VERSION is sync-version's fifth target).
+# (#40, 2026-08-21: the distiller's DISTILL_VERSION is sync-version's fifth target),
+# minus `src-tauri/tauri.conf.json` since the web-only cut (#23) deleted it. Leaving a
+# deleted path here is not harmless: `git add` refuses the WHOLE command on a pathspec
+# that matches nothing, so the release commit would carry no bump at all.
 # Anything else that belongs in the release gets committed deliberately BEFORE this
 # point, never swept in here.
-git add package.json Cargo.toml Cargo.lock src-tauri/tauri.conf.json scripts/cchv-distill.py
+git add package.json Cargo.toml Cargo.lock scripts/cchv-distill.py
 
 # Explicit staging fails closed in the WRONG direction the day `sync-version` grows a
 # new target: the list silently drops it, and the worktree census above says nothing —
@@ -681,41 +680,35 @@ gh release view cchv-v0.13.0 -R "$FORK"   # expect 3 assets: hub bin + .sha256 +
 | Duplicate release | manual `gh release create` + workflow auto-create | let `server-release.yml` own it |
 | Modules not found after `pnpm install` | lockfile ↔ node_modules drift | `rm -rf node_modules && pnpm install` |
 
-### Desktop app (retired as a *distribution*, not as a dependency)
+### Desktop app (removed by the web-only cut, #23)
 
-The Tauri desktop **distribution** and its auto-updater are retired: we build no
-`.dmg`/`.app`, and the desktop release workflows are gone (`updater-release.yml`,
-`updater-release-retry.yml`).
+There is no Tauri desktop app any more — not as a distribution and, since the
+web-only cut (`openspec/changes/web-only-cut/`, Gitea #23), not as a dependency
+either. `crates/viewer` is a plain Rust crate whose binary does two things, both
+dispatched from `lib.rs::run()`: `--export` (headless session export) and
+`--serve` (the WebUI server). With neither flag it prints usage and exits 2.
 
-**What "retired" does NOT mean — verify before you repeat it.** An earlier
-version of this section claimed `src-tauri` "now builds solely as the WebUI
-server (`--features webui-server`)". That is false, and believing it leads to
-wrong conclusions about CI. The facts, checked 2026-07-26:
+- `Cargo.toml`: `default = ["webui-server"]`, no `tauri*` crate at all;
+  `cargo tree -i tauri --target all` matches nothing. No `build.rs`,
+  `tauri.conf.json` or `capabilities/`.
+- The old `#[tauri::command]` functions are plain `async fn`s the axum handlers
+  call; `commands/mod.rs` allows `clippy::unused_async` because the handler
+  macros await every command uniformly.
+- Gone with the desktop: the updater (Rust + `useUpdater`/update modals + the
+  `update` i18n namespace + `update-flow-tests.yml`), the `--session` startup
+  hint and its session picker, reveal-in-Finder, the native folder pickers
+  (typing a path stays), the WSL settings section (the server-side WSL scan
+  stays), and the macOS window chrome.
+- The Linux CI jobs no longer install GTK/WebKit: nothing in the graph needs a
+  system library (no `glib-sys`, `webkit2gtk`, `soup3`, `openssl-sys`).
+- **Logging:** `tauri-plugin-log` was locked but never registered, so `--serve`
+  had no `log` backend before the cut either; its `log::` calls stay silent and
+  user-facing output goes through `eprintln!`. Adding a logger is a separate
+  decision, not part of the cut.
 
-- `src-tauri/Cargo.toml` has `default = []`, but `tauri` **and 10
-  `tauri-plugin-*` crates are unconditional dependencies** — not optional, not
-  feature-gated. `webui-server` only *adds* axum/tower/rust-embed; it subtracts
-  nothing.
-- Consequently every compile of `src-tauri`, including `--features
-  webui-server`, drags in the full webview stack — 38 unambiguously
-  desktop-only entries in `Cargo.lock` (`tauri*`, `wry`, `tao`, `webkit2gtk*`,
-  `gtk*`, `gdk*`, `atk*`, `javascriptcore*`, `soup*`). **This is why
-  `rust-tests.yml` installs `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` on every
-  Ubuntu job** — it is forced by the dependency graph, not an oversight.
-- The desktop GUI still runs. `src-tauri/src/lib.rs::run()` dispatches
-  `--export` (line ~95) then `--serve` (line ~106), and otherwise falls through
-  to `tauri::Builder::default()` (line ~152).
-
-Making that sentence true is the job of the **web-only-cut** work (memory's
-"Deliverable 2"; no `openspec/changes/web-only-cut/` exists yet) — make `tauri`
-optional, or split the CLI + WebUI server out of `src-tauri` into its own crate.
-Until then, do not trim the GTK/webkit steps out of CI expecting it to work.
-
-The updater code is **dormant / vestigial** (safe to remove in a future
-cleanup): `src-tauri/src/commands/update.rs`, `src/hooks/useGitHubUpdater.ts`,
-`src/hooks/useSmartUpdater.ts`, the tauri updater plugin in
-`src-tauri/tauri.conf.json`, and the whole `update-flow-tests.yml` workflow,
-which guards only retired updater UI.
+The frontend has no `isTauri()` any more. Every former branch kept its web half
+(`fetch` for `api()`, `localStorage` for `storageAdapter`, Blob downloads for
+file saves, an anchor click for `openExternalUrl`, SSE for the file watcher).
 
 ### What CI builds, and who consumes it
 
@@ -725,10 +718,9 @@ Checked 2026-07-26. Useful when deciding whether a red check is worth fixing.
 |---|---|---|
 | `cchv-webapp.tar.gz` | `server-release.yml`, every `cchv-v*` tag | **Us** — infra swaps it into m4m's `static_dir`; the live archive browser |
 | `cchv-hub-<v>-aarch64-apple-darwin` + `.sha256` | `server-release.yml`, every tag (macos-14) | **Us** — becomes `~/.local/bin/cchv-hub` on m4m (`docs/archive/deployment.md` §2b) |
-| 4× WebUI server binaries (`src-tauri --features webui-server`) | `server-release.yml`, **dispatch-only** | **Nobody today.** Free unless dispatched |
-| Desktop bundles | — | Not built at all |
+| 4× WebUI server binaries (`crates/viewer --features webui-server`) | `server-release.yml`, **dispatch-only** | **Nobody today.** Free unless dispatched |
 
-`src-tauri` therefore ships to no one — but it is **not dead code**. It is the
+`crates/viewer` therefore ships to no one — but it is **not dead code**. It is the
 local CLI the `cchv-find` skill §3 drives, built from source on demand:
 `--export <id|path> --format html` and `--serve` both verified working
 2026-07-26. So `rust-tests.yml` guards a real local tool, just not a shipped
@@ -736,8 +728,7 @@ artifact — weigh it accordingly.
 
 Test workflows by what they guard: `archive-tests.yml` → the crates we actually
 ship (history-core, protocol, hub, sync-daemon). `frontend-tests.yml` → the
-webapp we ship. `rust-tests.yml` → the local-only CLI. `update-flow-tests.yml`
-→ a retired feature.
+webapp we ship. `rust-tests.yml` → the local-only CLI.
 
 Known dead weight in `rust-tests.yml`: the **Benchmarks** job uploads nothing —
 `cargo bench --no-run` never produces criterion output, and its
@@ -790,6 +781,11 @@ tag after it, it is new and real.**
   (`plist → tauri/os_info`) and its ignore rests on the input being Tauri's own
   `Info.plist`, not on absence. A name in that list asserts absence; verify with
   `cargo tree -i <crate> --target all` before adding one.
+- **Since the web-only cut (#23), `rkyv`, `rust_decimal`, `quick-xml` and `plist` are
+  not in `Cargo.lock` at all**, so `RUSTSEC-2026-0235`, `-0194` and `-0195` in
+  `.cargo/audit.toml` ignore advisories for crates that no longer exist, and the
+  absence guard lists `rsa` only. Removing the three dead entries is an attended edit
+  (the file is permission-gated); until then they are inert, not wrong.
 
 ## Architecture
 
@@ -799,7 +795,7 @@ tag after it, it is new and real.**
 Claude Code:        ~/.claude/projects/[project]/*.jsonl                              ─┐
 Codex CLI:          ~/.codex/sessions/**/rollout-*.jsonl                               │
 OpenCode:           ~/.local/share/opencode/storage/                                   │
-Copilot CLI:        ~/.copilot/session-state/<id>/events.jsonl   (workspace.yaml:      ├→ Rust Backend → Tauri IPC → React Frontend → Virtual List
+Copilot CLI:        ~/.copilot/session-state/<id>/events.jsonl   (workspace.yaml:      ├→ Rust WebUI server → HTTP /api/* → React Frontend → Virtual List
 Copilot Desktop:    ~/.copilot/session-state/<id>/events.jsonl    client_name routes)  │
 VS Code Copilot:    <UserData>/workspaceStorage/<hash>/chatSessions/*.jsonl            ─┘
 ```
@@ -812,12 +808,12 @@ VS Code Copilot:    <UserData>/workspaceStorage/<hash>/chatSessions/*.jsonl     
   - `ProjectTree.tsx` - Shows project/session hierarchy
   - `contentRenderer.tsx` - Handles rendering of different content types
   - `messageRenderer.tsx` - Renders tool use, tool results, and message content
-- **API Integration**: Frontend communicates with Rust backend via Tauri's IPC commands
+- **API Integration**: `src/services/api.ts` POSTs JSON to the WebUI server's `/api/<command>` routes
 - **Virtual Scrolling**: Uses react-window for efficient rendering of large message lists
 
-### Backend (Rust + Tauri)
+### Backend (Rust WebUI server)
 
-- **Main Commands** (in `src-tauri/src/lib.rs`):
+- **Main Commands** (in `crates/viewer/src/commands/`, routed by `crates/viewer/src/server/mod.rs`):
   - `get_claude_folder_path` - Locates user's `.claude` directory
   - `scan_projects` - Scans for all Claude projects
   - `load_project_sessions` - Loads sessions for a specific project
@@ -846,7 +842,6 @@ src/i18n/
     │   ├── error.json        # 에러 메시지 (~37 keys)
     │   ├── message.json      # 메시지 뷰어 (~66 keys)
     │   ├── renderers.json    # 렌더러 컴포넌트 (~255 keys)
-    │   ├── update.json       # 업데이트 관련 (~65 keys)
     │   ├── feedback.json     # 피드백 (~32 keys)
     │   └── recentEdits.json  # 최근 편집 (~20 keys)
     ├── ko/                   # Korean (동일 구조)
@@ -893,7 +888,6 @@ src/i18n/
 | `error` | error | ~37 |
 | `message` | message, messages, messageViewer, messageContentDisplay | ~66 |
 | `renderers` | advancedTextDiff, agentProgressGroup, agentTaskGroup, assistantMessageDetails, bashCodeExecutionToolResultRenderer, captureMode, citationRenderer, claudeContentArrayRenderer, claudeSessionHistoryRenderer, claudeToolUseDisplay, codeExecutionToolResultRenderer, codebaseContextRenderer, commandOutputDisplay, commandRenderer, contentArray, diffViewer, fileContent, fileEditRenderer, fileHistorySnapshotRenderer, fileListRenderer, gitWorkflowRenderer, globalSearch, imageRenderer, mcpRenderer, progressRenderer, queueOperationRenderer, structuredPatch, summaryMessageRenderer, systemMessageRenderer, taskNotification, taskOperation, terminalStreamRenderer, textEditorCodeExecutionToolResultRenderer, thinkingRenderer, toolSearchToolResultRenderer, webFetchToolResultRenderer, webSearchRenderer | ~255 |
-| `update` | updateModal, updateSettingsModal, simpleUpdateModal 등 | ~65 |
 | `feedback` | feedback | ~32 |
 | `recentEdits` | recentEdits | ~20 |
 
@@ -1030,19 +1024,18 @@ Assistant messages contain additional metadata within the `message` object:
 
 ### CLI flags
 
-- `--serve [--port N] [--host H] [--dist D] [--token T | --no-auth]` — WebUI headless mode (requires `webui-server` feature build). Parsed in `src-tauri/src/lib.rs::run_server`.
-- `--session <uuid|uuid-prefix>` — preload a specific session at GUI startup. UUID regex accepts 8-36 hex-or-dash chars. Parsed in `src-tauri/src/cli.rs::parse_session_hint`, delivered to the frontend via the `get_startup_session_hint` Tauri command, resolved in `src/lib/preloadSession.ts`. A race guard inside `preloadSessionFromCli` respects user navigation made mid-scan.
-- `--export <session-id|/abs/path.jsonl> [--format html|json] [--output <file>]` — **headless** session export (no GUI/webview); writes to `--output` or stdout, then exits. Dispatched first in `src-tauri/src/lib.rs::run`. Session ids resolve under `~/.claude/projects` (id prefix accepted when unambiguous). HTML rendering lives in `src-tauri/src/export.rs`, a Rust port of `src/services/export/{contentExtractor,htmlExporter}.ts` (markdown via `comrak`); keep the two in sync when adding content types.
-- **Shared argv helper**: `src-tauri/src/cli_args.rs::extract_flag_value` is the canonical `--flag=value` / `--flag value` parser used by both the desktop and `webui-server` code paths.
+- `--serve [--port N] [--host H] [--dist D] [--token T | --no-auth]` — WebUI headless mode (requires `webui-server` feature build). Parsed in `crates/viewer/src/lib.rs::run_server`.
+- `--export <session-id|/abs/path.jsonl> [--format html|json] [--output <file>]` — headless session export; writes to `--output` or stdout, then exits. Dispatched first in `crates/viewer/src/lib.rs::run`. Session ids resolve under `~/.claude/projects` (id prefix accepted when unambiguous). HTML rendering lives in `crates/viewer/src/export.rs`, a Rust port of `src/services/export/{contentExtractor,htmlExporter}.ts` (markdown via `comrak`); keep the two in sync when adding content types.
+- **Shared argv helper**: `crates/viewer/src/cli_args.rs::extract_flag_value` is the canonical `--flag=value` / `--flag value` parser used by both the `--export` and `--serve` code paths.
 
 ### Static archive webapp
 
-`just archive-web-build` → `dist-archive/`: a backend-free static build of the hub Archive mode (`archive.html` + `src/archive-main.tsx` + `ConnectGate`, own config `vite.archive.config.ts` so the Tauri/WebUI `dist/` is untouched). Deployable to any static host, or served by the hub itself via `static_dir` in `hub.toml` / `HUB_STATIC_DIR` env (`crates/hub`, router fallback — `/v1/*` always wins). Hub connection (URL + read token) is entered on first visit and persisted in browser localStorage. Spec: `openspec/specs/static-archive-webapp/spec.md`, `openspec/specs/hub-static-hosting/spec.md`; deploy notes: `docs/archive/deployment.md`.
+`just archive-web-build` → `dist-archive/`: a backend-free static build of the hub Archive mode (`archive.html` + `src/archive-main.tsx` + `ConnectGate`, own config `vite.archive.config.ts` so the WebUI `dist/` is untouched). Deployable to any static host, or served by the hub itself via `static_dir` in `hub.toml` / `HUB_STATIC_DIR` env (`crates/hub`, router fallback — `/v1/*` always wins). Hub connection (URL + read token) is entered on first visit and persisted in browser localStorage. Spec: `openspec/specs/static-archive-webapp/spec.md`, `openspec/specs/hub-static-hosting/spec.md`; deploy notes: `docs/archive/deployment.md`.
 
 ## Important Patterns
 
-- Tauri commands are async and return `Result<T, String>`
-- Frontend uses `@tauri-apps/api/core` for invoking backend commands
+- Backend commands are async and return `Result<T, String>`; a new one needs a handler and a route in `crates/viewer/src/server/`
+- Frontend calls backend commands through `api()` in `src/services/api.ts`
 - All file paths must be absolute when passed to Rust commands
 - The app uses Tailwind CSS with custom Claude brand colors defined in `tailwind.config.js`
 - Message components are memoized for performance

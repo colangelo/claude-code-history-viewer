@@ -11,7 +11,7 @@ import { useAppStore } from "../store/useAppStore";
 import type { UserMetadata } from "../types";
 
 // ============================================================================
-// Mock Tauri API
+// Mock the backend API
 // ============================================================================
 
 const mockInvoke = vi.fn();

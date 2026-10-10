@@ -1,8 +1,5 @@
 /**
- * Unified API adapter — seamlessly switches between Tauri IPC and HTTP fetch.
- *
- * In Tauri desktop mode, delegates to `@tauri-apps/api/core` invoke().
- * In WebUI server mode, POSTs JSON to the Axum `/api/{command}` endpoint.
+ * API adapter — POSTs JSON to the WebUI server's Axum `/api/{command}` endpoint.
  *
  * Usage:
  *   import { api } from "@/services/api";
@@ -10,7 +7,6 @@
  */
 
 import {
-  isTauri,
   getApiBase,
   getAuthToken,
   getCsrfToken,
@@ -25,8 +21,8 @@ const COMMAND_RE = /^[a-zA-Z0-9_]+$/;
 /**
  * Call a backend command regardless of runtime environment.
  *
- * @param command  Tauri command name (also used as the REST endpoint name)
- * @param args     Optional arguments object (serialised as JSON body in web mode)
+ * @param command  Backend command name (the REST endpoint name)
+ * @param args     Optional arguments object (serialised as the JSON body)
  * @param _retried Internal flag to prevent infinite retry on 401
  * @returns        The deserialised response from the backend
  */
@@ -35,11 +31,6 @@ export async function api<T>(
   args?: Record<string, unknown>,
   _retried = false,
 ): Promise<T> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return args != null ? invoke<T>(command, args) : invoke<T>(command);
-  }
-
   if (!COMMAND_RE.test(command)) {
     throw new Error(`Invalid command name: ${command}`);
   }

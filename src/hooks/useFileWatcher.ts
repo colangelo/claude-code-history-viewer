@@ -1,11 +1,11 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
-import { isTauri, getApiBase, getAuthToken } from '@/utils/platform';
+import { getApiBase, getAuthToken } from '@/utils/platform';
 import { toast } from 'sonner';
 
 type UnlistenFn = () => void;
 
 /**
- * Event payload structure from Tauri file watcher
+ * Event payload structure from the server's file watcher (SSE `/api/events`)
  */
 interface FileWatcherEvent {
   projectPath: string;
@@ -40,7 +40,7 @@ export interface UseFileWatcherResult {
 }
 
 /**
- * React hook that listens to Tauri file system events and triggers callbacks
+ * React hook that listens to the server's file watcher over SSE and triggers callbacks
  * for session file changes, creations, and deletions.
  *
  * Automatically handles event listener cleanup on unmount and provides
@@ -68,8 +68,6 @@ export function useFileWatcher(options: UseFileWatcherOptions = {}): UseFileWatc
   const isWatchingRef = useRef(false);
   const unlistenersRef = useRef<UnlistenFn[]>([]);
   const debounceTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
-  /** Cancellation token: incremented on stop/unmount to abort in-flight startWatching */
-  const watchVersionRef = useRef(0);
 
   /**
    * Debounced callback wrapper to batch rapid file changes
@@ -99,9 +97,6 @@ export function useFileWatcher(options: UseFileWatcherOptions = {}): UseFileWatc
    * Stop listening to file watcher events and clean up
    */
   const stopWatching = useCallback(() => {
-    // Increment cancellation token to abort any in-flight startWatching
-    watchVersionRef.current += 1;
-
     // Clear all debounce timers
     debounceTimersRef.current.forEach((timer) => clearTimeout(timer));
     debounceTimersRef.current.clear();
@@ -122,84 +117,54 @@ export function useFileWatcher(options: UseFileWatcherOptions = {}): UseFileWatc
   }, []);
 
   /**
-   * Start listening to file watcher events.
-   *
-   * - **Tauri desktop**: subscribes to native Tauri events.
-   * - **WebUI server**: opens an SSE connection to `/api/events`.
+   * Start listening to file watcher events over an SSE connection to `/api/events`.
    */
   const startWatching = useCallback(async () => {
     if (isWatchingRef.current) return;
 
-    // Capture the current version for cancellation checking
-    const version = watchVersionRef.current;
+    try {
+      const base = getApiBase();
+      const token = getAuthToken();
+      // Note: EventSource cannot send custom headers, so token is passed via query param.
+      const url = token
+        ? `${base}/api/events?token=${encodeURIComponent(token)}`
+        : `${base}/api/events`;
 
-    if (isTauri()) {
-      // ---- Desktop path: Tauri event listeners ----
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        const unlisteners: UnlistenFn[] = [];
+      const es = new EventSource(url);
 
-        const unlistenChanged = await listen<FileWatcherEvent>('session-file-changed', (event) => {
-          createDebouncedCallback(onSessionChanged, event.payload);
-        });
-        unlisteners.push(unlistenChanged);
-        if (watchVersionRef.current !== version) { unlisteners.forEach((fn) => fn()); return; }
+      const safeParse = (data: string): FileWatcherEvent | null => {
+        try {
+          return JSON.parse(data) as FileWatcherEvent;
+        } catch (err) {
+          console.warn('Invalid SSE payload:', err);
+          return null;
+        }
+      };
 
-        unlistenersRef.current = unlisteners;
-        isWatchingRef.current = true;
-        setIsWatching(true);
-      } catch (error) {
-        console.error('Failed to start file watcher:', error);
-        toast.error('Failed to start file watcher');
-        isWatchingRef.current = false;
-        setIsWatching(false);
-      }
-    } else {
-      // ---- Web path: SSE via EventSource ----
-      try {
-        const base = getApiBase();
-        const token = getAuthToken();
-        // Note: EventSource cannot send custom headers, so token is passed via query param.
-        const url = token
-          ? `${base}/api/events?token=${encodeURIComponent(token)}`
-          : `${base}/api/events`;
+      es.addEventListener('session-file-changed', (e: MessageEvent) => {
+        const event = safeParse(e.data);
+        if (event) createDebouncedCallback(onSessionChanged, event);
+      });
 
-        const es = new EventSource(url);
+      // Detect permanent disconnection (e.g. 401, server shutdown)
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) {
+          console.error('SSE connection closed permanently');
+          isWatchingRef.current = false;
+          setIsWatching(false);
+          toast.error('Live file watching disconnected. Refresh to reconnect.');
+        }
+        // EventSource auto-reconnects on transient errors; no manual retry needed.
+      };
 
-        const safeParse = (data: string): FileWatcherEvent | null => {
-          try {
-            return JSON.parse(data) as FileWatcherEvent;
-          } catch (err) {
-            console.warn('Invalid SSE payload:', err);
-            return null;
-          }
-        };
-
-        es.addEventListener('session-file-changed', (e: MessageEvent) => {
-          const event = safeParse(e.data);
-          if (event) createDebouncedCallback(onSessionChanged, event);
-        });
-
-        // Detect permanent disconnection (e.g. 401, server shutdown)
-        es.onerror = () => {
-          if (es.readyState === EventSource.CLOSED) {
-            console.error('SSE connection closed permanently');
-            isWatchingRef.current = false;
-            setIsWatching(false);
-            toast.error('Live file watching disconnected. Refresh to reconnect.');
-          }
-          // EventSource auto-reconnects on transient errors; no manual retry needed.
-        };
-
-        unlistenersRef.current = [() => es.close()];
-        isWatchingRef.current = true;
-        setIsWatching(true);
-      } catch (error) {
-        console.error('Failed to start SSE file watcher:', error);
-        toast.error('Failed to start file watcher');
-        isWatchingRef.current = false;
-        setIsWatching(false);
-      }
+      unlistenersRef.current = [() => es.close()];
+      isWatchingRef.current = true;
+      setIsWatching(true);
+    } catch (error) {
+      console.error('Failed to start SSE file watcher:', error);
+      toast.error('Failed to start file watcher');
+      isWatchingRef.current = false;
+      setIsWatching(false);
     }
   }, [onSessionChanged, createDebouncedCallback]);
 

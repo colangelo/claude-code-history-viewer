@@ -1,7 +1,5 @@
 /**
- * Storage adapter — Tauri plugin-store in desktop mode, localStorage in web mode.
- *
- * Provides a unified interface so callers don't need to care about the runtime.
+ * Storage adapter — `localStorage` with a per-store namespace prefix.
  *
  * Usage:
  *   import { storageAdapter } from "@/services/storage";
@@ -10,8 +8,6 @@
  *   const val = await store.get("key");
  */
 
-import { isTauri } from "@/utils/platform";
-
 export interface StoreHandle {
   get<T = unknown>(key: string): Promise<T | null>;
   set(key: string, value: unknown): Promise<void>;
@@ -19,29 +15,12 @@ export interface StoreHandle {
 }
 
 /**
- * Load (or create) a named store.
- *
- * In Tauri mode this delegates to `@tauri-apps/plugin-store`.
- * In web mode it uses `localStorage` with a namespace prefix.
+ * Load (or create) a named store, backed by `localStorage` under `webui:<name>:`.
  */
 async function loadStore(
   name: string,
   _options?: { defaults?: Record<string, unknown>; autoSave?: boolean },
 ): Promise<StoreHandle> {
-  if (isTauri()) {
-    const { load } = await import("@tauri-apps/plugin-store");
-    const storeOpts = _options
-      ? { defaults: _options.defaults ?? {}, autoSave: _options.autoSave }
-      : undefined;
-    const tauriStore = await load(name, storeOpts);
-    return {
-      get: <T = unknown>(key: string) => tauriStore.get(key) as Promise<T | null>,
-      set: (key: string, value: unknown) => tauriStore.set(key, value),
-      save: () => tauriStore.save(),
-    };
-  }
-
-  // Web fallback — localStorage with namespace
   const prefix = `webui:${name}:`;
   const defaults = _options?.defaults;
   return {
@@ -49,7 +28,7 @@ async function loadStore(
       try {
         const raw = localStorage.getItem(`${prefix}${key}`);
         if (raw != null) return Promise.resolve(JSON.parse(raw) as T);
-        // Apply defaults to match Tauri store behavior
+        // Fall back to the caller's defaults for keys never written
         if (defaults && key in defaults) return Promise.resolve(defaults[key] as T);
         return Promise.resolve(null);
       } catch {
@@ -64,7 +43,7 @@ async function loadStore(
       }
       return Promise.resolve();
     },
-    save: () => Promise.resolve(), // no-op in web mode
+    save: () => Promise.resolve(), // localStorage writes are immediate
   };
 }
 

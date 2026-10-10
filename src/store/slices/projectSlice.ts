@@ -73,14 +73,6 @@ const initialProjectState: ProjectSliceState = {
 // Helper
 // ============================================================================
 
-const isTauriAvailable = () => {
-  try {
-    return typeof window !== "undefined" && typeof api === "function";
-  } catch {
-    return false;
-  }
-};
-
 const projectTimestamp = (project: ClaudeProject): number | null => {
   const timestamp = Date.parse(project.last_modified);
   return Number.isNaN(timestamp) ? null : timestamp;
@@ -194,12 +186,6 @@ export const createProjectSlice: StateCreator<
     try {
       await get().loadServerConfig();
 
-      if (!isTauriAvailable()) {
-        throw new Error(
-          "Tauri API를 사용할 수 없습니다. 데스크톱 앱에서 실행해주세요."
-        );
-      }
-
       // Try to load saved settings first
       try {
         const store = await storageAdapter.load("settings.json", {
@@ -273,8 +259,6 @@ export const createProjectSlice: StateCreator<
       } else if (errorMessage.includes("PERMISSION_DENIED:")) {
         errorType = AppErrorType.PERMISSION_DENIED;
         message = errorMessage.split(":")[1] || errorMessage;
-      } else if (errorMessage.includes("Tauri API")) {
-        errorType = AppErrorType.TAURI_NOT_AVAILABLE;
       }
 
       set({ error: { type: errorType, message } });

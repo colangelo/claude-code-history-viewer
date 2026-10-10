@@ -79,9 +79,6 @@ function createTestStore() {
     isLoadingArchive: false,
     archiveError: null,
     loadArchivedSessions: vi.fn(),
-    sessionPicker: null,
-    openSessionPicker: vi.fn(),
-    closeSessionPicker: vi.fn(),
   } as unknown as AppStore));
 }
 

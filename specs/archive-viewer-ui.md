@@ -18,7 +18,7 @@ one backend change is hub-side **CORS** so browser contexts may call it.
 Work areas:
 
 1. **Hub CORS** (`crates/hub/src/lib.rs::router`): add a permissive CORS
-   layer (`tower-http` 0.6 `cors` feature, already used by src-tauri) — any
+   layer (`tower-http` 0.6 `cors` feature, already used by crates/viewer) — any
    origin, methods GET+OPTIONS at least, allow the `authorization` header,
    and EXPOSE `x-total-count` so `fetch` can read the paging total. Bearer
    auth still gates every read; CORS only removes the browser block. Keep

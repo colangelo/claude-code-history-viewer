@@ -15,10 +15,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("@/utils/platform", () => ({
-  isTauri: () => false,
-}));
-
 vi.mock("../components/ArchiveManager/ArchiveCreateDialog", () => ({
   ArchiveCreateDialog: () => <div data-testid="archive-create-dialog" />,
 }));

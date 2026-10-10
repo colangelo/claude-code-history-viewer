@@ -56,14 +56,6 @@ vi.mock("react-window", () => ({
   ),
 }));
 
-// Mock Tauri plugin-store to prevent errors
-vi.mock("@tauri-apps/plugin-store", () => ({
-  load: vi.fn().mockResolvedValue({
-    get: vi.fn().mockResolvedValue(null),
-    set: vi.fn().mockResolvedValue(undefined),
-    save: vi.fn().mockResolvedValue(undefined),
-  }),
-}));
 
 // Mock useAppStore with a reactive state
 import { create } from "zustand";

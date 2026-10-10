@@ -2,14 +2,13 @@
 
 /**
  * Sync the fork-owned version from package.json into the Rust workspace and
- * the Tauri config.
+ * the distiller.
  *
  * Single Source of Truth: package.json (`version`).
  *
  * Targets:
  *   - Cargo.toml [workspace.package] version  (every crate inherits it via
  *     `version.workspace = true`)
- *   - src-tauri/tauri.conf.json               (webui-server / app version)
  *   - scripts/cchv-distill.py DISTILL_VERSION (the distiller is deployed as an
  *     installed COPY and announces this at every tick — #40. The line is
  *     anchored on its `# sync-version` marker; a missing marker is a hard
@@ -31,7 +30,6 @@ const path = require("path");
 
 const packageJsonPath = path.join(process.cwd(), "package.json");
 const workspaceCargoPath = path.join(process.cwd(), "Cargo.toml");
-const tauriConfPath = path.join(process.cwd(), "src-tauri", "tauri.conf.json");
 const distillPath = path.join(process.cwd(), "scripts", "cchv-distill.py");
 
 // 0. Validate every target BEFORE writing any of them, so a failure is a
@@ -67,16 +65,7 @@ cargoToml = cargoToml.replace(wsRegex, `$1version = "${version}"`);
 fs.writeFileSync(workspaceCargoPath, cargoToml);
 console.log(`[sync-version] ✓ Cargo.toml [workspace.package] → ${version}`);
 
-// 3. Sync tauri.conf.json.
-const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, "utf8"));
-const oldTauriVersion = tauriConf.version;
-tauriConf.version = version;
-fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + "\n");
-console.log(
-  `[sync-version] ✓ tauri.conf.json → ${version} (was: ${oldTauriVersion})`,
-);
-
-// 4. Sync the distiller's announced version (marker validated in step 0, so
+// 3. Sync the distiller's announced version (marker validated in step 0, so
 //    this cannot be the step that fails after the others have written).
 distill = distill.replace(
   distillRegex,

@@ -100,8 +100,6 @@
   "session.copiedResumeCommandNoCwd": "再開コマンドをコピーしました（作業ディレクトリ不明）",
   "session.copiedSessionId": "セッションIDをコピーしました",
   "session.copyFilePath": "ファイルパスをコピー",
-  "session.showJsonlFile": "JSONLファイルを表示",
-  "session.revealError": "ファイルを表示できませんでした",
   "session.deleteConfirm": "セッションファイルと関連するすべてのデータ（サブエージェント、ツール結果）が削除されます。可能な場合はゴミ箱に移動し、それ以外は完全に削除されます。",
   "session.deleteError": "セッションの削除に失敗しました",
   "session.selectError": "セッションを開けませんでした",
@@ -212,9 +210,5 @@
   "session.export.success": "エクスポートが完了しました",
   "session.export.error": "エクスポートに失敗しました",
   "session.export.exporting": "エクスポート中...",
-  "sessionPicker.title": "セッションを選択",
-  "sessionPicker.subtitle": "「{{value}}」に一致するセッションが{{count}}件",
-  "sessionPicker.empty": "一致するセッションがありません",
-  "sessionPicker.cancelled": "起動時のセッションヒントをキャンセルしました",
   "settings.archiveHub.journal.tab.analytics": "分析"
 }

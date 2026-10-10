@@ -6,8 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
     "lint": "eslint src",
     "preview": "vite preview",
     "test": "vitest",
@@ -32,13 +30,6 @@
     "@tailwindcss/typography": "^0.5.16",
     "@tailwindcss/vite": "^4.1.11",
     "@tanstack/react-virtual": "^3.0.0",
-    "@tauri-apps/api": "2.11.0",
-    "@tauri-apps/plugin-dialog": "2.7.1",
-    "@tauri-apps/plugin-opener": "2.5.4",
-    "@tauri-apps/plugin-os": "2.3.2",
-    "@tauri-apps/plugin-process": "2.3.1",
-    "@tauri-apps/plugin-store": "2.4.3",
-    "@tauri-apps/plugin-updater": "2.10.1",
     "@types/prismjs": "^1.26.5",
     "ansi-to-html": "^0.7.2",
     "class-variance-authority": "^0.7.1",
@@ -69,7 +60,6 @@
   "devDependencies": {
     "@eslint/js": "^9.29.0",
     "@tailwindcss/postcss": "^4.1.11",
-    "@tauri-apps/cli": "2.11.2",
     "@testing-library/jest-dom": "^6.4.2",
     "@testing-library/react": "^14.2.1",
     "@types/node": "^24.0.10",
@@ -111,6 +101,6 @@
     "src/**/*.{ts,tsx}": [
       "eslint"
     ],
-    "src-tauri/src/**/*.rs": "bash -c 'cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'"
+    "crates/viewer/src/**/*.rs": "bash -c 'cargo fmt --manifest-path crates/viewer/Cargo.toml -- --check && cargo clippy --manifest-path crates/viewer/Cargo.toml --all-targets --all-features -- -D warnings'"
   }
 }

@@ -6,30 +6,29 @@
 ## CI Commands
 
 ```yaml
-ci: "pnpm install && pnpm tsc --build . && pnpm lint && pnpm vitest run && cd src-tauri && cargo test -- --test-threads=1 && cargo clippy --all-targets --all-features -- -D warnings && cargo fmt --all -- --check && cd .."
-gate: "pnpm tsc --build . && pnpm lint && cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings && cd .."
-test: "pnpm vitest run && cd src-tauri && cargo test -- --test-threads=1 && cd .."
+ci: "pnpm install && pnpm tsc --build . && pnpm lint && pnpm vitest run && cd crates/viewer && cargo test -- --test-threads=1 && cargo clippy --all-targets --all-features -- -D warnings && cargo fmt --all -- --check && cd ../.."
+gate: "pnpm tsc --build . && pnpm lint && cd crates/viewer && cargo clippy --all-targets --all-features -- -D warnings && cd ../.."
+test: "pnpm vitest run && cd crates/viewer && cargo test -- --test-threads=1 && cd ../.."
 test_frontend: "pnpm vitest run --reporter=verbose"
-test_backend: "cd src-tauri && cargo test -- --test-threads=1"
+test_backend: "cd crates/viewer && cargo test -- --test-threads=1"
 typecheck: "pnpm tsc --build ."
 lint: "pnpm lint"
 lint_fix: "pnpm lint --fix"
-clippy: "cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings"
-fmt_check: "cd src-tauri && cargo fmt --all -- --check"
+clippy: "cd crates/viewer && cargo clippy --all-targets --all-features -- -D warnings"
+fmt_check: "cd crates/viewer && cargo fmt --all -- --check"
 i18n_validate: "pnpm run i18n:validate"
 build_frontend: "pnpm build"
-build_tauri: "pnpm tauri:build"
 ```
 
 ## Architecture
 
-The project is a **Tauri 2 desktop application** with a layered, module-based architecture:
+The project is a **web application** (React SPA + Rust Axum WebUI server) with a layered, module-based architecture:
 
 ### Frontend (src/)
 - **UI Components**: `src/components/` — Functional React components (memo-wrapped for virtual lists)
-- **React Hooks**: `src/hooks/` — Custom hooks for Tauri command wrappers, data fetching, state logic
+- **React Hooks**: `src/hooks/` — Custom hooks for backend command wrappers, data fetching, state logic
 - **Global State**: `src/store/` — Zustand slices pattern for app state (`useAppStore.ts`)
-- **Services**: `src/services/` — API adapters (Tauri IPC or HTTP), storage abstraction
+- **Services**: `src/services/` — API adapter (HTTP to the WebUI server), localStorage-backed storage
 - **Types**: `src/types/` — TypeScript contracts, interfaces (UI components and API responses)
 - **Utils**: `src/utils/` — Shared utilities (path handling, platform detection, text processing)
 - **i18n**: `src/i18n/` — Internationalization (5 languages: en, ko, ja, zh-CN, zh-TW)
@@ -38,29 +37,27 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 - **Indicators**: `src/indicators/` — Status/progress indicators
 - **Risk**: `src/risk/` — Risk assessment or related UI
 
-### Backend (src-tauri/src/)
-- **Commands**: `src-tauri/src/commands/` — Tauri IPC command handlers (public API)
-- **Models**: `src-tauri/src/models/` — Data structures, JSONL message types, serialization
-- **Providers**: `src-tauri/src/providers/` — File system providers (Claude, Codex, OpenCode)
-- **Server** (optional feature `webui-server`): `src-tauri/src/server/` — Axum web server for HTTP mode
-- **Store**: `src-tauri/src/store/` — Persistent settings via Tauri store plugin
-- **Components**: `src-tauri/src/components/` — Backend data processing (parsing, filtering)
-- **Hooks**: `src-tauri/src/hooks/` — Utilities for event handling
-- **AI**: `src-tauri/src/ai/` — AI-related logic
-- **Trading**: `src-tauri/src/trading/` — Domain-specific logic (if applicable)
-- **Contexts**: `src-tauri/src/contexts/` — Shared state contexts
-- **Database**: `src-tauri/src/database/` — Data access, schema
+### Backend (crates/viewer/src/)
+- **Commands**: `crates/viewer/src/commands/` — backend command functions, called by the Axum handlers in `server/`
+- **Models**: `crates/viewer/src/models/` — Data structures, JSONL message types, serialization
+- **Providers**: `crates/viewer/src/providers/` — File system providers (Claude, Codex, OpenCode)
+- **Server** (optional feature `webui-server`): `crates/viewer/src/server/` — Axum web server for HTTP mode
+- **Components**: `crates/viewer/src/components/` — Backend data processing (parsing, filtering)
+- **Hooks**: `crates/viewer/src/hooks/` — Utilities for event handling
+- **AI**: `crates/viewer/src/ai/` — AI-related logic
+- **Trading**: `crates/viewer/src/trading/` — Domain-specific logic (if applicable)
+- **Contexts**: `crates/viewer/src/contexts/` — Shared state contexts
+- **Database**: `crates/viewer/src/database/` — Data access, schema
 
 ### Import Rules
 - **Upper → Lower**: Components depend on hooks/services/types, never the reverse
 - **Utils/Types**: Shared across all layers, never have external dependencies
-- **Services**: Bridge between components and Tauri IPC commands
+- **Services**: Bridge between components and the WebUI server's `/api/*` commands
 - **Path Alias**: `@/*` → `./src/*` (frontend only)
 
 ### Server-Client Boundary
-- **Tauri IPC Protocol**: Async commands from React → Rust with `Result<T, String>`
+- **HTTP command protocol**: `POST /api/<command>` from React → Rust, `Result<T, String>`
 - **WebUI Optional Mode**: Can switch to HTTP API via feature flag (`webui-server`)
-- **Dynamic Imports**: All `@tauri-apps/*` use `await import(...)` to support web mode
 
 ## Framework & Runtime
 
@@ -75,13 +72,9 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 - **Markdown**: `react-markdown` + `remark-gfm` + `prismjs` (code highlighting)
 
 **Backend Stack:**
-- **Runtime**: Tauri 2.9.5 (cross-platform desktop framework)
 - **Language**: Rust (Edition 2021, MSRV 1.77.2)
-- **Web Server** (optional): Axum 0.8 (webui-server feature)
-- **File System**: `tauri-plugin-fs`, `walkdir`, `memmap2`, `simd-json` (performance)
-- **Storage**: `tauri-plugin-store` (persistent settings)
-- **IPC**: Tauri message protocol (async, type-safe)
-- **Updater**: `tauri-plugin-updater` (auto-update via GitHub Releases)
+- **Web Server**: Axum 0.8 (`webui-server`, the default feature)
+- **File System**: `walkdir`, `memmap2`, `simd-json` (performance)
 
 **Cross-Platform:**
 - **macOS**: Universal binary (aarch64 + x86_64)
@@ -137,9 +130,9 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 ## State Management
 
 - **Global State**: Zustand (`src/store/useAppStore.ts`) — slices pattern for modularity
-- **Server State**: Tauri IPC commands wrapped in custom hooks (`src/hooks/`)
+- **Server State**: backend commands wrapped in custom hooks (`src/hooks/`)
 - **Local State**: `useState`, `useReducer` for component-local state
-- **Query State**: No separate data-fetching library; Tauri commands return fresh data
+- **Query State**: No separate data-fetching library; backend commands return fresh data
 - **Caching**: Built into Zustand store; manual cache invalidation on mutations
 
 ## Styling & Design System
@@ -156,7 +149,7 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 ### Frontend (TypeScript / React)
 - **Framework**: Vitest 4.0+ (Vite-native, fast)
 - **Test Library**: `@testing-library/react` (semantic DOM queries)
-- **Mocking**: `vi.mock()` for modules; avoid mocking Tauri (use `window.__TAURI_INTERNALS__` in beforeAll for env setup)
+- **Mocking**: `vi.mock()` for modules; mock `@/services/api` rather than `fetch`
 - **Coverage**: `@vitest/coverage-v8`
 - **Watch Mode**: `pnpm test` (Vitest watch)
 
@@ -164,7 +157,7 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 - **Framework**: Built-in `#[cfg(test)]` modules
 - **Runner**: `cargo test` (no separate test framework needed)
 - **Thread Safety**: `--test-threads=1` mandatory (settings tests modify `env::set_var("HOME")`)
-- **Test Utils**: `src-tauri/src/test_utils.rs` (shared helpers)
+- **Test Utils**: `crates/viewer/src/test_utils.rs` (shared helpers)
 
 ## i18n Internationalization
 
@@ -226,4 +219,4 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 - Utility functions: check existing utils before writing (avoid duplication)
 - null checks: use `!= null` (loose equality) to catch both null and undefined
 - localStorage access: always wrap in try/catch (can fail in private browsing)
-- Tauri IPC: all commands are async; Promises, not callbacks
+- Backend commands: all async; Promises, not callbacks

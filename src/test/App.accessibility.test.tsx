@@ -118,10 +118,6 @@ vi.mock("@/components/RecentEditsViewer", () => ({
   RecentEditsViewer: () => <div>recent-edits</div>,
 }));
 
-vi.mock("@/components/SimpleUpdateManager", () => ({
-  SimpleUpdateManager: () => null,
-}));
-
 vi.mock("@/components/SettingsManager", () => ({
   SettingsManager: () => <div>settings-manager</div>,
 }));
@@ -191,24 +187,6 @@ vi.mock("@/hooks/useAnalytics", () => ({
   }),
 }));
 
-vi.mock("@/hooks/useUpdater", () => ({
-  useUpdater: () => ({
-    state: {
-      currentVersion: "1.0.0",
-      isChecking: false,
-      hasUpdate: false,
-      isDownloading: false,
-      isInstalling: false,
-      isRestarting: false,
-      requiresManualRestart: false,
-      downloadProgress: 0,
-      error: null,
-      updateInfo: null,
-      newVersion: null,
-    },
-  }),
-}));
-
 vi.mock("@/hooks/useResizablePanel", () => ({
   useResizablePanel: () => ({
     width: 280,
@@ -234,12 +212,8 @@ vi.mock("@/contexts/modal", () => ({
 
 vi.mock("@/contexts/platform", () => ({
   usePlatform: () => ({
-    platform: "web",
-    isDesktop: false,
-    isWeb: true,
     isMobile: false,
   }),
-  DesktopOnly: () => null,
   MobileOnly: () => null,
 }));
 

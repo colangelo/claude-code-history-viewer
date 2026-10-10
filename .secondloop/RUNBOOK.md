@@ -1,8 +1,8 @@
 # RUNBOOK — claude-code-history-viewer
 
-Tauri 2 desktop app (plus an optional headless Axum web server) for browsing Claude
+Web viewer (a React SPA served by a Rust Axum WebUI server) for browsing Claude
 Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4 in
-`src/`. Backend: Rust in `src-tauri/`.
+`src/`. Backend: Rust in `crates/viewer/`.
 
 ## Architecture pointers
 
@@ -10,10 +10,10 @@ Code conversation history. Frontend: React 19 + TypeScript + Vite 7 + Tailwind 4
   `src/components/ui/`), zustand state in `src/store/` (`useAppStore` composed from
   slices in `src/store/slices/`), hooks in `src/hooks/`, pure helpers in `src/utils/`,
   API/service layer in `src/services/`, types in `src/types/`. Path alias `@/` → `src/`.
-- **Backend**: Tauri commands in `src-tauri/src/commands/`; the headless WebUI server
-  (cargo feature `webui-server`) in `src-tauri/src/server/` (`mod.rs` router,
+- **Backend**: command functions in `crates/viewer/src/commands/`; the WebUI server
+  (default cargo feature `webui-server`) in `crates/viewer/src/server/` (`mod.rs` router,
   `handlers.rs`, `auth.rs`). The web frontend reaches the same command surface over
-  HTTP — see `docs/server-guide.md` for the API and CLI flags.
+  HTTP (`src/services/api.ts`) — see `docs/server-guide.md` for the API and CLI flags.
 - **i18n**: react-i18next with 5 locales under `src/i18n/locales/` (en, ko, ja, zh-CN,
   zh-TW). Every user-facing string goes through a translation key and must be added to
   **all** locales — `pnpm run i18n:validate` is in the gate and fails on drift. If you
@@ -40,12 +40,12 @@ by the runner and the red check will report every eval as vacuous.
   requires one evals dir), named `<runId>.eval.test.tsx`, picked up via a
   dedicated include glob in `vite.config.ts`. Vitest 4, `jsdom` environment,
   `globals: true`, setup file `src/test/setup.ts` (pre-mocks
-  `window.__TAURI__`, `localStorage`, `matchMedia`, `IntersectionObserver`,
+  `localStorage`, `matchMedia`, `IntersectionObserver`,
   `ResizeObserver` — don't re-mock those). Import app code via the `@/` alias
   (files here sit outside `src/`, so relative imports won't reach it).
 - Match the conventions of the existing tests in `src/test/*.test.tsx`:
   `@testing-library/react` (`render`/`screen`/`fireEvent`), `@testing-library/jest-dom`
-  matchers, `vi.mock(...)` for service modules / Tauri invoke. Good models:
+  matchers, `vi.mock(...)` for service modules (e.g. `@/services/api`). Good models:
   `src/test/SessionItem.test.tsx` (component), `src/test/metadataSlice.test.ts`
   (store slice logic).
 - **Evals must be self-contained.** During the gate stage no server is running: never
@@ -110,10 +110,10 @@ by the runner and the red check will report every eval as vacuous.
   Rust change — pedantic is strict.
 - Rust tests run single-threaded (`--test-threads=1`) because some tests set env vars
   (e.g. `HOME`). Don't write Rust tests that require parallelism; reuse the helpers in
-  `src-tauri/src/test_utils.rs`. Rust testing guide: `src-tauri/TESTING.md`.
+  `crates/viewer/src/test_utils.rs`. Rust testing guide: `crates/viewer/TESTING.md`.
 - Versioning: `package.json` is the single source of truth; `scripts/sync-version.cjs`
   (run automatically by `frontend-build`) copies the version into
-  `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`. Never hand-edit version
+  the workspace `Cargo.toml` and `scripts/cchv-distill.py`. Never hand-edit version
   fields in those files.
 - Husky/lint-staged commit hooks are bypassed by the loop; the `[gate]` commands are
   the enforced truth.
@@ -121,10 +121,10 @@ by the runner and the red check will report every eval as vacuous.
 ## What not to touch
 
 - Generated/pipeline files: `src/i18n/types.generated.ts`, `scripts/`,
-  `.github/workflows/`, `src-tauri/capabilities/`, `src-tauri/icons/`.
+  `.github/workflows/`.
 - Security guards: do not weaken the loopback/auth startup checks in
-  `src-tauri/src/lib.rs` (`validate_auth_startup_options`,
-  `validate_account_cookie_security`) or `src-tauri/src/server/auth.rs`. The server
+  `crates/viewer/src/lib.rs` (`validate_auth_startup_options`,
+  `validate_account_cookie_security`) or `crates/viewer/src/server/auth.rs`. The server
   intentionally refuses non-loopback binds without auth.
 
 ## Serving / browser verification
@@ -137,5 +137,5 @@ by the runner and the red check will report every eval as vacuous.
 ## Docs entry points
 
 - `README.md` — overview and features. `docs/server-guide.md` — headless server API,
-  flags, deployment. `src-tauri/TESTING.md` — Rust testing stack. `CLAUDE.md` — repo
+  flags, deployment. `crates/viewer/TESTING.md` — Rust testing stack. `CLAUDE.md` — repo
   conventions. There is no OKF index; start from `README.md` and `docs/`.

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Folder, AlertCircle, ArrowLeft, CheckCircle2, HelpCircle } from "lucide-react";
-import { isTauri } from "@/utils/platform";
 import { api } from "@/services/api";
 import { useTranslation } from "react-i18next";
 import {
@@ -35,27 +34,12 @@ export function FolderSelector({
 
   const handleSelectFolder = async () => {
     try {
-      if (isTauri()) {
-        const dialogModule = await import("@tauri-apps/plugin-dialog");
-        const selected = await dialogModule.open({
-          directory: true,
-          multiple: false,
-          title: t("folderPicker.selectFolderTitle"),
-        });
-
-        if (selected && typeof selected === "string") {
-          setSelectedPath(selected);
-          setValidationError("");
-          await validateAndSelectFolder(selected);
-        }
-      } else {
-        // Web mode: prompt for path via browser prompt
-        const input = window.prompt(t("folderPicker.selectFolderTitle"), "~/.claude");
-        if (input) {
-          setSelectedPath(input);
-          setValidationError("");
-          await validateAndSelectFolder(input);
-        }
+      // A browser cannot browse the server's disk, so ask for the path as text.
+      const input = window.prompt(t("folderPicker.selectFolderTitle"), "~/.claude");
+      if (input) {
+        setSelectedPath(input);
+        setValidationError("");
+        await validateAndSelectFolder(input);
       }
     } catch (err) {
       console.error(t("folderPicker.folderSelectError"), err);

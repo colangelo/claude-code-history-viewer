@@ -17,8 +17,9 @@ it unattended and surfacing only failures with the exact fix.
 ## Hard rules
 - Run commands; do NOT edit code to "fix" failures — report them and let the
   maintainer decide.
-- **Do NOT run `cargo` locally.** `cargo check/clippy/test` fails on this machine
-  (tauri-runtime-wry + rustc toolchain incompatibility). Rust is validated by CI
+- **Do NOT run `cargo` locally.** (The original reason, a tauri-runtime-wry +
+  rustc incompatibility, went away with the web-only cut in #23; the rule stays
+  so this agent remains a fast frontend-only gate.) Rust is validated by CI
   (`rust-tests.yml`). Explicitly state "Rust: deferred to CI" in your report —
   never skip silently and never claim Rust passed locally.
 

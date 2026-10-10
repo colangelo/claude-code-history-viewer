@@ -15,7 +15,6 @@ export const NAMESPACES = [
   'error',
   'message',
   'renderers',
-  'update',
   'feedback',
   'recentEdits',
 ];

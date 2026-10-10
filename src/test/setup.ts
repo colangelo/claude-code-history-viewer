@@ -1,28 +1,6 @@
 import '@testing-library/jest-dom';
 import { beforeEach, vi } from 'vitest';
 
-// Mock Tauri APIs for testing environment
-interface TauriMock {
-  tauri: {
-    invoke: ReturnType<typeof vi.fn>;
-  };
-  event: {
-    listen: ReturnType<typeof vi.fn>;
-    emit: ReturnType<typeof vi.fn>;
-  };
-}
-
-global.window = global.window || {};
-(global.window as typeof global.window & { __TAURI__: TauriMock }).__TAURI__ = {
-  tauri: {
-    invoke: vi.fn(),
-  },
-  event: {
-    listen: vi.fn(),
-    emit: vi.fn(),
-  },
-};
-
 function createMemoryStorage(): Storage {
   const store = new Map<string, string>();
   return {

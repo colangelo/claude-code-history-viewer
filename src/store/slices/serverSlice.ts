@@ -1,5 +1,4 @@
 import { api } from "@/services/api";
-import { isTauri } from "@/utils/platform";
 import type { StateCreator } from "zustand";
 import type { FullAppStore } from "./types";
 
@@ -32,11 +31,6 @@ export const createServerSlice: StateCreator<
   ...initialServerState,
 
   loadServerConfig: async () => {
-    if (isTauri()) {
-      set({ isServerReadOnly: false, isServerConfigLoaded: true });
-      return;
-    }
-
     try {
       const config = await api<ServerConfig>("get_server_config");
       set({

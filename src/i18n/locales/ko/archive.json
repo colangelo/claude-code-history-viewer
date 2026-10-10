@@ -62,8 +62,6 @@
   "archive.browse.empty.title": "아카이브 없음",
   "archive.browse.empty.description": "중요한 대화 기록을 보존하려면 첫 번째 아카이브를 생성하세요",
   "archive.browse.empty.cta": "아카이브 생성",
-  "archive.browse.openFolder": "파일 관리자에서 열기",
-  "archive.browse.openFolderFailed": "폴더 열기 실패",
   "archive.browse.card.sessions": "{{count}}개 세션",
   "archive.browse.card.source": "소스: {{name}}",
   "archive.browse.card.viewSessions": "세션 보기",

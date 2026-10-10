@@ -62,8 +62,6 @@
   "archive.browse.empty.title": "没有归档",
   "archive.browse.empty.description": "创建您的第一个归档以保存重要的对话历史",
   "archive.browse.empty.cta": "创建归档",
-  "archive.browse.openFolder": "在文件管理器中打开",
-  "archive.browse.openFolderFailed": "无法打开文件夹",
   "archive.browse.card.sessions": "{{count}} 个会话",
   "archive.browse.card.source": "来源：{{name}}",
   "archive.browse.card.viewSessions": "查看会话",

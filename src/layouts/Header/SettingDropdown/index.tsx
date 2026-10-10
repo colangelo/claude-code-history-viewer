@@ -7,29 +7,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import { Settings, RefreshCw, MessageSquare, Folder, Loader2 } from "lucide-react";
+import { Settings, MessageSquare, Folder } from "lucide-react";
 
-import { cn } from "@/lib/utils";
-
-import type { UseUpdaterReturn } from "@/hooks/useUpdater";
 import { useTranslation } from "react-i18next";
 import { useModal } from "@/contexts/modal";
-import { DesktopOnly } from "@/contexts/platform";
 import { ThemeMenuGroup } from "./ThemeMenuGroup";
 import { LanguageMenuGroup } from "./LanguageMenuGroup";
 import { FilterMenuGroup } from "./FilterMenuGroup";
 import { FontMenuGroup } from "./FontMenuGroup";
 import { AccessibilityMenuGroup } from "./AccessibilityMenuGroup";
 
-interface SettingDropdownProps {
-  updater: UseUpdaterReturn;
-}
-
-export const SettingDropdown = ({ updater }: SettingDropdownProps) => {
+export const SettingDropdown = () => {
   const { t } = useTranslation();
   const { openModal } = useModal();
-
-  const isCheckingForUpdates = updater.state.isChecking;
 
   return (
     <>
@@ -41,9 +31,6 @@ export const SettingDropdown = ({ updater }: SettingDropdownProps) => {
             aria-label={t("common.settings.title")}
           >
             <Settings className="w-5 h-5 text-foreground" />
-            {isCheckingForUpdates && (
-              <Loader2 className="absolute -top-1 -right-1 w-3 h-3 animate-spin text-blue-500" />
-            )}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
@@ -73,26 +60,6 @@ export const SettingDropdown = ({ updater }: SettingDropdownProps) => {
 
           <DropdownMenuSeparator />
           <LanguageMenuGroup />
-
-          <DesktopOnly>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => {
-                window.dispatchEvent(new Event('manual-update-check'));
-              }}
-              disabled={updater.state.isChecking}
-            >
-              <RefreshCw
-                className={cn(
-                  "mr-2 h-4 w-4 text-foreground",
-                  updater.state.isChecking && "animate-spin"
-                )}
-              />
-              {updater.state.isChecking
-                ? t('common.settings.checking')
-                : t('common.settings.checkUpdate')}
-            </DropdownMenuItem>
-          </DesktopOnly>
         </DropdownMenuContent>
       </DropdownMenu>
     </>

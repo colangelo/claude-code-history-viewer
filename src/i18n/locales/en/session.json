@@ -100,8 +100,6 @@
   "session.copiedResumeCommandNoCwd": "Resume command copied (working directory unknown)",
   "session.copiedSessionId": "Session ID copied",
   "session.copyFilePath": "Copy File Path",
-  "session.showJsonlFile": "Show JSONL File",
-  "session.revealError": "Could not reveal file",
   "session.deleteConfirm": "This will delete the session file and all associated data (subagents, tool results). The file is moved to the trash when possible, otherwise it is permanently deleted.",
   "session.deleteError": "Failed to delete session",
   "session.selectError": "Failed to open session",
@@ -212,9 +210,5 @@
   "session.export.success": "Exported successfully",
   "session.export.error": "Export failed",
   "session.export.exporting": "Exporting...",
-  "sessionPicker.title": "Choose a session",
-  "sessionPicker.subtitle": "{{count}} sessions match \"{{value}}\"",
-  "sessionPicker.empty": "No sessions match",
-  "sessionPicker.cancelled": "Startup session hint cancelled",
   "settings.archiveHub.journal.tab.analytics": "Analytics"
 }

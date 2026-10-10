@@ -6,7 +6,6 @@ import {
   Terminal,
   Copy,
   FileText,
-  FolderOpen,
   Play,
   Trash2,
 } from "lucide-react";
@@ -21,7 +20,6 @@ interface SessionContextMenuProps {
   supportsNativeRename: boolean;
   supportsResumeCommand: boolean;
   supportsSessionDeletion: boolean;
-  supportsRevealInFinder: boolean;
   providerId: string;
   onClose: () => void;
   onRenameClick: (e: React.MouseEvent) => void;
@@ -30,7 +28,6 @@ interface SessionContextMenuProps {
   onCopySessionId: (e: React.MouseEvent) => void;
   onCopyResumeCommand: (e: React.MouseEvent) => void;
   onCopyFilePath: (e: React.MouseEvent) => void;
-  onRevealInFinder: (e: React.MouseEvent) => void;
   onDeleteSession: (e: React.MouseEvent) => void;
 }
 
@@ -41,7 +38,6 @@ export const SessionContextMenu: React.FC<SessionContextMenuProps> = ({
   supportsNativeRename,
   supportsResumeCommand,
   supportsSessionDeletion,
-  supportsRevealInFinder,
   providerId,
   onClose,
   onRenameClick,
@@ -50,7 +46,6 @@ export const SessionContextMenu: React.FC<SessionContextMenuProps> = ({
   onCopySessionId,
   onCopyResumeCommand,
   onCopyFilePath,
-  onRevealInFinder,
   onDeleteSession,
 }) => {
   const { t } = useTranslation();
@@ -191,13 +186,6 @@ export const SessionContextMenu: React.FC<SessionContextMenuProps> = ({
           <FileText className="w-3.5 h-3.5" />
           <span>{t("session.copyFilePath", "Copy File Path")}</span>
         </button>
-
-        {supportsRevealInFinder && (
-          <button type="button" role="menuitem" onClick={handleAction(onRevealInFinder)} className={menuItemClass}>
-            <FolderOpen className="w-3.5 h-3.5" />
-            <span>{t("session.showJsonlFile", "Show JSONL File")}</span>
-          </button>
-        )}
 
         {supportsSessionDeletion && (
           <>

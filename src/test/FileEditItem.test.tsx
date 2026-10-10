@@ -9,10 +9,6 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
-}));
-
 const baseEdit: FileEditData = {
   file_path: "/path/to/file.ts",
   content_before_change: "const x = 1;",
