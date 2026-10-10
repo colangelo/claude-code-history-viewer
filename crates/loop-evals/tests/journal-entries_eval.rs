@@ -423,7 +423,7 @@ async fn ac4_post_stores_entry_browse_returns_it_pending_clears() {
     assert_eq!(e["headline"].as_str(), Some("Shipped the widget"));
     assert!(e["summary"].as_str().unwrap().contains("widget"));
     assert_eq!(e["topics"].as_array().unwrap().len(), 3);
-    assert!(!e["open_questions"].as_array().unwrap().is_empty());
+    assert_ne!(e["open_questions"].as_array().unwrap().len(), 0);
     assert!(ids_contains(&e["session_ids"], sid));
 
     assert!(
