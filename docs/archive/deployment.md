@@ -2944,9 +2944,13 @@ daemon reached ac-mbm5 without one:
   -c prefix_digest` → **2** (old binary: 0); `messages_already_acknowledged` → **1**
   (old: 0).
 
-Expect one warning on m4m until it is fixed: the local stable toolchain's `rust-objcopy`
-failed with a missing `libLLVM.dylib`, so that release binary came out **unstripped**.
-Harmless — larger, not wrong.
+One thing to know about the m4m build: `rust-objcopy` failed to start, so release
+binaries built there before 2026-10-10's fix came out **unstripped**. Harmless. The
+dylib is not missing: `libLLVM.dylib` sits in the toolchain's `lib/`, but `rust-objcopy`'s
+rpath `@loader_path/../lib` resolves to `lib/rustlib/aarch64-apple-darwin/lib/`, where it
+is absent — an upstream packaging defect that also affects 1.99.0. mac-m4 fixed it on m4m
+with a symlink in the `stable` and `1.99.0` toolchains; `rustup update` removes the
+symlink, and a just recipe to redo it is being added.
 
 Swap (attended, on the target machine — same codesign-aware shape as §2b:
 rm-first, re-sign, `bootout`+`bootstrap`, never `kickstart -k`):

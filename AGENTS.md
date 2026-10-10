@@ -449,6 +449,7 @@ pnpm install                    # 의존성 동기화 (lockfile 불일치 방지
 pnpm tsc --build .              # TypeScript 빌드 체크 (CI와 동일)
 pnpm vitest run --reporter=verbose  # 프론트엔드 테스트
 pnpm lint                       # ESLint (no-explicit-any 등)
+pnpm build                      # webui-server가 dist/를 임베드 — 새 worktree에서는 이게 없으면 clippy --all-features 실패
 
 # ===== Backend 검증 =====
 cd src-tauri && cargo test -- --test-threads=1 && cd ..  # Rust 테스트 (단일 스레드 필수)
