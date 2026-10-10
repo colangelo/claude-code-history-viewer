@@ -90,6 +90,20 @@ journal legitimately skips about half of its days: a day made only of state reco
 nothing to distil. The project-level counts (`/v1/projects`) are untouched —
 aggregating every session per project is the expensive shape and nobody has asked for it.
 
+**`attachment` rows carry their payload from #46 on — new rows only.** Claude Code puts
+an attachment's substance (hook output, file mentions, reminders) in an `attachment`
+object, which the parser used to drop, so every `attachment` row archived before #46
+has `raw` without it. From the first daemon running #46, new ones store it as
+`raw->'attachment'`: still `content IS NULL`, so they still do not count as conversation
+items and add nothing to `search_text` or the FTS index. **Nothing is backfilled, by
+design**: the payload is kept out of the sync daemon's `message_key`, so an old row keeps
+its key and the hub's conflict rule leaves it as stored rather than storing the record a
+second time (`attachment_payload_does_not_change_message_key`,
+`attachment_payload_does_not_backfill_an_archived_record`). A query that needs the
+payload must therefore expect `raw ? 'attachment'` to be false for older rows. The
+payload sits inside `raw`, so #34's credential scan and `[redaction]` cover it like any
+other field.
+
 ### pg1 analytics schema (`0005`) — applied 2026-07-25, infra-verified
 
 The analytics migration (`message_id` column on `messages`, plus

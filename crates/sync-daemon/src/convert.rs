@@ -185,3 +185,50 @@ pub fn to_ingest_project(
         git_main_path: git.and_then(|g| g.main_path.clone()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn attachment_record(payload: Option<serde_json::Value>) -> ClaudeMessage {
+        let line = json!({
+            "uuid": "uuid-a",
+            "parentUuid": "uuid-1",
+            "sessionId": "session-1",
+            "timestamp": "2026-10-10T00:00:00Z",
+            "type": "attachment",
+        });
+        let mut m: ClaudeMessage = serde_json::from_value(line).unwrap();
+        m.attachment = payload;
+        m
+    }
+
+    /// #46: the payload reaches the hub inside `raw`…
+    #[test]
+    fn attachment_payload_is_archived_in_raw() {
+        let payload = json!({ "type": "hook_additional_context", "content": ["x"] });
+        let ingest = to_ingest_message("claude", "s", 3, &attachment_record(Some(payload.clone())));
+        assert_eq!(ingest.raw["attachment"], payload);
+        assert!(ingest.content.is_none());
+    }
+
+    /// …but never into the dedup key. Records archived before #46 were keyed
+    /// without a payload; if the payload were hashed, the next re-parse of the
+    /// same file would give each of them a new key and the hub would store all
+    /// of them again (741,137 attachment rows on pg1 at 2026-10-01).
+    #[test]
+    fn attachment_payload_does_not_change_message_key() {
+        let without = attachment_record(None);
+        let with = attachment_record(Some(json!({ "type": "file", "content": "y" })));
+        assert_eq!(
+            message_key("claude", "s", 3, &without),
+            message_key("claude", "s", 3, &with)
+        );
+        // Control: the key does react to a field it hashes.
+        assert_ne!(
+            message_key("claude", "s", 3, &without),
+            message_key("claude", "s", 4, &without)
+        );
+    }
+}

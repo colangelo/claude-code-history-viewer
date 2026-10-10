@@ -1450,6 +1450,7 @@ fn parse_line_to_message(
             compact_metadata: None,
             microcompact_metadata: None,
             provider: None,
+            attachment: None,
         });
     }
 
@@ -1511,6 +1512,7 @@ fn parse_line_to_message(
         compact_metadata: log_entry.compact_metadata,
         microcompact_metadata: log_entry.microcompact_metadata,
         provider: None,
+        attachment: log_entry.attachment,
     })
 }
 
@@ -1580,6 +1582,7 @@ fn parse_line_simd(
             compact_metadata: None,
             microcompact_metadata: None,
             provider: None,
+            attachment: None,
         });
     }
 
@@ -1654,6 +1657,7 @@ fn parse_line_simd(
         compact_metadata: log_entry.compact_metadata,
         microcompact_metadata: log_entry.microcompact_metadata,
         provider: None,
+        attachment: log_entry.attachment,
     })
 }
 
@@ -2098,6 +2102,44 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].message_type, "user");
         assert_eq!(messages[1].message_type, "assistant");
+    }
+
+    #[test]
+    fn test_load_messages_keeps_attachment_payload() {
+        // #46: Claude Code `attachment` records carry their content in an
+        // `attachment` object, not in `message`. Synthetic payload; the shape
+        // is opaque to us and passed through as-is.
+        let temp_dir = TempDir::new().unwrap();
+        let payload = serde_json::json!({
+            "type": "hook_additional_context",
+            "hookName": "SessionStart",
+            "content": ["synthetic hook output"]
+        });
+        let attachment_line = format!(
+            r#"{{"uuid":"uuid-a","parentUuid":"uuid-1","sessionId":"session-1","timestamp":"2025-06-26T10:00:30Z","type":"attachment","attachment":{payload}}}"#
+        );
+        let content = format!(
+            "{}\n{}\n",
+            create_sample_user_message("uuid-1", "session-1", "Hello"),
+            attachment_line
+        );
+        let file_path = create_test_jsonl_file(&temp_dir, "test.jsonl", &content);
+
+        let messages = load_messages(&file_path.to_string_lossy()).unwrap();
+        assert_eq!(messages.len(), 2);
+        let att = &messages[1];
+        assert_eq!(att.message_type, "attachment");
+        assert!(att.content.is_none());
+        assert_eq!(att.attachment.as_ref(), Some(&payload));
+        // It survives serialization, which is what the archive stores as `raw`.
+        assert_eq!(serde_json::to_value(att).unwrap()["attachment"], payload);
+
+        // A record without one serializes exactly as before: no `attachment` key.
+        assert!(messages[0].attachment.is_none());
+        assert!(serde_json::to_value(&messages[0])
+            .unwrap()
+            .get("attachment")
+            .is_none());
     }
 
     #[test]
