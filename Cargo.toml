@@ -4,8 +4,8 @@ members = ["crates/viewer", "crates/history-core", "crates/protocol", "crates/hu
 
 # ---------------------------------------------------------------------------
 # Single fork-owned version line (`cchv-v*` tags). Every crate inherits this
-# via `version.workspace = true`. `just sync-version` keeps package.json,
-# this key, and tauri.conf.json aligned — package.json stays the entry point.
+# via `version.workspace = true`. `just sync-version` keeps package.json and
+# this key aligned — package.json stays the entry point.
 # NOT tied to upstream's `v1.x` desktop versions: this fork ships only the web
 # viewer + archive stack, so it owns its own version. See CLAUDE.md → Version
 # Management.

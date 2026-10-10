@@ -1,6 +1,6 @@
 //! Session commands module
 //!
-//! This module contains all session-related Tauri commands organized into submodules:
+//! This module contains all session-related backend commands organized into submodules:
 //! - `load`: Session and message loading functions
 //! - `search`: Message search functions
 //! - `edits`: File edit tracking and restore functions

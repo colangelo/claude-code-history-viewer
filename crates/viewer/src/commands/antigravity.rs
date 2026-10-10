@@ -1,9 +1,9 @@
-//! Tauri command wrappers for Antigravity token-state.
+//! Command wrappers for Antigravity token-state.
 //!
 //! The pure state-building logic was extracted to `history_core::antigravity`.
 //! This module re-exports it (so existing `crate::commands::antigravity::*`
 //! paths keep resolving — e.g. from `commands::stats`) and adds the thin
-//! `#[tauri::command]` IPC wrappers.
+//! command wrappers the `WebUI` server calls.
 
 pub use history_core::antigravity::*;
 
@@ -45,7 +45,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // Command-level test (moved with its `#[tauri::command]` wrapper from the
+    // Command-level test (moved with its command wrapper from the
     // history-core extraction). Pure-helper tests live in `history_core::antigravity`.
     #[tokio::test]
     async fn test_get_antigravity_project_summary_uses_explicit_root_path() {

@@ -25,9 +25,7 @@ crates/viewer/target/
 # Cargo.lock is committed (now at the workspace root): this is a binary app, so a
 # pinned lockfile gives reproducible builds and shields CI from transient
 # crates.io download failures.
-crates/viewer/gen/
 crates/viewer/.env
-crates/viewer/tauri.local.conf.json
 
 # Editor directories and files
 .vscode/*

@@ -1,4 +1,4 @@
-//! Tauri commands for unified preset management
+//! Backend commands for unified preset management
 //!
 //! Unified presets combine settings.json content and MCP server config
 //! into a single preset for complete configuration backup/restore.

@@ -1,4 +1,4 @@
-//! Tauri commands for MCP server preset management
+//! Backend commands for MCP server preset management
 //!
 //! This module provides commands for saving, loading, and managing
 //! MCP server presets stored in ~/.claude-history-viewer/mcp-presets/

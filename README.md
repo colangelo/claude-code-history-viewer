@@ -217,9 +217,8 @@ cargo build --release -p hub -p sync-daemon
 ```
 
 **Requirements:** Node.js 18+, pnpm, Rust 1.80+ (the hub's embedder dependency
-graph sets the floor; the other crates are fine at 1.77.2). Building `crates/viewer`
-additionally needs the platform webview toolchain — on Debian/Ubuntu,
-`libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
+graph sets the floor; the other crates are fine at 1.77.2). No system libraries
+are needed: since the web-only cut there is no webview toolchain in the graph.
 
 Common recipes (`just --list` for the rest):
 
@@ -230,7 +229,7 @@ Common recipes (`just --list` for the rest):
 | `just rust-check-all` | `fmt --check` + clippy + tests |
 | `just test-run` | Frontend tests, once, verbose |
 | `just lint` | ESLint |
-| `just sync-version` | Propagate `package.json` version → Cargo workspace + Tauri config |
+| `just sync-version` | Propagate `package.json` version → Cargo workspace + distiller |
 | `just tm-backfill` | Recover old history from Time Machine backups |
 
 Tests run single-threaded on the Rust side (`cargo test -- --test-threads=1`) —
@@ -267,9 +266,9 @@ Upstream's `v1.x` tags are fetched for the parser supply chain but are not ours;
 history, see `git tag -n 'cchv-v*'` and the
 [Releases](https://github.com/colangelo/claude-code-history-viewer/releases) page.
 
-The desktop *distribution* is retired here; the desktop *dependency* is not.
-`crates/viewer` still compiles the full webview stack and its GUI path still runs —
-see `AGENTS.md` for exactly what that does and does not mean before you act on it.
+The desktop app is gone here, distribution and dependency both: `crates/viewer`
+builds a plain binary with two modes, `--serve` (the WebUI server) and `--export`.
+`AGENTS.md` § *Desktop app (removed by the web-only cut, #23)* has the details.
 
 ## Contributing
 

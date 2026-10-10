@@ -1,7 +1,6 @@
 //! Shared application state for the Axum web server.
 //!
-//! This state is shared between all Axum request handlers and mirrors
-//! the Tauri managed state for metadata operations.
+//! This state is shared between all Axum request handlers.
 
 use crate::commands::metadata::MetadataState;
 use crate::commands::watcher::FileWatchEvent;
@@ -13,7 +12,7 @@ use tokio::sync::broadcast;
 /// Shared state accessible by all Axum route handlers.
 #[derive(Clone)]
 pub struct AppState {
-    /// Metadata state shared with Tauri (wrapped in Arc for Axum Clone requirement)
+    /// Metadata state (wrapped in Arc for Axum Clone requirement)
     pub metadata: Arc<MetadataState>,
     /// Server start time for uptime calculation.
     pub start_time: Instant,

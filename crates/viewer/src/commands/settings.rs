@@ -1,4 +1,4 @@
-//! Tauri commands for settings preset management
+//! Backend commands for settings preset management
 //!
 //! This module provides commands for saving, loading, and managing
 //! user settings presets stored in ~/.claude-history-viewer/presets/

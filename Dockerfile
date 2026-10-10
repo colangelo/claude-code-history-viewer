@@ -17,36 +17,29 @@ RUN pnpm exec tsc --build . && pnpm exec vite build
 FROM rust:1-bookworm AS backend
 ARG PROXY_URL
 ENV http_proxy=${PROXY_URL} https_proxy=${PROXY_URL}
-# Force HTTPS for apt sources to avoid proxy 502 on HTTP
-RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-       libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-    && rm -rf /var/lib/apt/lists/*
+# No system libraries: the viewer has no webview stack since the web-only cut (#23).
 WORKDIR /app
-COPY crates/viewer/ crates/viewer/
-# rust-embed reads dist/ at compile time
+# The whole workspace, so every member manifest resolves; only the viewer is built.
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+# rust-embed reads dist/ at compile time (crates/viewer/../../dist)
 COPY --from=frontend /app/dist dist/
-WORKDIR /app/crates/viewer
-RUN cargo build --release --features webui-server
+RUN cargo build --release -p claude-code-history-viewer --features webui-server
 
 # ── Stage 3: Minimal runtime image ──────────────────────────────────
 FROM debian:bookworm-slim
 ARG PROXY_URL
 # Use http_proxy only (no HTTPS rewrite needed — slim has no ca-certs yet)
 ENV http_proxy=${PROXY_URL}
-# Binary links against webkit2gtk/gtk3 even in --serve mode (Tauri compile-time dep)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl \
-    libgtk-3-0 libwebkit2gtk-4.1 \
-    libjavascriptcoregtk-4.1-0 \
     && rm -rf /var/lib/apt/lists/*
 ENV http_proxy= https_proxy=
 
 # Run as non-root user for security
 RUN groupadd -r cchv && useradd -r -g cchv -d /home/cchv -s /sbin/nologin -m cchv
 
-COPY --from=backend /app/crates/viewer/target/release/claude-code-history-viewer /usr/local/bin/cchv-server
+COPY --from=backend /app/target/release/claude-code-history-viewer /usr/local/bin/cchv-server
 
 ENV PORT=3727
 EXPOSE 3727

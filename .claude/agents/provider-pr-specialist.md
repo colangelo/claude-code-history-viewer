@@ -45,9 +45,9 @@ reference implementation, then diff the new one against it structurally.
    grows — e.g. `antigravity.json` already exists). No duplicate keys.
 6. **Tests**: a new provider needs at least parsing/detection tests. A provider
    PR with zero tests is NEEDS-CHANGES by default.
-7. **Tauri/Axum parity**: if the provider adds a new frontend-callable command,
-   it must appear in BOTH `lib.rs` `generate_handler!` and `server/mod.rs`
-   router. Delegate to `tauri-axum-parity-checker` if in doubt.
+7. **Route parity**: if the provider adds a new frontend-callable command, it
+   must be routed in the `server/mod.rs` router. Delegate to
+   `api-route-parity-checker` if in doubt.
 
 ## Maintainer policy reminder
 For "please support provider X" requests where no PR exists yet, the repo's

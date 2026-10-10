@@ -1,7 +1,7 @@
 //! `WebUI` server module — serves the React SPA and REST API via Axum.
 //!
 //! This module is only compiled when the `webui-server` Cargo feature is enabled.
-//! It spawns an HTTP server inside Tauri's existing Tokio runtime.
+//! `lib.rs::run_server` runs it on a Tokio runtime it creates for `--serve`.
 //!
 //! ## Asset serving
 //!
@@ -581,7 +581,7 @@ async fn auth_middleware(
 ///
 /// Clients connect via `EventSource` at `GET /api/events?token=<token>`.
 /// Each event has:
-///   - `event:` field = `session-file-changed` (matching Tauri event names)
+///   - `event:` field = `session-file-changed` (the event name the frontend listens for)
 ///   - `data:` field  = JSON-encoded `FileWatchEvent`
 async fn sse_handler(
     State(state): State<Arc<AppState>>,

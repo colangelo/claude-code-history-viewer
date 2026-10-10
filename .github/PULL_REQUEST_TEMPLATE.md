@@ -26,7 +26,7 @@ Closes #
 
 ## If this adds a frontend-callable backend command
 
-- [ ] Registered in **both** the Tauri `generate_handler!` (`crates/viewer/src/lib.rs`) **and** the Axum WebUI router (`crates/viewer/src/server/mod.rs`) — otherwise `--serve` mode 404s
+- [ ] Routed in the Axum WebUI router (`crates/viewer/src/server/mod.rs`) with a handler in `server/handlers.rs`, and classified read-only or mutating there — otherwise `--serve` answers 404/405
 
 ## If this adds a new provider
 

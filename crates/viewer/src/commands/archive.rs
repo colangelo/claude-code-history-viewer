@@ -1,4 +1,4 @@
-//! Tauri commands for managing session archives
+//! Backend commands for managing session archives
 //!
 //! This module provides commands for creating, listing, and managing
 //! archived sessions stored in ~/.claude-history-viewer/archives/
@@ -528,7 +528,7 @@ fn jsonl_to_json_array(path: &Path) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Tauri commands
+// Commands
 // ---------------------------------------------------------------------------
 
 /// Returns the base path for archive storage: `~/.claude-history-viewer/archives/`

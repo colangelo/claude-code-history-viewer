@@ -1,4 +1,4 @@
-//! Tauri commands for Claude Code settings management
+//! Backend commands for Claude Code settings management
 //!
 //! This module provides commands for reading and writing Claude Code settings
 //! across different scopes (user, project, local, managed) and MCP server configurations.
@@ -589,7 +589,8 @@ pub(crate) fn validate_dialog_path(path: &Path) -> Result<(), String> {
 /// Validate that a path is within allowed directories.
 ///
 /// Used by `WebUI` HTTP handlers to restrict file operations to safe directories.
-/// Tauri desktop commands use [`validate_dialog_path`] instead (OS dialog guarantees user intent).
+/// The command functions themselves only require an absolute path ([`validate_dialog_path`]);
+/// this allowlist is the extra guard every HTTP caller goes through.
 ///
 /// # Arguments
 /// * `path` - Path to validate

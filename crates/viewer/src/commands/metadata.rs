@@ -1,4 +1,4 @@
-//! Tauri commands for user metadata management
+//! Backend commands for user metadata management
 //!
 //! This module provides commands for loading, saving, and updating
 //! user metadata stored in ~/.claude-history-viewer/user-data.json

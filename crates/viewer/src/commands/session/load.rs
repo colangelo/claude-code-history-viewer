@@ -1,8 +1,8 @@
 //! Session loading commands.
 //!
 //! The pure loading/parsing logic lives in `history_core::providers::claude`
-//! (so a headless daemon can reuse it). These thin Tauri command wrappers keep
-//! the desktop command surface unchanged.
+//! (so a headless daemon can reuse it). These thin command wrappers keep
+//! the `WebUI` server's command surface unchanged.
 
 use crate::models::{ClaudeMessage, ClaudeSession, MessagePage};
 
