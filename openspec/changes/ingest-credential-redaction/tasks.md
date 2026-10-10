@@ -78,6 +78,43 @@
       rate (see 4.4). The key-name counts are already in `credential_findings.key_names`. A
       `GROUP BY` over the table (query in `docs/archive/deployment.md` § Credential findings)
       gives the tuning input without the full-scan dry run.
+      **Key-name input, 2026-10-10.** Infra ran both queries on pg1 at 16:08:08Z,
+      read-only (`BEGIN READ ONLY … ROLLBACK`; relay `d5ba399b`, thread `0e825314`): 181
+      rows and 63 messages, detected 11:24:23Z..15:58:29Z. That is 4 h 34 min of data, not
+      a day.
+      - **No key-name tuning makes the check green.** By message count, most of it is the
+        core names: `password` 11, `token` 10, `credential` 6, `secrets` 6, `SECRET` 3. A
+        deny list cannot drop those, so at least 11 messages stay in this window whatever
+        the list holds. `bearer` (2 messages) has no key to tune. The bound fails only if
+        those messages are false positives, and the table cannot show that: it keeps key
+        names, not value shapes.
+      - **Deny-list candidates.** Together they cover at most 17 of the 63 messages, and
+        fewer if another key shares a message:
+        - Counts: `cache_creation_tokens` and `cache_read_tokens` (the list has only the
+          `_input_` forms), `analytics.tokenUsage`, `pending.tokenLifetimeMs`,
+          `credential_hits`.
+        - Names of things, not secrets: `TokenEndpoint` and `token_endpoint` (URLs),
+          `LOCAL_SECRET_FILENAME` and `local-secret.ts` (files), `AUTH_TOKEN_KEY` (a
+          storage key), `TOKEN_SRC`, `secretRef`, and one tailnet hostname whose first
+          label is `secrets`.
+
+        Five of these are this repo's own identifiers (`git grep`), so some of the noise
+        is sessions working on cchv. Keep `secret_id`, because an AppRole secret id is a
+        credential. `localCredential` needs a look.
+      - **As built, the dry run cannot get value shapes for this set.** `--since` filters
+        on message `timestamp`, not `detected_at`, and a NULL never passes it. The busiest
+        session in the window (14 of 63 messages) is a Cursor session. No archived Cursor
+        session has message timestamps: 25 of 25, plus 3 Codex and 1 Antigravity session,
+        so 29 sessions and 230 rows by the stored counter. That is our reading:
+        `/v1/sessions` from ac-mbm5 at 16:18Z, all 5,351 sessions. Next: a dry-run scope
+        over exactly the `credential_findings.message_ref`s in a window. The 63 messages
+        then get value shapes without an id walk over the whole table.
+      - **Where the hits are** (same reading): 38 of the 63 messages are in three m4m
+        sessions. They are that Cursor session in a work project (14), a 9-minute
+        headless run in a skill's directory (13), and a long-running session in this repo
+        (11). The other 25 are spread over 11 sessions in 9 project directories. The
+        value shapes decide which hits are real. Who rotates is not settled: Q-b and 4.5
+        give it to infra, and infra's reply says it remains with ac.
 - [x] 4.4 Gatus check per Q-b. The summary needs read-auth, which Gatus does not carry,
       so the check polls the unauthenticated `GET /v1/healthz/findings?since=24h`: same
       counts, `200` with none in the window, `503` with any. Code + test done 2026-10-10
@@ -91,4 +128,5 @@
       state, so it pages no one. ac decides what pages until then (Q-b was his).
 - [ ] 4.5 Infra runs the dry run on prod as the `ac/infra#104` sweep, with `--expect` set
       to the `#86`/`#102` locations, and owns every rotation. Its result is reported as
-      a floor.
+      a floor. Run it without `--since`. With it, every row that has a NULL message
+      timestamp is skipped, and that includes every archived Cursor session (see 4.3).

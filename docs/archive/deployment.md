@@ -446,15 +446,25 @@ with `total`, `by_rule`, `redacted` and `latest_detected_at`. The Gatus check on
 it pages infra to rotate the credential (Q-b). The authenticated
 `/v1/findings/summary` returns the same counts. To see where a hit is, run
 `hub findings dry-run --since 24h`: read-only, it prints locations and value
-shapes, never values.
+shapes, never values. Its `--since` is **not** the check's window. It filters on the
+message `timestamp`, while the check counts `detected_at` (ingest time), and a NULL
+timestamp never passes it. Every archived Cursor session has NULL timestamps on all its
+rows (25 of 25, plus 3 Codex and 1 Antigravity session; `/v1/sessions` from ac-mbm5 at
+2026-10-10T16:18Z, all 5,351 sessions). So `--since` never reaches them. Drop `--since`
+to include them.
 
-**Until the `assign` deny list is tuned (#34 task 4.3), `503` is this check's steady
-state, not a window after a deploy.** Measured from ac-mbm5 at 2026-10-10T15:59Z, six
-minutes after the cchv-v0.24.0 restart: `total` 181 in 24 h (`assign` 177, `bearer` 4,
-`redacted` 0), 21 in the last hour, and `latest_detected_at` 15:58:29Z, which is after
-the restart. `assign` and `bearer` are flag-only, so they keep adding rows. The window
-empties only after 24 h with no hit at all. At the measured rate (181 in a day, one in the
-first 13 minutes after the restart), that would take something to change, not just time. The Gatus check (infra `3219fc0`) went live before the tuning it
+**`503` is this check's steady state, not a window after a deploy, and tuning the `assign`
+deny list (#34 task 4.3) will not change that on its own.** Measured from ac-mbm5 at
+2026-10-10T15:59Z, six minutes after the cchv-v0.24.0 restart: `total` 181 in 24 h
+(`assign` 177, `bearer` 4, `redacted` 0), 21 in the last hour, and `latest_detected_at`
+15:58:29Z, which is after the restart. `assign` and `bearer` are flag-only, so they keep
+adding rows. The window empties only after 24 h with no hit at all. The 181 rows are not
+a day's sample. Infra's pg1 reading at 16:08:08Z (relay `d5ba399b`) puts the oldest at
+11:24:23Z, so they cover the detector's whole life since cchv-v0.23.0 went live (11:10Z):
+4 h 34 min, about 40 rows and 14 messages an hour. Nothing new arrived between 15:58:29Z
+and 16:08:08Z, which is too short to read as a change. The key names show why tuning
+cannot clear it: `password` alone is in 11 of the 63 messages, and no key-name deny list
+can drop `password` (breakdown in #34 task 4.3). The Gatus check (infra `3219fc0`) went live before the tuning it
 was meant to follow, and that order was our relay's. While the check is red it cannot
 signal a new finding. If the alert fires on the state change, as Gatus alerts normally
 do, the next real credential sends no page.
@@ -881,7 +891,8 @@ could not fail.** Infra ran everything below on m4m except the lines marked as o
   - Infra's note said the findings 503 was "all pre-restart", which implies it clears
     after 24 h. It does not clear, because `assign` and `bearer` keep adding rows: one
     `assign` row arrived at 15:58:29Z, five minutes after the restart, and the previous
-    24 h held 181. See § Credential findings and redaction.
+    24 h held 181. Those 181 rows are 4 h 34 min of data, the detector's whole life (infra's
+    pg1 reading, relay `d5ba399b`). See § Credential findings and redaction.
   - The distiller-half check infra planned, `cardinality(open_question_threads) =
     cardinality(open_questions)`, holds for an old distiller too. See § Open-question
     threads.
