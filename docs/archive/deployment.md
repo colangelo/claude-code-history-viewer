@@ -2875,6 +2875,30 @@ equivalently.
   because its headline number was. Correct every figure derived from a number you
   fix, not just the number.
 
+### Open-question threads (#15)
+
+Before each entry the distiller fetches the project's unresolved threads mentioned in the 30
+days before the entry date (at most 30, `GET /v1/journal/open-questions?project=…&before=<entry
+date>&state=open,quiet`) and lists them in the prompt as `T<id> (last seen <date>): <wording>`.
+The model links each open question to one of them or to none and names the threads the day
+resolved; the distiller drops ids it did not offer and ids both continued and resolved, then
+posts `open_question_threads` and `resolved_threads` with the entry. The hub assigns ids to new
+threads and refuses ids that are not an earlier open question of the same project (`400`).
+Migration `0012` gave every question written before this its own thread id.
+
+- **Read it:** `GET /v1/journal/open-questions?project=<path>` lists threads newest first with
+  `state` `open`, `quiet` (unresolved, not mentioned in the project's last 3 active days:
+  possibly dropped, possibly crowded out by the 5-question cap) or `resolved`, plus
+  `resolved_on`. Without `project`, per-project counts.
+- **Deploy order does not matter.** An old distiller posts no links (every question becomes
+  a new thread); a new distiller against an old hub gets a 404 for the threads, logs a WARN
+  and writes the entry without links. Both sides still have to ship for links to appear.
+- **Cost:** under 1 k extra prompt tokens per distilled entry, accepted by ac (Q1, 2026-10-10).
+- **Live check after the swap and reinstall:** the first entry written afterwards has
+  `cardinality(open_question_threads) = cardinality(open_questions)` (the CHECK enforces it)
+  and, once a project has earlier threads, a distiller log line `threads <date> <project>:
+  offered N, continued M, resolved K`.
+
 ## 3d. Project identity (cchv-v0.10.0): rollout order
 
 The git-fingerprint identity feature (migration `0003`, `identity:<key>`

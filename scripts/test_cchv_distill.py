@@ -354,3 +354,91 @@ def test_first_log_line_names_the_running_copy(monkeypatch, capsys) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --- open-question threads (#15) ------------------------------------------------
+
+
+def test_prompt_offers_threads_as_data_with_their_numbers() -> None:
+    threads = [{"thread_id": 12, "question": "why is\n  X slow", "last_seen": "2026-10-08"}]
+    prompt = d.build_prompt("2026-10-10", "/w/p", "TRANSCRIPT", threads)
+    assert "<open_threads>\nT12 (last seen 2026-10-08): why is X slow\n</open_threads>" in prompt
+    assert '"continues"' in prompt and '"resolved"' in prompt
+    # The transcript still comes first, the schema after the threads.
+    assert prompt.index("TRANSCRIPT") < prompt.index("<open_threads>") < prompt.index('"status"')
+
+
+def test_prompt_without_threads_says_so() -> None:
+    prompt = d.build_prompt("2026-10-10", "/w/p", "TRANSCRIPT", [])
+    assert "<open_threads>" not in prompt
+    assert d.NO_THREADS_TEXT in prompt
+
+
+def test_thread_links_turn_model_slips_into_new_threads() -> None:
+    entry = {
+        "open_questions": [
+            "plain string",
+            {"q": "continues 12", "continues": "T12"},
+            {"q": "not offered", "continues": 99},
+            {"q": "also resolved", "continues": 13},
+            {"question": "alt key", "continues": 14},
+        ],
+        "resolved": [13, "15", True],
+    }
+    questions, links, resolved = d.thread_links(entry, {12, 13, 14, 15})
+    assert questions == ["plain string", "continues 12", "not offered", "also resolved", "alt key"]
+    assert links == [None, 12, None, None, 14]
+    assert resolved == [15]  # 13 was both continued and resolved; True is no id
+
+
+def test_validate_accepts_both_question_shapes_and_rejects_others() -> None:
+    base = {"status": "entry", "headline": "h", "summary": "s", "topics": ["a", "b", "c"]}
+    assert d.validate({**base, "open_questions": ["x", {"q": "y", "continues": None}]}) is None
+    assert d.validate({**base, "open_questions": [{"continues": 3}]}) is not None
+    assert d.validate({**base, "open_questions": [], "resolved": "12"}) is not None
+
+
+def test_process_group_posts_links_for_offered_threads(monkeypatch) -> None:
+    seen: dict = {}
+
+    def fake_generate(llm, entry_date, project, transcript, threads):
+        seen["threads"] = threads
+        return {
+            "status": "entry",
+            "headline": "h",
+            "summary": "s",
+            "topics": ["a", "b", "c"],
+            "open_questions": [{"q": "again", "continues": 12}, {"q": "new", "continues": None}],
+            "resolved": [13],
+        }
+
+    monkeypatch.setattr(d, "generate", fake_generate)
+    posted: list[dict] = []
+
+    class ThreadHub(StubHub):
+        def open_threads(self, project_path, before):
+            assert (project_path, before) == ("/w/p", "2026-10-10")
+            return [{"thread_id": 12, "question": "q12"}, {"thread_id": 13, "question": "q13"}]
+
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    class Model:
+        model = "m"
+
+    group = {"entry_date": "2026-10-10", "project_path": "/w/p", "session_ids": [11], "as_of": None}
+    assert d.process_group(ThreadHub(), group, Model(), dry_run=False) is True
+    assert [t["thread_id"] for t in seen["threads"]] == [12, 13]
+    assert posted[0]["open_questions"] == ["again", "new"]
+    assert posted[0]["open_question_threads"] == [12, None]
+    assert posted[0]["resolved_threads"] == [13]
+
+
+def test_open_threads_failure_never_costs_the_entry(monkeypatch) -> None:
+    hub = d.Hub(url="http://127.0.0.1:9", token="t")
+
+    def boom(*a, **k):
+        raise d.requests.HTTPError("404 Not Found")
+
+    monkeypatch.setattr(hub, "get", boom)
+    assert hub.open_threads("/w/p", "2026-10-10") == []

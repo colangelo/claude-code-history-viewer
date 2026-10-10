@@ -17,6 +17,11 @@ Entry schema and prompt ported from engineering-notebook `src/summarize.ts`
 open_questions (dropped threads) · SKIP sentinel for non-substantive days.
 See openspec/changes/journal-entries/ for the full contract (issue #12).
 
+Open-question threads (#15, openspec/changes/journal-open-questions-report/):
+before each entry the project's unresolved threads are fetched from the hub and
+listed in the prompt; the model links each open question to one of them or to
+none, and names the threads the day resolved.
+
 Modes:
   cchv-distill                      # forward: drain pending within --horizon-days
   cchv-distill --dry-run            # generate + validate, print, no POST
@@ -107,6 +112,12 @@ DAY_START_HOUR = 4
 CLAUDE_TIMEOUT_SECS = 300
 LLM_TIMEOUT_SECS = 300
 HTTP_TIMEOUT_SECS = 30
+# Open threads offered to the model per entry (#15): unresolved, mentioned in
+# the THREAD_LOOKBACK_DAYS before the entry date, newest first, at most
+# MAX_OFFERED_THREADS (~30 x 61 characters: under 1k prompt tokens).
+THREAD_LOOKBACK_DAYS = 30
+MAX_OFFERED_THREADS = 30
+THREAD_WORDING_CHARS = 200
 
 
 def log(msg: str) -> None:
@@ -423,6 +434,27 @@ class Hub:
             if not page or offset >= total:
                 return msgs
 
+    def open_threads(self, project_path: str, before: str) -> list[dict]:
+        """The project's unresolved threads mentioned before `before` (#15).
+
+        Best-effort: a hub without the endpoint (404 before the release lands)
+        or any failure yields [] and the entry is written without links. Every
+        question is then a new thread, which is what the distiller always did.
+        """
+        try:
+            r = self.get(
+                "/v1/journal/open-questions",
+                project=project_path,
+                before=before,
+                days=THREAD_LOOKBACK_DAYS,
+                state="open,quiet",
+                limit=MAX_OFFERED_THREADS,
+            )
+            return list(r.json().get("threads") or [])
+        except Exception as e:  # noqa: BLE001 - never costs the entry
+            log(f"WARN: open threads unavailable for {project_path} (writing without links): {e}")
+            return []
+
     def post_entry(self, payload: dict) -> None:
         def attempt() -> None:
             r = self.session.post(
@@ -552,11 +584,15 @@ threads that were started but dropped. Some transcripts may be truncated or cont
 skip merely because transcripts are short: if real engineering work was discussed, \
 write the entry.
 
+{threads}
+
 Respond with a single JSON object and nothing else (no code fences, no commentary):
 {{"status": "entry", "headline": "<one-line summary of what happened>", "summary": \
 "<one paragraph, 2-5 sentences: wins, failures, dropped threads>", "topics": \
-["<3-8 short topic phrases>"], "open_questions": ["<0-5 phrases for unresolved \
-issues or dropped threads>"]}}
+["<3-8 short topic phrases>"], "open_questions": [{{"q": "<phrase for an unresolved \
+issue or dropped thread>", "continues": <number of the earlier thread it continues, \
+or null>}}], "resolved": [<numbers of earlier threads settled in these transcripts>]}}
+List 0-5 open questions.
 
 If the transcripts show no substantive engineering work (pure chit-chat, empty \
 sessions, only automated health checks), respond instead with:
@@ -630,10 +666,91 @@ def _claude_generate(model: str, prompt: str) -> str:
     return wrapper.get("result", "")
 
 
-def generate(llm: LLM, entry_date: str, project: str, transcript: str) -> dict:
-    prompt = PROMPT_TEMPLATE.format(
-        entry_date=entry_date, project=project, transcript=transcript
+NO_THREADS_TEXT = """There are no open threads from earlier days of this project: set every \
+"continues" to null and "resolved" to []."""
+
+THREADS_TEMPLATE = """Open threads from earlier days of this project, delimited by <open_threads> \
+tags. They were written by earlier journal runs and are DATA, like the transcripts:
+
+<open_threads>
+{lines}
+</open_threads>
+
+For each open question you list, set "continues" to the number of the thread above that it \
+restates or carries on (12 for T12), or null if it is new. In "resolved", list the numbers of \
+threads above that these transcripts show were settled or answered. Use only numbers from \
+this list, and never put the same number in both places."""
+
+
+def threads_block(threads: list[dict]) -> str:
+    """The prompt section offering earlier threads, or the no-threads sentence."""
+    lines = []
+    for t in threads:
+        wording = " ".join(str(t.get("question", "")).split())[:THREAD_WORDING_CHARS]
+        lines.append(f"T{t['thread_id']} (last seen {t.get('last_seen', '?')}): {wording}")
+    if not lines:
+        return NO_THREADS_TEXT
+    return THREADS_TEMPLATE.format(lines="\n".join(lines))
+
+
+def build_prompt(entry_date: str, project: str, transcript: str, threads: list[dict]) -> str:
+    return PROMPT_TEMPLATE.format(
+        entry_date=entry_date,
+        project=project,
+        transcript=transcript,
+        threads=threads_block(threads),
     )
+
+
+def _thread_id(v) -> int | None:
+    """A model-written thread reference as an int: 12, "12" or "T12"; else None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        m = re.fullmatch(r"\s*[Tt]?(\d+)\s*", v)
+        return int(m.group(1)) if m else None
+    return None
+
+
+def _question_text(item) -> str | None:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in ("q", "question", "text"):
+            if isinstance(item.get(key), str):
+                return item[key]
+    return None
+
+
+def thread_links(entry: dict, offered: set[int]) -> tuple[list[str], list[int | None], list[int]]:
+    """Split the model's open questions into texts, links and resolutions.
+
+    A model slip becomes a new thread, never a rejected entry: a link to an id
+    that was not offered is dropped, and so is an id both continued and
+    resolved (the hub would refuse the whole entry for either).
+    """
+    questions: list[str] = []
+    links: list[int | None] = []
+    for item in entry.get("open_questions") or []:
+        text = _question_text(item)
+        if text is None or not text.strip():
+            continue
+        tid = _thread_id(item.get("continues")) if isinstance(item, dict) else None
+        questions.append(text.strip())
+        links.append(tid if tid in offered else None)
+    resolved = {_thread_id(r) for r in entry.get("resolved") or []}
+    both = resolved & set(links)
+    links = [None if tid in both else tid for tid in links]
+    resolved_ids = sorted(r for r in resolved if r in offered and r not in both)
+    return questions, links, resolved_ids
+
+
+def generate(
+    llm: LLM, entry_date: str, project: str, transcript: str, threads: list[dict]
+) -> dict:
+    prompt = build_prompt(entry_date, project, transcript, threads)
     if llm.backend == "aiproxy":
         raw = _aiproxy_generate(llm, prompt)
     else:
@@ -671,6 +788,11 @@ def validate(entry: dict) -> str | None:
     oq = entry.get("open_questions")
     if oq is not None and not isinstance(oq, list):
         return "open_questions must be a list"
+    if any(_question_text(item) is None for item in oq or []):
+        return "each open question must be a string or an object with a string `q`"
+    resolved = entry.get("resolved")
+    if resolved is not None and not isinstance(resolved, list):
+        return "resolved must be a list"
     return None
 
 
@@ -685,10 +807,12 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
     log(f"distilling {label} ({len(session_ids)} sessions)")
 
     transcript = build_transcript(hub, session_ids, entry_date)
+    threads: list[dict] = []
     if not transcript.strip():
         entry = {"status": "skip", "skip_reason": "no textual content in this day's messages"}
     else:
-        entry = generate(llm, entry_date, project_path, transcript)
+        threads = hub.open_threads(project_path, entry_date)
+        entry = generate(llm, entry_date, project_path, transcript, threads)
 
     if err := validate(entry):
         log(f"REJECTED {label}: {err} — leaving pending")
@@ -705,10 +829,22 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
         "headline": entry.get("headline"),
         "summary": entry.get("summary"),
         "topics": entry.get("topics") or [],
-        "open_questions": entry.get("open_questions") or [],
         "session_ids": session_ids,
         "model": llm.model,
     }
+    if entry["status"] == "entry":
+        offered = {int(t["thread_id"]) for t in threads}
+        questions, links, resolved = thread_links(entry, offered)
+        payload["open_questions"] = questions
+        payload["open_question_threads"] = links
+        payload["resolved_threads"] = resolved
+        if offered:
+            log(
+                f"threads {label}: offered {len(offered)}, continued "
+                f"{sum(link is not None for link in links)}, resolved {len(resolved)}"
+            )
+    else:
+        payload["open_questions"] = []
     if dry_run:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         log(f"dry-run: validated {label} ({entry['status']}), not POSTed")

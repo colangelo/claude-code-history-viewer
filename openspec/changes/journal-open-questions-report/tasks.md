@@ -18,24 +18,27 @@
 
 ## 2. Storage
 
-- [ ] 2.1 Migration `0012`: `journal_thread_id_seq`; `open_question_threads BIGINT[]` and
+- [x] 2.1 Migration `0012`: `journal_thread_id_seq`; `open_question_threads BIGINT[]` and
       `resolved_threads BIGINT[]` on `journal_entries`; seed one id per existing question.
 
 ## 3. Hub
 
-- [ ] 3.1 POST `/v1/journal/entries`: accept, validate (D2) and upsert the two arrays.
-- [ ] 3.2 Thread fold and states (D3) as a pure function with unit tests: restated,
+- [x] 3.1 POST `/v1/journal/entries`: accept, validate (D2) and upsert the two arrays.
+- [x] 3.2 Thread fold and states (D3) as a pure function with unit tests: restated,
       resolved, reopened, quiet by active days, calendar gap.
-- [ ] 3.3 `GET /v1/journal/open-questions` (D3) with read auth.
-- [ ] 3.4 PG integration tests: new + continued ids, foreign/unknown id 400, continued and
+- [x] 3.3 `GET /v1/journal/open-questions` (D3) with read auth.
+- [x] 3.4 PG integration tests: new + continued ids, foreign/unknown id 400, continued and
       resolved 400, length mismatch 400, re-distill replaces links, migration seeding,
-      report states, unauthenticated 401.
+      report states, unauthenticated 401. Migration seeding checked by hand on a scratch DB
+      (2026-10-10): oldest entry's questions got ids 1, 2, the next 3, 4; the sequence went
+      on at 5; a misaligned row is refused by the CHECK. `journal_threads_test.rs` (7 tests)
+      and 5 fold unit tests; a mutation that skips the unknown-id check fails the suite.
 
 ## 4. Distiller
 
-- [ ] 4.1 Fetch the open threads before generating; prompt lists them; parse
+- [x] 4.1 Fetch the open threads before generating; prompt lists them; parse
       `{"q", "continues"}` objects and plain strings; `resolved` list.
-- [ ] 4.2 Sanitise: drop unoffered ids and ids both continued and resolved; post the two
+- [x] 4.2 Sanitise: drop unoffered ids and ids both continued and resolved; post the two
       arrays. pytest for prompt, parsing and sanitising.
 
 ## 5. Gate
