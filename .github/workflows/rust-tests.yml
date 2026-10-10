@@ -139,6 +139,8 @@ jobs:
           workspaces: .
           cache-on-failure: true
 
+      - name: Create dist placeholder for rust-embed
+        run: mkdir -p dist && touch dist/index.html
 
       - name: Generate coverage report
         working-directory: crates/viewer
@@ -178,6 +180,8 @@ jobs:
           workspaces: .
           cache-on-failure: true
 
+      - name: Create dist placeholder for rust-embed
+        run: mkdir -p dist && touch dist/index.html
 
       - name: Run benchmarks
         working-directory: crates/viewer
@@ -211,6 +215,8 @@ jobs:
           workspaces: .
           cache-on-failure: true
 
+      - name: Create dist placeholder for rust-embed
+        run: mkdir -p dist && touch dist/index.html
 
       - name: Check documentation
         working-directory: crates/viewer
