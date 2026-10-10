@@ -452,8 +452,9 @@ shapes, never values.
 state, not a window after a deploy.** Measured from ac-mbm5 at 2026-10-10T15:59Z, six
 minutes after the cchv-v0.24.0 restart: `total` 181 in 24 h (`assign` 177, `bearer` 4,
 `redacted` 0), 21 in the last hour, and `latest_detected_at` 15:58:29Z, which is after
-the restart. `assign` and `bearer` are flag-only, so new hits keep arriving and the 24 h
-window never empties. The Gatus check (infra `3219fc0`) went live before the tuning it
+the restart. `assign` and `bearer` are flag-only, so they keep adding rows. The window
+empties only after 24 h with no hit at all. At the measured rate (181 in a day, one in the
+first 13 minutes after the restart), that would take something to change, not just time. The Gatus check (infra `3219fc0`) went live before the tuning it
 was meant to follow, and that order was our relay's. While the check is red it cannot
 signal a new finding. If the alert fires on the state change, as Gatus alerts normally
 do, the next real credential sends no page.
@@ -844,6 +845,46 @@ it. A relay handing off a rev marker should carry both counts, new **and** old.
 > since `cchv-v0.12.0`, so in practice every swap from `cchv-v0.21.1` on. On the
 > local-build fallback there is no published digest and step 6b's marker remains the only
 > pre-restart probe.
+
+**2026-10-10, `cchv-v0.23.0` → `cchv-v0.24.0` (release `ff940a33`; infra's readings in
+relay `7524e78b`, their record `3219fc0`). All four steps landed. Two of the follow-up checks
+could not fail.** Infra ran everything below on m4m except the lines marked as ours.
+
+- Hub: digest `709889d6…`, agreeing three ways (sidecar, `shasum` of the download, API
+  `digest`). At step 4b the live file hashed to the same digest. Bootstrap 15:53:40Z;
+  `/v1/healthz` `.version` read `0.24.0` at 15:53:43Z. Backup
+  `staging/cchv-hub-preswap-20261010-1753`.
+- Route probes, GET, pre → post: `/v1/healthz/findings` 404 → 503;
+  `/v1/journal/open-questions` 404 → 401. Controls: `/v1/projects` 401 → 401,
+  `/v1/totally/bogus` 404 → 404, and `POST /v1/totally/bogus` 405.
+- Migration: `_sqlx_migrations` max 11 → 12; `open_question_threads`, `resolved_threads`,
+  `journal_thread_id_seq` and the `journal_entries_thread_links_aligned` check are present;
+  `journal_entries` still 1,262 rows.
+- Redaction: `[redaction] redact = ["pem", "prefix"]` went into the hub.toml **template**
+  (backup `hub.toml.pre-0.24.0`) and `cchv-launch` re-rendered the runtime file. Hub log
+  15:53:41Z: `redact=["pem", "prefix"]`.
+- Webapp: `tools/cchv-webapp-deploy 0.24.0 --expect-entry archive-DenVs1sv.js
+  --assert-count 2:cchv-v0.24.0`, green before and after the swap. The CSS changed against
+  0.23.0, so a person still has to look at the live webapp.
+- Distiller: reinstalled; installed blob `a26711305b25…` matches `git rev-parse
+  cchv-v0.24.0:scripts/cchv-distill.py` (we re-derived the blob id here). Before this deploy
+  the installed copy was still 0.21.1 (blob `134f16ad…`). The 0.22.0 and 0.23.0 releases
+  each changed only the version line (`git diff --numstat cchv-v0.21.1 <tag>`: `1 1`), so
+  skipping them changed no behaviour.
+  Ours, from ac-mbm5: the first tick after the reinstall, at 16:06:02Z, reported
+  `last_tick_distiller_version` `0.24.0` and `last_tick_distiller_blob` `a26711305b25…` on
+  `/v1/healthz/journal`, with 0 groups pending. That proves the new distiller ran. Whether
+  it read the threads shows only in its `threads … offered N` log line, which is on m4m.
+- Gatus: new check `cchv-findings` on `/v1/healthz/findings?since=24h`, `[STATUS]==200`,
+  300 s, alerts to ntfy; mon's endpoint count went 101 → 102.
+- Ours: the two follow-up checks that could not fail.
+  - Infra's note said the findings 503 was "all pre-restart", which implies it clears
+    after 24 h. It does not clear, because `assign` and `bearer` keep adding rows: one
+    `assign` row arrived at 15:58:29Z, five minutes after the restart, and the previous
+    24 h held 181. See § Credential findings and redaction.
+  - The distiller-half check infra planned, `cardinality(open_question_threads) =
+    cardinality(open_questions)`, holds for an old distiller too. See § Open-question
+    threads.
 
 **2026-10-10, `cchv-v0.22.0` → `cchv-v0.23.0` (relay `d5203465`) — timings from the release,
 and what the rebased PRs needed on the Gitea side.** Release commit `7c566a49`; four PRs

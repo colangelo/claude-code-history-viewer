@@ -74,8 +74,8 @@
       hub log), positioned in the VACUUM cycle per the repo rule.
 - [ ] 4.3 Infra/ac run `redact-existing --dry-run`, tune the `assign` deny list from the
       key-name counts, then flip the remaining rules to `redact`.
-      **Now blocking 4.4:** until this lands the findings check is permanently red (see
-      4.4). The key-name counts are already in `credential_findings.key_names`. A
+      **Now blocking 4.4:** until this lands, the findings check stays red at the measured
+      rate (see 4.4). The key-name counts are already in `credential_findings.key_names`. A
       `GROUP BY` over the table (query in `docs/archive/deployment.md` § Credential findings)
       gives the tuning input without the full-scan dry run.
 - [x] 4.4 Gatus check per Q-b. The summary needs read-auth, which Gatus does not carry,
@@ -84,7 +84,7 @@
       (branch `feat/34-findings-health`); the Gatus check itself is infra's, relayed with
       the release.
       **Deployed 2026-10-10** (infra `3219fc0`: `cchv-findings`, `[STATUS]==200`, 300 s,
-      ntfy). **Red from the first poll, and it stays red:** 181 rows in 24 h (`assign` 177,
+      ntfy). **Red from the first poll, and it will stay red at the measured rate:** 181 rows in 24 h (`assign` 177,
       `bearer` 4), 21 in the last hour, one at 15:58:29Z, after the restart (read from
       ac-mbm5 at 15:59Z). We relayed the check in the same release, so it went live before
       4.3 had tuned the rule. While the check is red, a new finding does not change its
