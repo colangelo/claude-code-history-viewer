@@ -263,6 +263,93 @@ async fn resent_batch_adds_no_row_and_no_finding() {
     assert_eq!(findings_for(&hub, id).await.len(), 3);
 }
 
+/// A Claude Code `attachment` record as the daemon sends it since #46: no
+/// content, the payload inside `raw.attachment`.
+fn attachment_msg(session: &str, key: &str, payload: Option<serde_json::Value>) -> IngestMessage {
+    let mut m = msg(session, key, "2026-01-01T00:00:00Z", "");
+    m.message_type = Some("attachment".into());
+    m.role = None;
+    m.content = None;
+    m.search_text = Some(String::new());
+    m.raw = json!({ "uuid": format!("u-{key}"), "type": "attachment" });
+    if let Some(p) = payload {
+        m.raw["attachment"] = p;
+    }
+    m
+}
+
+#[tokio::test]
+async fn attachment_payload_in_raw_is_redacted() {
+    let hub = spawn(vec![Rule::Prefix]).await;
+    let secret = synthetic_token();
+    let payload =
+        json!({ "type": "hook_additional_context", "content": [format!("export GH={secret}")] });
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-att",
+            vec![attachment_msg("s-att", "k1", Some(payload))],
+        ),
+    )
+    .await;
+
+    let (id, raw, content, _) = stored(&hub, "k1").await;
+    assert!(
+        !raw.contains(&secret),
+        "the attachment payload kept the value"
+    );
+    assert!(raw.contains("[REDACTED:prefix]"), "raw lacks the marker");
+    assert_eq!(content, "", "an attachment row has no content");
+    assert_eq!(
+        findings_for(&hub, id).await,
+        vec![("raw".to_string(), "prefix".to_string(), true)]
+    );
+}
+
+/// #46 is for new data only: a record archived before #46 (no payload) that
+/// comes back under the same key with a payload is NOT stored again and NOT
+/// rewritten. The daemon keeps the key payload-free for exactly this.
+#[tokio::test]
+async fn attachment_payload_does_not_backfill_an_archived_record() {
+    let hub = spawn(Vec::new()).await;
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-old",
+            vec![attachment_msg("s-old", "k1", None)],
+        ),
+    )
+    .await;
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-old",
+            vec![attachment_msg(
+                "s-old",
+                "k1",
+                Some(json!({ "type": "file" })),
+            )],
+        ),
+    )
+    .await;
+
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM messages WHERE machine_id = $1")
+        .bind(hub.machine_id)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let (_, raw, ..) = stored(&hub, "k1").await;
+    let raw: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        raw.get("attachment").is_none(),
+        "the archived record was rewritten: {raw}"
+    );
+}
+
 #[tokio::test]
 async fn token_counts_yield_no_finding() {
     let hub = spawn(vec![Rule::Assign, Rule::Prefix, Rule::Bearer, Rule::Pem]).await;

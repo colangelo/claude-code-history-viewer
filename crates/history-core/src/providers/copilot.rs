@@ -423,6 +423,7 @@ mod tests {
             compact_metadata: None,
             microcompact_metadata: None,
             provider: Some(PROVIDER_ID.to_string()),
+            attachment: None,
         }
     }
 

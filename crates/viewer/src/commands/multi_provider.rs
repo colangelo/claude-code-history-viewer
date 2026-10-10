@@ -1010,6 +1010,7 @@ mod tests {
             compact_metadata: None,
             microcompact_metadata: None,
             provider: Some("claude".to_string()),
+            attachment: None,
         }
     }
 

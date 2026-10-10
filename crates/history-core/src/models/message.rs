@@ -91,6 +91,10 @@ pub struct RawLogEntry {
     // Meta message flag (internal/command-related messages)
     #[serde(rename = "isMeta")]
     pub is_meta: Option<bool>,
+
+    /// Payload of a Claude Code `type: "attachment"` record (hook output, file
+    /// mentions, reminders). Kept opaque: the shape is Claude Code's (#46).
+    pub attachment: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +178,13 @@ pub struct ClaudeMessage {
     /// Provider identifier (claude, codex, opencode)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+
+    /// Claude Code `attachment` record payload, passed through untouched (#46).
+    /// It reaches the archive inside `raw` only: it is deliberately NOT part of
+    /// the sync daemon's `message_key`, so records archived before #46 keep
+    /// their keys instead of being stored a second time with a payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +267,7 @@ impl TryFrom<RawLogEntry> for ClaudeMessage {
             compact_metadata: log_entry.compact_metadata,
             microcompact_metadata: log_entry.microcompact_metadata,
             provider: None,
+            attachment: log_entry.attachment,
         })
     }
 }
@@ -427,6 +439,7 @@ mod tests {
             compact_metadata: None,
             microcompact_metadata: None,
             provider: None,
+            attachment: None,
         };
 
         let serialized = serde_json::to_string(&message).unwrap();
@@ -472,6 +485,7 @@ mod tests {
             compact_metadata: None,
             microcompact_metadata: None,
             provider: None,
+            attachment: None,
         };
 
         let serialized = serde_json::to_string(&message).unwrap();
