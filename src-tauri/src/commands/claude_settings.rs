@@ -175,12 +175,11 @@ fn write_settings_file(path: &Path, content: &str) -> Result<(), String> {
 ///
 /// # Returns
 /// JSON string of settings, or empty object "{}" if file doesn't exist
-#[tauri::command]
 pub async fn get_settings_by_scope(
     scope: String,
     project_path: Option<String>,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = get_settings_path(&scope, project_path.as_deref())?;
         read_settings_file(&path)
     })
@@ -197,7 +196,6 @@ pub async fn get_settings_by_scope(
 ///
 /// # Errors
 /// Returns error if scope is "managed" or if JSON is invalid
-#[tauri::command]
 pub async fn save_settings(
     scope: String,
     content: String,
@@ -208,7 +206,7 @@ pub async fn save_settings(
         return Err("Cannot modify managed settings (read-only)".to_string());
     }
 
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = get_settings_path(&scope, project_path.as_deref())?;
         write_settings_file(&path, &content)
     })
@@ -223,9 +221,8 @@ pub async fn save_settings(
 ///
 /// # Returns
 /// `AllSettings` struct with all 4 scopes (each is `Option<String>`)
-#[tauri::command]
 pub async fn get_all_settings(project_path: Option<String>) -> Result<AllSettings, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let user = get_user_settings_path()
             .ok()
             .and_then(|p| read_settings_file(&p).ok());
@@ -259,9 +256,8 @@ pub async fn get_all_settings(project_path: Option<String>) -> Result<AllSetting
 ///
 /// # Returns
 /// `MCPServers` struct with merged servers from both sources
-#[tauri::command]
 pub async fn get_mcp_servers() -> Result<MCPServers, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tokio::task::spawn_blocking(|| {
         let mut merged = serde_json::Map::new();
 
         // Read from ~/.claude/settings.json (mcpServers field)
@@ -309,9 +305,8 @@ pub async fn get_mcp_servers() -> Result<MCPServers, String> {
 ///
 /// # Returns
 /// `AllMCPServers` struct with servers from each source separately
-#[tauri::command]
 pub async fn get_all_mcp_servers(project_path: Option<String>) -> Result<AllMCPServers, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         // User settings.json mcpServers (legacy)
         let user_settings = get_user_settings_path().ok().and_then(|p| {
             read_settings_file(&p).ok().and_then(|content| {
@@ -402,7 +397,6 @@ pub async fn get_all_mcp_servers(project_path: Option<String>) -> Result<AllMCPS
 /// * `source` - One of: `user_settings`, `user_mcp`, `project_mcp`, `user_claude_json`, `local_claude_json`
 /// * `servers` - JSON string of MCP servers object
 /// * `project_path` - Required for `project_mcp` and `local_claude_json` sources
-#[tauri::command]
 pub async fn save_mcp_servers(
     source: String,
     servers: String,
@@ -412,7 +406,7 @@ pub async fn save_mcp_servers(
     let servers_value: serde_json::Value =
         serde_json::from_str(&servers).map_err(|e| format!("Invalid MCP servers JSON: {e}"))?;
 
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         match source.as_str() {
             "user_settings" => {
                 // Update mcpServers field in ~/.claude/settings.json (legacy)
@@ -519,11 +513,10 @@ pub struct ClaudeJsonConfig {
 ///
 /// # Returns
 /// `ClaudeJsonConfig` with raw JSON and extracted fields
-#[tauri::command]
 pub async fn get_claude_json_config(
     project_path: Option<String>,
 ) -> Result<ClaudeJsonConfig, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = get_claude_json_path()?;
         let file_path = path.to_string_lossy().to_string();
 
@@ -666,9 +659,8 @@ fn strip_windows_prefix(path: &Path) -> PathBuf {
 /// # Arguments
 /// * `path` - Absolute path chosen by user via save dialog
 /// * `content` - Text content to write
-#[tauri::command]
 pub async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = PathBuf::from(path);
 
         validate_dialog_path(&path)?;
@@ -701,10 +693,9 @@ pub async fn write_text_file(path: String, content: String) -> Result<(), String
 /// # Arguments
 /// * `path` - Absolute path chosen by user via save dialog
 /// * `data` - Base64-encoded PNG data
-#[tauri::command]
 pub async fn save_screenshot(path: String, data: String) -> Result<(), String> {
     use base64::Engine;
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = PathBuf::from(&path);
         validate_dialog_path(&path)?;
 
@@ -734,9 +725,8 @@ pub async fn save_screenshot(path: String, data: String) -> Result<(), String> {
 ///
 /// # Arguments
 /// * `path` - Absolute path chosen by user via open dialog
-#[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = PathBuf::from(path);
 
         validate_dialog_path(&path)?;

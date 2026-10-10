@@ -15,11 +15,8 @@ name = "claude_code_history_viewer_lib"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
-webui-server = ["dep:axum", "dep:tower-http", "dep:tower", "dep:tokio", "dep:tokio-stream", "dep:rust-embed", "dep:mime_guess", "dep:argon2"]
-
-[build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+default = ["webui-server"]
+webui-server = ["dep:axum", "dep:tower-http", "dep:tower", "dep:tokio-stream", "dep:rust-embed", "dep:mime_guess", "dep:argon2"]
 
 [dependencies]
 # Tauri-free extraction/parse library shared with the sync daemon.
@@ -27,17 +24,6 @@ history-core = { path = "../crates/history-core" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.2", features = [] }
-tauri-plugin-log = "2.8.0"
-tauri-plugin-fs = "2.5.1"
-tauri-plugin-dialog = "2.7.1"
-tauri-plugin-store = "2.4.3"
-tauri-plugin-updater = "2.10.1"
-tauri-plugin-process = "2.3.1"
-tauri-plugin-http = "2.5.9"
-tauri-plugin-opener = "2.5.4"
-tauri-plugin-os = "2.3.2"
-tauri-plugin-single-instance = "2.4.2"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
@@ -65,7 +51,7 @@ argon2 = { version = "0.5", optional = true }
 axum = { version = "0.8", optional = true, features = ["json", "query", "tokio"] }
 tower-http = { version = "0.6", optional = true, features = ["cors", "fs", "trace"] }
 tower = { version = "0.5", optional = true, features = ["util"] }
-tokio = { version = "1.0", optional = true, features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 tokio-stream = { version = "0.1", optional = true, features = ["sync"] }
 rust-embed = { version = "8", optional = true }
 mime_guess = { version = "2", optional = true }

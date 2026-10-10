@@ -392,12 +392,6 @@ handler_no_params!(
     commands::metadata::get_metadata_folder_path
 );
 
-/// The `--session` preload hint is a desktop CLI flag; the server never has one,
-/// so this always answers `null` — the frontend's "no preload requested".
-pub async fn get_startup_session_hint() -> Json<Value> {
-    Json(Value::Null)
-}
-
 pub async fn get_server_config(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, ApiError> {

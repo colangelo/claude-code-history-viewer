@@ -532,7 +532,6 @@ fn jsonl_to_json_array(path: &Path) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 /// Returns the base path for archive storage: `~/.claude-history-viewer/archives/`
-#[tauri::command]
 #[allow(clippy::unused_async)]
 pub async fn get_archive_base_path() -> Result<String, String> {
     let path = get_archives_dir()?;
@@ -545,9 +544,8 @@ pub async fn get_archive_base_path() -> Result<String, String> {
 ///
 /// On first load, automatically migrates any legacy UUID-based archive directories
 /// to the new name-based format (e.g., `3f8a1b2c-...` → `My-Archive_3f8a1b2c`).
-#[tauri::command]
 pub async fn list_archives() -> Result<ArchiveManifest, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tokio::task::spawn_blocking(|| {
         let mut manifest = load_manifest()?;
         let mut changed = false;
         let mut migrated_pairs: Vec<(String, String)> = Vec::new();
@@ -626,7 +624,6 @@ pub async fn list_archives() -> Result<ArchiveManifest, String> {
 /// * `source_project_path` - Filesystem path of the originating project
 /// * `source_project_name` - Display name of the originating project
 /// * `include_subagents` - Whether to also copy subagent JSONL files
-#[tauri::command]
 pub async fn create_archive(
     name: String,
     description: Option<String>,
@@ -636,7 +633,7 @@ pub async fn create_archive(
     source_project_name: String,
     include_subagents: bool,
 ) -> Result<ArchiveEntry, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         if name.trim().is_empty() {
             return Err("Archive name is required".to_string());
         }
@@ -862,9 +859,8 @@ pub async fn create_archive(
 ///
 /// # Arguments
 /// * `archive_id` - UUID of the archive to delete
-#[tauri::command]
 pub async fn delete_archive(archive_id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         validate_archive_id(&archive_id)?;
 
         // Update manifest first, then delete directory.
@@ -898,9 +894,8 @@ pub async fn delete_archive(archive_id: String) -> Result<(), String> {
 /// * `new_name` - New human-readable name
 ///
 /// Returns the new archive ID (new directory name) so the frontend can update references.
-#[tauri::command]
 pub async fn rename_archive(archive_id: String, new_name: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         validate_archive_id(&archive_id)?;
 
         if new_name.trim().is_empty() {
@@ -996,9 +991,8 @@ pub async fn rename_archive(archive_id: String, new_name: String) -> Result<Stri
 ///
 /// # Arguments
 /// * `archive_id` - UUID of the archive
-#[tauri::command]
 pub async fn get_archive_sessions(archive_id: String) -> Result<Vec<ArchiveSessionInfo>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         validate_archive_id(&archive_id)?;
 
         let archive_dir = get_archive_dir(&archive_id)?;
@@ -1187,7 +1181,6 @@ pub async fn get_archive_sessions(archive_id: String) -> Result<Vec<ArchiveSessi
 /// # Arguments
 /// * `archive_id` - UUID of the archive
 /// * `session_file_name` - File name (e.g. `"abc123.jsonl"`) within the archive's sessions/ dir
-#[tauri::command]
 pub async fn load_archive_session_messages(
     archive_id: String,
     session_file_name: String,
@@ -1235,9 +1228,8 @@ pub async fn load_archive_session_messages(
 }
 
 /// Calculates the total disk usage of all archives.
-#[tauri::command]
 pub async fn get_archive_disk_usage() -> Result<ArchiveDiskUsage, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tokio::task::spawn_blocking(|| {
         let archives_dir = get_archives_dir()?;
 
         if !archives_dir.exists() {
@@ -1290,12 +1282,11 @@ pub async fn get_archive_disk_usage() -> Result<ArchiveDiskUsage, String> {
 /// # Arguments
 /// * `project_path` - Absolute path to the Claude project directory (containing JSONL files)
 /// * `threshold_days` - Number of days before expiry to consider "expiring"
-#[tauri::command]
 pub async fn get_expiring_sessions(
     project_path: String,
     threshold_days: i64,
 ) -> Result<Vec<ExpiringSession>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         // Security: reject path traversal
         let project_pb = PathBuf::from(&project_path);
         if !project_pb.is_absolute() {
@@ -1436,12 +1427,11 @@ pub async fn get_expiring_sessions(
 /// # Arguments
 /// * `session_file_path` - Absolute path to the JSONL session file
 /// * `format` - Either `"markdown"` or `"json"`
-#[tauri::command]
 pub async fn export_session(
     session_file_path: String,
     format: String,
 ) -> Result<ExportResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = PathBuf::from(&session_file_path);
 
         // Security checks

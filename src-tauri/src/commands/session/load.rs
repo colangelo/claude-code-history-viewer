@@ -10,7 +10,6 @@ use crate::models::{ClaudeMessage, ClaudeSession, MessagePage};
 // consumers keep resolving it unchanged.
 pub use history_core::providers::claude::SubagentSession;
 
-#[tauri::command]
 pub async fn load_project_sessions(
     project_path: String,
     exclude_sidechain: Option<bool>,
@@ -18,18 +17,15 @@ pub async fn load_project_sessions(
     history_core::providers::claude::load_sessions(&project_path, exclude_sidechain)
 }
 
-#[tauri::command]
 pub async fn load_session_messages(session_path: String) -> Result<Vec<ClaudeMessage>, String> {
     history_core::providers::claude::load_messages(&session_path)
 }
 
 /// Returns subagent sessions for a given parent session file.
-#[tauri::command]
 pub async fn get_session_subagents(session_path: String) -> Result<Vec<SubagentSession>, String> {
     history_core::providers::claude::subagents(&session_path)
 }
 
-#[tauri::command]
 pub async fn load_session_messages_paginated(
     session_path: String,
     offset: usize,
@@ -44,7 +40,6 @@ pub async fn load_session_messages_paginated(
     )
 }
 
-#[tauri::command]
 pub async fn get_session_message_count(
     session_path: String,
     exclude_sidechain: Option<bool>,

@@ -90,7 +90,6 @@ fn validate_settings_json(settings_json: &str) -> Result<(), String> {
 }
 
 /// Save a preset to disk with atomic write
-#[tauri::command]
 pub async fn save_preset(input: PresetInput) -> Result<PresetData, String> {
     // Validate settings JSON
     validate_settings_json(&input.settings)?;
@@ -100,7 +99,7 @@ pub async fn save_preset(input: PresetInput) -> Result<PresetData, String> {
     let now = Utc::now().to_rfc3339();
 
     // Check if preset already exists to preserve created_at
-    let created_at = tauri::async_runtime::spawn_blocking({
+    let created_at = tokio::task::spawn_blocking({
         let id = id.clone();
         let now = now.clone();
         move || {
@@ -130,7 +129,7 @@ pub async fn save_preset(input: PresetInput) -> Result<PresetData, String> {
 
     // Perform blocking file I/O
     let preset_clone = preset.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         ensure_presets_folder()?;
         let path = get_preset_path(&preset_clone.id)?;
 
@@ -168,9 +167,8 @@ pub async fn save_preset(input: PresetInput) -> Result<PresetData, String> {
 }
 
 /// Load all presets from disk
-#[tauri::command]
 pub async fn load_presets() -> Result<Vec<PresetData>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tokio::task::spawn_blocking(|| {
         let folder = get_presets_folder()?;
 
         // Return empty vec if folder doesn't exist yet
@@ -217,9 +215,8 @@ pub async fn load_presets() -> Result<Vec<PresetData>, String> {
 }
 
 /// Load a single preset by ID
-#[tauri::command]
 pub async fn get_preset(id: String) -> Result<Option<PresetData>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = get_preset_path(&id)?;
 
         if !path.exists() {
@@ -239,9 +236,8 @@ pub async fn get_preset(id: String) -> Result<Option<PresetData>, String> {
 }
 
 /// Delete a preset by ID
-#[tauri::command]
 pub async fn delete_preset(id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let path = get_preset_path(&id)?;
 
         if !path.exists() {

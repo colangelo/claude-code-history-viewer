@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::Path;
-use tauri::command;
 
 /// Removes a file or directory: tries the system trash first, falls back to permanent deletion.
 ///
@@ -30,7 +29,6 @@ fn remove_path(path: &Path) -> Result<(), String> {
 ///
 /// If the system trash is unavailable (e.g. a disabled Recycle Bin on Windows), falls back
 /// to permanent deletion so the operation does not fail outright.
-#[command]
 pub async fn delete_session(file_path: String) -> Result<(), String> {
     if file_path.starts_with("forgecode://") || file_path.starts_with("forgecode-db://") {
         return crate::providers::forgecode::delete_conversation(&file_path);

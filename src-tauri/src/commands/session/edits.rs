@@ -566,7 +566,6 @@ pub struct PaginatedRecentEdits {
 /// Returns the LATEST content for each unique file path, sorted by timestamp descending
 /// Only includes files that belong to the project's working directory
 /// Supports pagination with offset and limit parameters
-#[tauri::command]
 pub async fn get_recent_edits(
     project_path: String,
     offset: Option<usize>,
@@ -621,7 +620,6 @@ pub async fn get_recent_edits(
 /// This prevents data loss if the write operation fails midway.
 ///
 /// Security: Validates path to prevent path traversal attacks
-#[tauri::command]
 pub async fn restore_file(file_path: String, content: String) -> Result<(), String> {
     use std::fs;
     use std::path::Path;

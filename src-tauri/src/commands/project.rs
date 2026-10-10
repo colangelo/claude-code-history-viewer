@@ -4,7 +4,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-#[tauri::command]
 pub async fn get_git_log(actual_path: String, limit: usize) -> Result<Vec<GitCommit>, String> {
     // Validate path is absolute and exists
     let path_buf = PathBuf::from(&actual_path);
@@ -56,7 +55,6 @@ pub async fn get_git_log(actual_path: String, limit: usize) -> Result<Vec<GitCom
     Ok(commits)
 }
 
-#[tauri::command]
 pub async fn get_claude_folder_path() -> Result<String, String> {
     let home_dir =
         dirs::home_dir().ok_or("HOME_DIRECTORY_NOT_FOUND:Could not determine home directory")?;
@@ -78,7 +76,6 @@ pub async fn get_claude_folder_path() -> Result<String, String> {
     Ok(claude_path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
 pub async fn validate_claude_folder(path: String) -> Result<bool, String> {
     let path_buf = PathBuf::from(&path);
 
@@ -105,7 +102,6 @@ pub async fn validate_claude_folder(path: String) -> Result<bool, String> {
 /// Unlike `validate_claude_folder` (which expects a `.claude` directory),
 /// this accepts any absolute directory containing a `projects/` subfolder
 /// and applies symlink safety checks.
-#[tauri::command]
 pub async fn validate_custom_claude_dir(path: String) -> Result<bool, String> {
     let path_buf = PathBuf::from(&path);
     match crate::utils::validate_custom_claude_path(&path_buf) {
@@ -118,7 +114,6 @@ pub async fn validate_custom_claude_dir(path: String) -> Result<bool, String> {
 ///
 /// Returns `Some(path)` if the env var is set and points to a valid Claude
 /// configuration directory (has a `projects/` subfolder). Returns `None` otherwise.
-#[tauri::command]
 pub async fn detect_claude_config_dir() -> Result<Option<String>, String> {
     let raw = match std::env::var("CLAUDE_CONFIG_DIR") {
         Ok(val) if !val.trim().is_empty() => val.trim().to_string(),
@@ -151,7 +146,6 @@ pub async fn detect_claude_config_dir() -> Result<Option<String>, String> {
     }
 }
 
-#[tauri::command]
 pub async fn scan_projects(claude_path: String) -> Result<Vec<ClaudeProject>, String> {
     history_core::providers::claude::scan_projects(&claude_path)
 }

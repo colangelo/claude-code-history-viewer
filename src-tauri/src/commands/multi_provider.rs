@@ -15,13 +15,11 @@ pub struct CustomClaudePathParam {
 }
 
 /// Detect all available providers
-#[tauri::command]
 pub async fn detect_providers() -> Result<Vec<providers::ProviderInfo>, String> {
     Ok(providers::detect_providers())
 }
 
 /// Scan projects from all (or selected) providers
-#[tauri::command]
 pub async fn scan_all_projects(
     claude_path: Option<String>,
     active_providers: Option<Vec<String>>,
@@ -154,7 +152,7 @@ pub async fn scan_all_projects(
         .map(|(name, scan)| {
             let name = *name;
             let scan = *scan;
-            tauri::async_runtime::spawn_blocking(move || (name, scan()))
+            tokio::task::spawn_blocking(move || (name, scan()))
         })
         .collect();
 
@@ -289,7 +287,6 @@ pub async fn scan_all_projects(
 }
 
 /// Load sessions for a specific provider's project
-#[tauri::command]
 pub async fn load_provider_sessions(
     provider: String,
     project_path: String,
@@ -339,7 +336,6 @@ pub async fn load_provider_sessions(
 }
 
 /// Load messages from a specific provider's session
-#[tauri::command]
 pub async fn load_provider_messages(
     provider: String,
     session_path: String,
@@ -387,7 +383,6 @@ pub async fn load_provider_messages(
 }
 
 /// Search across all (or selected) providers
-#[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn search_all_providers(
     claude_path: Option<String>,

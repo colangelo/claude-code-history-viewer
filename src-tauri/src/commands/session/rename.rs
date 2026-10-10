@@ -13,7 +13,6 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::command;
 use uuid::Uuid;
 
 use crate::utils::is_safe_storage_id;
@@ -90,7 +89,6 @@ fn parse_opencode_session_path(session_path: &str) -> Result<(String, String), S
 /// # Returns
 /// * `Ok(NativeRenameResult)` - Success with previous and new titles
 /// * `Err(String)` - Error description
-#[command]
 pub async fn rename_session_native(
     file_path: String,
     new_title: String,
@@ -649,13 +647,11 @@ fn find_first_user_message_index(lines: &[String]) -> Result<usize, String> {
 }
 
 /// Resets session name to original (removes title prefix)
-#[command]
 pub async fn reset_session_native_name(file_path: String) -> Result<NativeRenameResult, String> {
     rename_session_native(file_path, String::new()).await
 }
 
 /// Renames an `OpenCode` session by updating the session title field in storage JSON.
-#[command]
 pub async fn rename_opencode_session_title(
     session_path: String,
     new_title: String,

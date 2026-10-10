@@ -8,7 +8,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::State;
 
 /// Validate a metadata project key.
 ///
@@ -77,9 +76,8 @@ fn ensure_metadata_folder() -> Result<PathBuf, String> {
 }
 
 /// Get the metadata folder path
-#[tauri::command]
 pub async fn get_metadata_folder_path() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    tokio::task::spawn_blocking(|| {
         let path = get_metadata_folder()?;
         Ok(path.to_string_lossy().to_string())
     })
@@ -89,12 +87,11 @@ pub async fn get_metadata_folder_path() -> Result<String, String> {
 
 /// Load user metadata from disk
 /// Creates default metadata if file doesn't exist
-#[tauri::command]
-pub async fn load_user_metadata(state: State<'_, MetadataState>) -> Result<UserMetadata, String> {
+pub async fn load_user_metadata(state: &MetadataState) -> Result<UserMetadata, String> {
     let path = get_user_data_path()?;
 
     // Perform blocking file I/O off the async runtime
-    let metadata = tauri::async_runtime::spawn_blocking(move || {
+    let metadata = tokio::task::spawn_blocking(move || {
         if path.exists() {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("Failed to read metadata file: {e}"))?;
@@ -140,15 +137,14 @@ pub(crate) fn save_metadata_to_disk(metadata: &UserMetadata) -> Result<(), Strin
 }
 
 /// Save user metadata to disk with atomic write
-#[tauri::command]
 pub async fn save_user_metadata(
     metadata: UserMetadata,
-    state: State<'_, MetadataState>,
+    state: &MetadataState,
 ) -> Result<(), String> {
     let metadata_clone = metadata.clone();
 
     // Perform blocking file I/O off the async runtime
-    tauri::async_runtime::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
+    tokio::task::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
         .await
         .map_err(|e| format!("Task join error: {e}"))??;
 
@@ -163,11 +159,10 @@ pub async fn save_user_metadata(
 }
 
 /// Update metadata for a specific session
-#[tauri::command]
 pub async fn update_session_metadata(
     session_id: String,
     update: SessionMetadata,
-    state: State<'_, MetadataState>,
+    state: &MetadataState,
 ) -> Result<UserMetadata, String> {
     // Perform quick in-memory mutation while holding lock, then release
     let metadata_to_save = {
@@ -190,7 +185,7 @@ pub async fn update_session_metadata(
 
     // Perform blocking file I/O off the async runtime
     let metadata_clone = metadata_to_save.clone();
-    tauri::async_runtime::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
+    tokio::task::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
         .await
         .map_err(|e| format!("Task join error: {e}"))??;
 
@@ -198,11 +193,10 @@ pub async fn update_session_metadata(
 }
 
 /// Update metadata for a specific project
-#[tauri::command]
 pub async fn update_project_metadata(
     project_path: String,
     update: ProjectMetadata,
-    state: State<'_, MetadataState>,
+    state: &MetadataState,
 ) -> Result<UserMetadata, String> {
     // Validate that project path is absolute
     validate_project_metadata_key(&project_path)?;
@@ -228,7 +222,7 @@ pub async fn update_project_metadata(
 
     // Perform blocking file I/O off the async runtime
     let metadata_clone = metadata_to_save.clone();
-    tauri::async_runtime::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
+    tokio::task::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
         .await
         .map_err(|e| format!("Task join error: {e}"))??;
 
@@ -236,10 +230,9 @@ pub async fn update_project_metadata(
 }
 
 /// Update global user settings
-#[tauri::command]
 pub async fn update_user_settings(
     settings: UserSettings,
-    state: State<'_, MetadataState>,
+    state: &MetadataState,
 ) -> Result<UserMetadata, String> {
     // Perform quick in-memory mutation while holding lock, then release
     let metadata_to_save = {
@@ -256,7 +249,7 @@ pub async fn update_user_settings(
 
     // Perform blocking file I/O off the async runtime
     let metadata_clone = metadata_to_save.clone();
-    tauri::async_runtime::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
+    tokio::task::spawn_blocking(move || save_metadata_to_disk(&metadata_clone))
         .await
         .map_err(|e| format!("Task join error: {e}"))??;
 
@@ -264,10 +257,9 @@ pub async fn update_user_settings(
 }
 
 /// Check if a project should be hidden based on metadata
-#[tauri::command]
 pub async fn is_project_hidden(
     project_path: String,
-    state: State<'_, MetadataState>,
+    state: &MetadataState,
 ) -> Result<bool, String> {
     // Validate that project path is absolute
     validate_project_metadata_key(&project_path)?;
@@ -286,11 +278,10 @@ pub async fn is_project_hidden(
 }
 
 /// Get the display name for a session (custom name or fallback to summary)
-#[tauri::command]
 pub async fn get_session_display_name(
     session_id: String,
     fallback_summary: Option<String>,
-    state: State<'_, MetadataState>,
+    state: &MetadataState,
 ) -> Result<Option<String>, String> {
     let cached = state
         .metadata

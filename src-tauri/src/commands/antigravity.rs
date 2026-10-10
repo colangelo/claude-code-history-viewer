@@ -9,13 +9,11 @@ pub use history_core::antigravity::*;
 
 use history_core::models::{AntigravityProjectSummary, AntigravityState, PersistedSessionState};
 
-#[tauri::command]
 pub async fn load_antigravity_state() -> Result<AntigravityState, String> {
     let root = resolve_antigravity_root().ok_or("Cannot determine antigravity root directory")?;
     load_antigravity_state_impl(&root)
 }
 
-#[tauri::command]
 pub async fn get_antigravity_session(
     session_id: String,
 ) -> Result<Option<PersistedSessionState>, String> {
@@ -27,7 +25,6 @@ pub async fn get_antigravity_session(
     Ok(state.sessions.get(&session_id).cloned())
 }
 
-#[tauri::command]
 pub async fn get_antigravity_project_summary(
     root_path: Option<String>,
 ) -> Result<AntigravityProjectSummary, String> {

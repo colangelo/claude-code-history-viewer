@@ -402,7 +402,6 @@ pub fn apply_search_filters(
         .collect()
 }
 
-#[tauri::command]
 pub async fn search_messages(
     claude_path: String,
     query: String,

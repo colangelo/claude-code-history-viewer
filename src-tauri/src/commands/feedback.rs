@@ -16,8 +16,9 @@ pub struct FeedbackData {
     pub feedback_type: String, // "bug", "feature", "improvement", "other"
 }
 
-#[tauri::command]
-pub async fn send_feedback(feedback: FeedbackData) -> Result<(), String> {
+/// Build the `mailto:` link for a feedback report. The browser opens it: the
+/// server is not the reporter's machine, so it must not launch a mail client.
+pub async fn send_feedback(feedback: FeedbackData) -> Result<String, String> {
     let mut email_body = feedback.body.clone();
 
     // Include system information
@@ -52,14 +53,9 @@ pub async fn send_feedback(feedback: FeedbackData) -> Result<(), String> {
     let mailto_url =
         format!("mailto:{feedback_email}?subject={encoded_subject}&body={encoded_body}");
 
-    // Open with system default email app
-    tauri_plugin_opener::open_url(mailto_url, None::<String>)
-        .map_err(|e| format!("Failed to open email client: {e}"))?;
-
-    Ok(())
+    Ok(mailto_url)
 }
 
-#[tauri::command]
 pub async fn get_system_info() -> Result<SystemInfo, String> {
     Ok(SystemInfo {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -67,58 +63,4 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         os_version: "Unknown".to_string(), // Can be obtained from OS plugin
         arch: std::env::consts::ARCH.to_string(),
     })
-}
-
-#[tauri::command]
-pub async fn open_github_issues(feedback: Option<FeedbackData>) -> Result<(), String> {
-    let base_url = "https://github.com/jhlee0409/claude-code-history-viewer/issues/new";
-
-    let github_url = match feedback {
-        Some(fb) => {
-            if fb.subject.len() > 200 || fb.body.len() > 2000 {
-                return Err("Input too long".to_string());
-            }
-
-            let title = match fb.feedback_type.as_str() {
-                "bug" => format!("[Bug Report] {}", fb.subject),
-                "feature" => format!("[Feature Request] {}", fb.subject),
-                "improvement" => format!("[Improvement] {}", fb.subject),
-                _ => fb.subject.clone(),
-            };
-
-            let label = match fb.feedback_type.as_str() {
-                "bug" => "bug",
-                "feature" | "improvement" => "enhancement",
-                _ => "",
-            };
-
-            let mut body = fb.body.clone();
-            if fb.include_system_info {
-                if let Ok(info) = get_system_info().await {
-                    body.push_str("\n\n---\n**System Information**\n");
-                    body.push_str(&format!("- App Version: {}\n", info.app_version));
-                    body.push_str(&format!("- OS: {} {}\n", info.os_type, info.os_version));
-                    body.push_str(&format!("- Architecture: {}\n", info.arch));
-                }
-            }
-
-            let encoded_title = urlencoding::encode(&title);
-            let encoded_body = urlencoding::encode(&body);
-
-            if label.is_empty() {
-                format!("{base_url}?title={encoded_title}&body={encoded_body}")
-            } else {
-                let encoded_label = urlencoding::encode(label);
-                format!(
-                    "{base_url}?title={encoded_title}&body={encoded_body}&labels={encoded_label}"
-                )
-            }
-        }
-        None => base_url.to_string(),
-    };
-
-    tauri_plugin_opener::open_url(github_url, None::<String>)
-        .map_err(|e| format!("Failed to open GitHub: {e}"))?;
-
-    Ok(())
 }

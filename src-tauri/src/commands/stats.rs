@@ -2662,7 +2662,6 @@ fn get_provider_session_comparison(
     })
 }
 
-#[tauri::command]
 /// Return token stats for a single session.
 pub async fn get_session_token_stats(
     session_path: String,
@@ -2921,7 +2920,6 @@ fn extract_session_token_stats_sync(
     })
 }
 
-#[tauri::command]
 /// Return paginated token stats for a project.
 pub async fn get_project_token_stats(
     project_path: String,
@@ -3016,7 +3014,6 @@ pub async fn get_project_token_stats(
     })
 }
 
-#[tauri::command]
 /// Return an aggregate stats summary for a project.
 pub async fn get_project_stats_summary(
     project_path: String,
@@ -3319,7 +3316,6 @@ fn process_session_file_for_comparison(
     })
 }
 
-#[tauri::command]
 /// Compare a session against the rest of its project.
 pub async fn get_session_comparison(
     session_id: String,
@@ -3427,7 +3423,6 @@ pub async fn get_session_comparison(
     })
 }
 
-#[tauri::command]
 /// Return an aggregate stats summary across all selected providers.
 pub async fn get_global_stats_summary(
     claude_path: String,

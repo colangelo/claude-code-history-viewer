@@ -1,14 +1,12 @@
 use crate::utils::is_safe_storage_id;
 use lru::LruCache;
-use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_mini::{new_debouncer, DebouncedEvent, DebouncedEventKind, Debouncer};
+use notify_debouncer_mini::{DebouncedEvent, DebouncedEventKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,8 +15,6 @@ pub struct FileWatchEvent {
     pub session_path: String,
     pub event_type: String,
 }
-
-type WatcherMap = Arc<Mutex<Option<Debouncer<RecommendedWatcher>>>>;
 
 /// LRU cache for `OpenCode` session-to-project mappings, capped at 10,000 entries.
 /// Each entry is ~150 bytes, bounding memory at ~1.5MB regardless of watcher activity.
@@ -48,125 +44,6 @@ struct FileSignature {
 
 static WATCHED_FILE_SIGNATURES: OnceLock<Mutex<HashMap<PathBuf, FileSignature>>> = OnceLock::new();
 
-/// Start watching the Claude projects directory for file changes
-#[tauri::command]
-pub async fn start_file_watcher(
-    app_handle: AppHandle,
-    claude_folder_path: String,
-    custom_claude_paths: Option<Vec<super::multi_provider::CustomClaudePathParam>>,
-) -> Result<String, String> {
-    let base_path = PathBuf::from(&claude_folder_path);
-    let projects_path = base_path.join("projects");
-
-    // Reject symlinks to prevent symlink attacks
-    let base_meta = std::fs::symlink_metadata(&base_path)
-        .map_err(|e| format!("Cannot read metadata for base path: {e}"))?;
-    if base_meta.file_type().is_symlink() {
-        return Err("Claude folder path must not be a symlink".to_string());
-    }
-
-    let projects_meta = std::fs::symlink_metadata(&projects_path)
-        .map_err(|e| format!("Cannot read metadata for projects path: {e}"))?;
-    if projects_meta.file_type().is_symlink() {
-        return Err("Projects directory must not be a symlink".to_string());
-    }
-
-    // Canonicalize and verify path traversal safety
-    let canonical_base = std::fs::canonicalize(&base_path)
-        .map_err(|e| format!("Failed to canonicalize base path: {e}"))?;
-    let canonical_projects = std::fs::canonicalize(&projects_path)
-        .map_err(|e| format!("Failed to canonicalize projects path: {e}"))?;
-
-    if !canonical_projects.starts_with(&canonical_base) {
-        return Err("Projects path escapes the allowed base directory".to_string());
-    }
-
-    // Verify it is a directory
-    if !canonical_projects.is_dir() {
-        return Err(format!(
-            "Projects path is not a directory: {}",
-            canonical_projects.display()
-        ));
-    }
-
-    // Create a debounced watcher
-    let app_handle_clone = app_handle.clone();
-    let mut debouncer = new_debouncer(
-        Duration::from_millis(500),
-        move |result: Result<Vec<DebouncedEvent>, notify::Error>| match result {
-            Ok(events) => {
-                for event in events {
-                    handle_file_event(&app_handle_clone, &event);
-                }
-            }
-            Err(error) => {
-                log::error!("File watcher error: {error:?}");
-            }
-        },
-    )
-    .map_err(|e| format!("Failed to create file watcher: {e}"))?;
-
-    // Start watching the canonicalized projects directory recursively
-    debouncer
-        .watcher()
-        .watch(&canonical_projects, RecursiveMode::Recursive)
-        .map_err(|e| format!("Failed to watch directory: {e}"))?;
-    prime_watch_signatures(&canonical_projects);
-
-    // Also watch custom Claude directories if provided
-    if let Some(custom_paths) = custom_claude_paths {
-        for custom in &custom_paths {
-            let custom_base = PathBuf::from(&custom.path);
-            match crate::utils::validate_custom_claude_path(&custom_base) {
-                Ok(canonical_projects) => {
-                    if debouncer
-                        .watcher()
-                        .watch(&canonical_projects, RecursiveMode::Recursive)
-                        .is_ok()
-                    {
-                        prime_watch_signatures(&canonical_projects);
-                        log::info!(
-                            "File watcher added custom path: {}",
-                            canonical_projects.display()
-                        );
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Skipping invalid custom watch path: {e}");
-                }
-            }
-        }
-    }
-
-    // Store the debouncer in app state to prevent it from being dropped
-    let watcher_state: tauri::State<WatcherMap> = app_handle.state();
-    let mut watcher = watcher_state.lock().unwrap();
-    *watcher = Some(debouncer);
-
-    log::info!("File watcher started for: {}", canonical_projects.display());
-    Ok("watcher-started".to_string())
-}
-
-/// Stop the file watcher
-#[tauri::command]
-pub async fn stop_file_watcher(app_handle: AppHandle) -> Result<(), String> {
-    let watcher_state: tauri::State<WatcherMap> = app_handle.state();
-    let mut watcher = watcher_state.lock().unwrap();
-
-    if watcher.is_some() {
-        *watcher = None;
-        log::info!("File watcher stopped");
-        Ok(())
-    } else {
-        Err("No active file watcher found".to_string())
-    }
-}
-
-/// Convert a debounced filesystem event into a [`FileWatchEvent`] if applicable.
-///
-/// Returns `None` for non-`.jsonl` files or if project/session paths cannot be
-/// extracted.  This is the shared core used by both the Tauri desktop watcher
-/// and the `WebUI` SSE server watcher.
 pub fn to_file_watch_event(event: &DebouncedEvent) -> Option<FileWatchEvent> {
     let path = &event.path;
     let (project_path, session_path) = extract_provider_paths(path)?;
@@ -287,21 +164,6 @@ fn extract_provider_paths(path: &Path) -> Option<(String, String)> {
     }
 }
 
-fn handle_file_event(app_handle: &AppHandle, event: &DebouncedEvent) {
-    let Some(watch_event) = to_file_watch_event(event) else {
-        return;
-    };
-
-    super::session::invalidate_search_cache();
-
-    if let Err(e) = app_handle.emit(&watch_event.event_type, &watch_event) {
-        log::error!("Failed to emit file watch event: {e}");
-    }
-}
-
-/// Extract project path and session path from a `.jsonl` file path
-///
-/// Expected format: `~/.claude/projects/{project_name}/{session_file}.jsonl`
 fn extract_paths(path: &Path) -> Option<(PathBuf, PathBuf)> {
     let components: Vec<_> = path.components().collect();
     let len = components.len();
