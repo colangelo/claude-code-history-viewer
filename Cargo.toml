@@ -11,7 +11,7 @@ members = ["crates/viewer", "crates/history-core", "crates/protocol", "crates/hu
 # Management.
 # ---------------------------------------------------------------------------
 [workspace.package]
-version = "0.23.0"
+version = "0.24.0"
 
 # ---------------------------------------------------------------------------
 # Shared lint configuration. Both the desktop app and the extracted
