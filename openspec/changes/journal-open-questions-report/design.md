@@ -17,79 +17,80 @@ be read as "resolved".
 
 **Goals**
 - Turn hundreds of daily phrases into a short list of threads per project.
-- Claim nothing the data cannot support. In particular, never label a thread "resolved".
-- Reuse the existing embedder and sweep, with no new model and no external call.
+- A thread's state is what the record says: resolved only when a distilled day said so.
+- No new model, no extra model call: the links come out of the distill call that already runs.
 
 **Non-Goals**
-- An explicit resolution signal from the distiller (Q1).
-- Cross-project grouping. A thread lives in one project; identity-grouped projects
-  (`project-identity`) count as one project, as the journal already treats them.
+- Cross-project threads. A thread lives in one `project_path`, the key the journal already uses.
+- Merging restatements written before the change: each existing question becomes its own thread.
 - Webapp UI (Q2).
 
 ## Decisions
 
-### D1. Group by embedding similarity, per project, at request time
+### D1. Thread identity comes from the distiller (ac, Q1, 2026-10-10)
 
-Store one vector per question (`journal_question_embeddings(entry_id, ordinal, model,
-embedding)`), filled by the existing sweep as a new source. At request time, load the
-window's vectors for the project and merge with single-link clustering at a cosine
-threshold (start at 0.85, tuned in task 1.2), ordered by time. This is a few hundred
-vectors at most, so it runs in memory in milliseconds and needs no index.
+**Measured first (task 1.2, 2026-10-09): embedding grouping cannot do this.** At the only
+threshold with precision ≥ 0.95 (cosine ≥ 0.85), bge-small finds about half of the
+restatements a human marks and turns 107 questions into 97 threads. Related-but-different
+questions sit at 0.72–0.84, among the real restatements, so no threshold separates them.
 
-**Measured (task 1.2, 2026-10-09): embedding grouping alone is not good enough.** At the
-only threshold with precision ≥ 0.95 (cosine ≥ 0.85), it finds about half of the restatements a
-human marks and turns 107 questions into 97 threads. That is a negligible reduction, and every
-missed merge would show a live thread as `quiet`. Questions that are related but different sit
-at 0.72–0.84, right among the real restatements, so no threshold separates them. bge-small is a
-retrieval model, and short same-project phrases all look alike to it.
+So the distiller decides. Before writing a day's entry it fetches the project's unresolved
+threads (D3) and the prompt lists them as `T<id> (last seen <date>): <latest wording>`. Its
+JSON gains, per open question, `"continues": <id or null>`, and a top-level `"resolved": [ids]`
+for threads the day's work settled. The distiller drops ids it did not offer and any id that is
+both continued and resolved, so a model slip turns into a new thread, never a rejected entry.
 
-**Revised recommendation: thread identity comes from the distiller (Q1 becomes the main path).**
-When the distiller writes a day's entry, it already has the day's work in context. Give it the
-project's open threads from the last N active days (about 30 questions × 61 characters, so under
-1k extra prompt tokens per run) and have it output, for each question, either `continues
-<thread-id>` or new, plus the threads the day **resolved**. That gives exact thread identity and
-the resolution signal D2 couldn't derive. Embeddings stay useful only as a fallback merge at
-≥ 0.85 for entries written before the change.
+*Rejected:* embedding similarity (measured above); asking a model to group at read time
+(model spend on every read); exact-text dedup (the distiller rewords daily).
 
-*Rejected:* exact or normalised-text dedup. The distiller rephrases the same thread daily,
-so exact matching would almost never merge. *Rejected:* asking the model to group, which
-costs model spend on every read.
+### D2. Storage: two aligned arrays on the entry row, plus a sequence
 
-### D2. Three states, all derivable
+`journal_entries` gains `open_question_threads BIGINT[]` (same length and order as
+`open_questions`) and `resolved_threads BIGINT[]`, and the hub owns `journal_thread_id_seq`.
+On POST the hub assigns a fresh id to every question without one, checks that every given id
+already appears in `open_question_threads` of **another** entry of the same `project_path`,
+rejects an id both continued and resolved, and upserts the arrays with the rest of the row.
 
-| State | Rule | What it does NOT mean |
-|---|---|---|
-| `recurring` | restated on ≥ 2 distinct days | that it is still open today |
-| `quiet` | last restated before the project's N most recent active days (default N = 3) | that it was resolved: it may equally have been dropped or crowded out by the 5-question cap |
-| `new` | seen once, within the last N active days | anything about importance |
+Why not tables: a re-distill replaces the whole row today, and keeping links in the row keeps
+that true. A day's links and resolutions are rewritten with it, and nothing can be orphaned.
+A thread is just the set of questions that carry its id.
 
-"Active day" means a day with an `entry` row for the project. Measuring age in active days
-rather than calendar days avoids marking every thread quiet after a holiday.
+Migration `0012` seeds ids for every existing question (one thread each), so the distiller can
+link to them from the first run. About 2.5 k ids on 652 rows; skip rows get empty arrays.
 
-### D3. Endpoint shape
+### D3. States and the read endpoint
 
-`GET /v1/journal/open-questions?project=<path|identity>&days=30&state=…`. The response
-lists threads, newest `last_seen` first. Each thread has a representative phrase (the most
-recent wording), first and last seen dates, occurrence count, state, and entry ids. Without
-`project`, it returns per-project counts by state only. The endpoint uses the same read
-auth as `/v1/journal`.
+`GET /v1/journal/open-questions?project=<path>&days=30&state=open|quiet|resolved`, with the
+read auth of the other `/v1/journal` reads; the machine token the distiller holds passes it.
+Per project it returns threads, newest last seen first: thread id, latest wording, first and
+last seen, number of days mentioned, entry dates, state and the date it was resolved.
+
+| State | Rule |
+|---|---|
+| `resolved` | an entry of the project lists it in `resolved_threads`, dated after its last mention |
+| `quiet` | unresolved, and last mentioned before the project's N most recent active days (N = 3) |
+| `open` | unresolved and mentioned within them |
+
+A mention after a resolution reopens the thread. "Active day" is a day with an `entry` row for
+the project, so a holiday does not age threads. `quiet` still says what the old design said:
+possibly dropped, possibly crowded out by the 5-question cap. Without `project` the endpoint
+returns per-project counts by state.
+
+The distiller asks for `state=open,quiet` within 30 days **before** the entry date, capped at
+30 threads, newest first.
 
 ## Risks / Trade-offs
 
-- **Threshold too loose or tight.** Merging two different threads hides one; failing to merge
-  repeats one. *Mitigation:* task 1.2 hand-labels pairs from one project to pick the
-  threshold, and the representative wording plus the entry ids keep every merge auditable.
-- **bge-small on short phrases.** The vectors are tuned for retrieval, not paraphrase.
-  *Mitigation:* the same labelled set measures it. If the precision is poor, fall back to
-  stricter thresholds and accept more `new` duplicates. A wrong merge is worse than a
-  duplicate.
+- **The model links wrongly.** A wrong `continues` merges two threads; a wrong `resolved` hides
+  one. *Mitigation:* every link is auditable (entry dates per thread), a later mention reopens
+  a resolved thread, and the hub refuses ids from other projects or that never existed.
+- **Prompt cost.** At most 30 × ~61 characters, under 1 k tokens per distill; accepted by ac.
+- **Backfill order.** A backfill run can distill an older day after newer ones. The offered
+  threads are always those before the entry date, so links point backwards in time; a
+  resolution recorded by an older day can be overtaken by a newer mention, which reopens.
 
 ## Open Questions (ac)
 
-- **Q1 (now gating, see D1 "Measured").** Should the distiller get thread continuity and
-  a resolution signal? Rec: **yes**. It is the only approach that measured well enough, and it
-  costs under 1k prompt tokens per distill on the Codex path. It is a distiller prompt and
-  schema change (`scripts/cchv-distill.py` + the journal POST), and the distiller is an
-  installed copy, so it ships only through a release plus an infra reinstall.
+- ~~Q1~~ Decided 2026-10-10: yes, the distiller links and resolves.
 - **Q2.** Webapp surface: a "Threads" panel in the Journal tab? Rec: later, endpoint and
   `cchv-find` first.
