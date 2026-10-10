@@ -448,6 +448,37 @@ it pages infra to rotate the credential (Q-b). The authenticated
 `hub findings dry-run --since 24h`: read-only, it prints locations and value
 shapes, never values.
 
+**Until the `assign` deny list is tuned (#34 task 4.3), `503` is this check's steady
+state, not a window after a deploy.** Measured from ac-mbm5 at 2026-10-10T15:59Z, six
+minutes after the cchv-v0.24.0 restart: `total` 181 in 24 h (`assign` 177, `bearer` 4,
+`redacted` 0), 21 in the last hour, and `latest_detected_at` 15:58:29Z, which is after
+the restart. `assign` and `bearer` are flag-only, so new hits keep arriving and the 24 h
+window never empties. The Gatus check (infra `3219fc0`) went live before the tuning it
+was meant to follow, and that order was our relay's. While the check is red it cannot
+signal a new finding. If the alert fires on the state change, as Gatus alerts normally
+do, the next real credential sends no page.
+
+A row is one message × stored field × rule, so one hit can be up to three rows (`raw`,
+`content`, `search_text`). The 4.3 tuning input is already in the table and needs no
+full scan: `key_names` holds the secret-named keys and never a value.
+
+```sql
+SELECT cf.rule, coalesce(k, '-') AS key_name,
+       count(DISTINCT cf.message_ref) AS messages, count(*) AS rows
+FROM credential_findings cf
+LEFT JOIN LATERAL unnest(cf.key_names) AS k ON true
+WHERE cf.detected_at > now() - interval '24 hours'
+GROUP BY 1, 2 ORDER BY 3 DESC;
+-- where the hits come from (machine, session); still no values
+SELECT mc.hostname, s.session_id, count(DISTINCT cf.message_ref) AS messages
+FROM credential_findings cf
+JOIN messages m  ON m.id = cf.message_ref
+JOIN sessions s  ON s.id = m.session_id
+JOIN machines mc ON mc.machine_id = m.machine_id
+WHERE cf.detected_at > now() - interval '24 hours'
+GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20;
+```
+
 ### Optional: semantic journal search (embed model directory)
 
 Semantic + hybrid `mode=` on the `/v1/search` journal leg needs a local
@@ -2938,10 +2969,22 @@ Migration `0012` gave every question written before this its own thread id.
   a new thread); a new distiller against an old hub gets a 404 for the threads, logs a WARN
   and writes the entry without links. Both sides still have to ship for links to appear.
 - **Cost:** under 1 k extra prompt tokens per distilled entry, accepted by ac (Q1, 2026-10-10).
-- **Live check after the swap and reinstall:** the first entry written afterwards has
-  `cardinality(open_question_threads) = cardinality(open_questions)` (the CHECK enforces it)
-  and, once a project has earlier threads, a distiller log line `threads <date> <project>:
-  offered N, continued M, resolved K`.
+- **Live check after the swap and reinstall.** The cardinality equality
+  `cardinality(open_question_threads) = cardinality(open_questions)` cannot fail, so it is not
+  a check. The CHECK constraint enforces it on every row, and an OLD distiller satisfies it
+  too: it posts no links, and `journal_threads::resolve_links` gives each question a new id
+  (`None => vec![None; n]`). Corrected 2026-10-10 after infra planned to use it as the
+  distiller-half check for cchv-v0.24.0. These readings do tell the halves apart:
+  - **The distiller ran:** `/v1/healthz/journal` (no auth) reports
+    `last_tick_distiller_version` = the release and `last_tick_distiller_blob` =
+    `git rev-parse <tag>:scripts/cchv-distill.py`, on the first tick after the reinstall.
+  - **It used the threads:** the distiller log line `threads <date> <project>: offered N,
+    continued M, resolved K`. Only the new distiller writes it. It appears for any project
+    with earlier unresolved threads, which after `0012` is nearly every project with
+    journal history.
+  - **A link landed:** a new entry with a continued id (an id that already existed before
+    the entry) or a non-empty `resolved_threads`. Only the new distiller can post either. If
+    neither appears, the result is still valid: `M = 0, K = 0` is a legitimate answer.
 
 ## 3d. Project identity (cchv-v0.10.0): rollout order
 
