@@ -109,6 +109,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/healthz/ingest", get(health::healthz_ingest))
         .route("/v1/healthz/journal", get(health::healthz_journal))
         .route("/v1/healthz/stats", get(health::healthz_stats))
+        .route("/v1/healthz/findings", get(findings::healthz))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/findings/summary", get(findings::summary))
         .route("/v1/search", get(search::search))

@@ -1,7 +1,8 @@
 # Tasks
 
-> **Gate:** groups 2–4 wait on design.md Q-a/Q-b (ac); Q-c is answered. Group 1 is
-> fixture work and safe to start.
+> **Gate:** answered by ac 2026-10-10 (asks row a1009-03, "Q-a recs, Q-b Gatus"):
+> `pem` and `prefix` redact from day one, `bearer` and `assign` stay flag-only, and a Gatus
+> check pages infra to rotate on any new finding. Task 3.4 is left out: it reads journal text.
 
 ## 1. Fixtures and rule harness (no ingest change)
 
@@ -58,16 +59,23 @@
       no migration. Verdicts: UNVERIFIED (no `--expect`) / COULD NOT LOOK / FLOOR.
 - [ ] 3.3 Real run: rewrite, insert findings, re-derive (tool rows, `message_embeddings`
       delete, journal day dirty, mirror rebuild note). Tested on the throwaway PG.
-- [ ] 3.4 Flag-only scan of `journal_entries` text (design Q5 residual).
+- [ ] 3.4 Flag-only scan of `journal_entries` text (design Q5 residual). **Out of scope
+      (ac, 2026-10-10):** it would read journal text.
 
 ## 4. Rollout (each step needs ac/infra)
 
-- [ ] 4.1 Release with the Q-a modes. Infra deploys per `docs/archive/deployment.md`.
+- [ ] 4.1 Release with the Q-a modes. Infra deploys per `docs/archive/deployment.md`:
+      `[redaction] redact = ["pem", "prefix"]` in m4m's `hub.toml`, then a hub restart.
+      The detector itself shipped flag-only in cchv-v0.23.0.
 - [ ] 4.2 Measure ingest latency before and after on prod (`/v1/ingest` p50/p95 from the
       hub log), positioned in the VACUUM cycle per the repo rule.
 - [ ] 4.3 Infra/ac run `redact-existing --dry-run`, tune the `assign` deny list from the
       key-name counts, then flip the remaining rules to `redact`.
-- [ ] 4.4 Gatus check on `/v1/findings/summary?since=24h` per Q-b.
+- [ ] 4.4 Gatus check per Q-b. The summary needs read-auth, which Gatus does not carry,
+      so the check polls the unauthenticated `GET /v1/healthz/findings?since=24h`: same
+      counts, `200` with none in the window, `503` with any. Code + test done 2026-10-10
+      (branch `feat/34-findings-health`); the Gatus check itself is infra's, relayed with
+      the release.
 - [ ] 4.5 Infra runs the dry run on prod as the `ac/infra#104` sweep, with `--expect` set
       to the `#86`/`#102` locations, and owns every rotation. Its result is reported as
       a floor.

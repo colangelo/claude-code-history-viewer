@@ -404,6 +404,36 @@ exactly the pre-static behavior. First visit shows a connect screen (hub URL
 + read token, persisted in that browser's localStorage) — with same-origin
 hosting the URL is just the page's own origin.
 
+### Credential findings and redaction (`[redaction]`, cchv-v0.23.0+, #34)
+
+Every ingested message is scanned for credential shapes (`pem` private keys,
+known token `prefix`es, `bearer` headers, secret-named `assign`ments). Each hit
+becomes a `credential_findings` row (rule, count, key *names*, redacted or not),
+never the value. A rule listed under `redact` also replaces the value with
+`[REDACTED:<rule>]` in `raw`, `content` and `search_text` before storage; an
+unknown rule id is a startup error. Env-configured hubs are flag-only.
+
+ac's day-one choice (2026-10-10, asks row a1009-03): redact `pem` and `prefix`,
+flag `bearer` and `assign`:
+
+```toml
+[redaction]
+redact = ["pem", "prefix"]
+```
+
+Applies from the next hub start, to new ingest only. Rows already archived are
+untouched until the retroactive run (#34 task 3.3) exists; the Mac-side
+transcript files are never touched, so a finding still means "rotate".
+
+Monitoring: `GET /v1/healthz/findings?since=24h` is unauthenticated like the
+other health checks and carries counts only: `200` (`status: ok`) while no
+finding was recorded in the window, `503` (`status: findings`) once one was,
+with `total`, `by_rule`, `redacted` and `latest_detected_at`. The Gatus check on
+it pages infra to rotate the credential (Q-b). The authenticated
+`/v1/findings/summary` returns the same counts. To see where a hit is, run
+`hub findings dry-run --since 24h`: read-only, it prints locations and value
+shapes, never values.
+
 ### Optional: semantic journal search (embed model directory)
 
 Semantic + hybrid `mode=` on the `/v1/search` journal leg needs a local

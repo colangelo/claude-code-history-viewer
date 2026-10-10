@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,17 +57,17 @@ pub struct FindingsSummary {
     pub detector_version: u32,
 }
 
-/// `GET /v1/findings/summary?since=24h` — counts only, never message text.
-pub async fn summary(
-    _auth: Authenticated,
-    State(state): State<AppState>,
-    Query(params): Query<SummaryParams>,
-) -> Result<Json<FindingsSummary>, HubError> {
-    let since_secs = match params.since.as_deref() {
-        None => 86_400,
+fn since_secs(params: &SummaryParams) -> Result<i64, HubError> {
+    match params.since.as_deref() {
+        None => Ok(86_400),
         Some(s) => parse_since(s)
-            .ok_or_else(|| HubError::BadRequest(format!("bad since {s:?}: use e.g. 24h, 7d")))?,
-    };
+            .ok_or_else(|| HubError::BadRequest(format!("bad since {s:?}: use e.g. 24h, 7d"))),
+    }
+}
+
+/// Finding counts by rule over the last `since_secs`. Shared by the summary and
+/// the health check so the two can never disagree about a window.
+async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, HubError> {
     let rows = sqlx::query(
         r"
         SELECT rule, count(*) AS n, count(*) FILTER (WHERE redacted) AS r, max(detected_at) AS latest
@@ -76,7 +77,7 @@ pub async fn summary(
         ",
     )
     .bind(since_secs as f64)
-    .fetch_all(&state.pool)
+    .fetch_all(pool)
     .await?;
 
     let mut out = FindingsSummary {
@@ -95,7 +96,43 @@ pub async fn summary(
         let latest: Option<DateTime<Utc>> = row.get("latest");
         out.latest_detected_at = out.latest_detected_at.max(latest);
     }
-    Ok(Json(out))
+    Ok(out)
+}
+
+/// `GET /v1/findings/summary?since=24h` — counts only, never message text.
+pub async fn summary(
+    _auth: Authenticated,
+    State(state): State<AppState>,
+    Query(params): Query<SummaryParams>,
+) -> Result<Json<FindingsSummary>, HubError> {
+    Ok(Json(count_since(&state.pool, since_secs(&params)?).await?))
+}
+
+/// `GET /v1/healthz/findings?since=24h` — unauthenticated, like every
+/// `/v1/healthz/*`, so Gatus can page on it (ac's Q-b, 2026-10-10). `200` while
+/// no finding was recorded in the window, `503` once one was: a credential
+/// reached a transcript and its owner should rotate it, whether or not the
+/// archive stored it redacted (the plaintext still sits in the Mac-side file).
+/// Same body as the summary: counts by rule, never a value, session or key name.
+pub async fn healthz(
+    State(state): State<AppState>,
+    Query(params): Query<SummaryParams>,
+) -> Result<(StatusCode, Json<FindingsHealth>), HubError> {
+    let summary = count_since(&state.pool, since_secs(&params)?).await?;
+    let (code, status) = if summary.total == 0 {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "findings")
+    };
+    Ok((code, Json(FindingsHealth { status, summary })))
+}
+
+#[derive(Debug, Serialize)]
+pub struct FindingsHealth {
+    /// `ok` · `findings` (at least one credential finding in the window).
+    pub status: &'static str,
+    #[serde(flatten)]
+    pub summary: FindingsSummary,
 }
 
 // ---------------------------------------------------------------------------

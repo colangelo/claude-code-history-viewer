@@ -447,3 +447,50 @@ async fn dry_run_reports_locations_never_values() {
     assert!(filtered.hits.iter().all(|h| h.rule == Rule::Pem));
     assert!(filtered.verdict().starts_with("COULD NOT LOOK"));
 }
+
+#[tokio::test]
+async fn findings_health_pages_on_a_finding_without_auth_or_values() {
+    let hub = spawn(Vec::new()).await;
+    let get = |since: &'static str| {
+        let url = format!("{}/v1/healthz/findings?since={since}", hub.base);
+        async move { reqwest::Client::new().get(url).send().await.unwrap() }
+    };
+
+    // A window that holds nothing yet: healthy. One second, after a pause long
+    // enough that earlier tests' findings have aged out of it.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let quiet = get("1s").await;
+    assert_eq!(quiet.status(), 200);
+    let body: serde_json::Value = quiet.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["total"], 0);
+
+    let secret = synthetic_token();
+    let text = format!("pushed with {secret} just now");
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-health",
+            vec![msg("s-health", "k1", "2026-01-01T00:00:00Z", &text)],
+        ),
+    )
+    .await;
+
+    // Unauthenticated, like every /v1/healthz/*: 503 once a finding lands.
+    let paged = get("1h").await;
+    assert_eq!(paged.status(), 503);
+    let raw = paged.text().await.unwrap();
+    assert!(
+        !raw.contains(&secret),
+        "the health body must never carry a value"
+    );
+    assert!(!raw.contains("s-health"), "nor a session id");
+    let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(body["status"], "findings");
+    assert!(body["total"].as_i64().unwrap() >= 3);
+    assert!(body["by_rule"]["prefix"].as_i64().unwrap() >= 1);
+
+    let bad = get("forever").await;
+    assert_eq!(bad.status(), 400);
+}
