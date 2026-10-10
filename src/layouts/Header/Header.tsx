@@ -16,28 +16,21 @@ import {
 import { TooltipButton } from "@/shared/TooltipButton";
 import { useAppStore } from "@/store/useAppStore";
 import type { UseAnalyticsReturn } from "@/types/analytics";
-import type { UseUpdaterReturn } from "@/hooks/useUpdater";
 import { useModal } from "@/contexts/modal";
 
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
-import { getAssetPath, isMacOS, isTauri } from "@/utils/platform";
+import { getAssetPath, isMacOS } from "@/utils/platform";
 import { SettingDropdown } from "./SettingDropdown";
 
 interface HeaderProps {
   analyticsActions: UseAnalyticsReturn["actions"];
   analyticsComputed: UseAnalyticsReturn["computed"];
-  updater: UseUpdaterReturn;
 }
 
 const SHORTCUT_LABEL = isMacOS() ? "⌘+K" : "Ctrl+K";
 
-// macOS traffic-light buttons overlap the header in Tauri's Overlay
-// titleBarStyle. Reserve space for them only when running in the desktop
-// shell — the WebUI build has no overlay controls.
-const HAS_MACOS_TRAFFIC_LIGHTS = isTauri() && isMacOS();
-
-export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderProps) => {
+export const Header = ({ analyticsActions, analyticsComputed }: HeaderProps) => {
   const { t } = useTranslation();
   const { openModal } = useModal();
 
@@ -97,18 +90,8 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
     <header
       id="app-header"
       role="banner"
-      className={cn(
-        "relative h-12 flex items-center justify-between px-4 bg-sidebar border-b border-border/50",
-        HAS_MACOS_TRAFFIC_LIGHTS && "pl-[72px]"
-      )}
+      className="relative h-12 flex items-center justify-between px-4 bg-sidebar border-b border-border/50"
     >
-      {/* Full-header drag region — sits behind all content so the
-          entire header is draggable. Interactive children (right-side
-          buttons) sit above with their own pointer events; non-interactive
-          children (logo, title) use pointer-events-none so clicks fall
-          through to this layer. */}
-      <div data-tauri-drag-region className="absolute inset-0" />
-
       {/* Left: Logo & Title */}
       <div className="relative z-10 flex items-center gap-2.5 min-w-0 pointer-events-none">
         <img
@@ -337,7 +320,7 @@ export const Header = ({ analyticsActions, analyticsComputed, updater }: HeaderP
         </div>
 
         {/* Settings Dropdown (visible on all sizes) */}
-        <SettingDropdown updater={updater} />
+        <SettingDropdown />
       </div>
     </header>
   );

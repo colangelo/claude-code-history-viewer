@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "@/services/api";
-import { isWebUI, openExternalUrl } from "@/utils/platform";
+import { openExternalUrl } from "@/utils/platform";
 import { useTranslation } from "react-i18next";
 import { GithubIcon, MailIcon, InfoIcon } from "lucide-react";
 import type { FeedbackPrefill, FeedbackType } from "@/contexts/modal/context";
@@ -113,7 +113,9 @@ export const FeedbackModal = ({ isOpen, prefill, onClose }: FeedbackModalProps) 
         feedback_type: feedbackType,
       };
 
-      await api("send_feedback", { feedback: feedbackData });
+      // The server builds the mailto: URL; only the browser can open a mail client.
+      const mailtoUrl = await api<string>("send_feedback", { feedback: feedbackData });
+      await openExternalUrl(mailtoUrl);
 
       setSubject("");
       setBody("");
@@ -147,7 +149,7 @@ export const FeedbackModal = ({ isOpen, prefill, onClose }: FeedbackModalProps) 
           : null;
 
       const result = await api<{ url?: string }>("open_github_issues", { feedback });
-      if (isWebUI() && result?.url) {
+      if (result?.url) {
         await openExternalUrl(result.url);
       }
     } catch (error) {

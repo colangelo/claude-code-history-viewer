@@ -21,7 +21,6 @@ import {
 
 async function bootstrap(): Promise<void> {
   // Initialise WebUI auth token from URL before anything else.
-  // (No-op in Tauri desktop mode.)
   initAuthToken();
   const cookieSynced = await syncAuthCookieFromStoredToken();
   if (cookieSynced) {

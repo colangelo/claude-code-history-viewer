@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import i18n from "@/i18n";
 import { ThemeContext, type Theme } from "@/contexts/theme/context";
-import { loadThemeFromTauriStore, saveThemeToTauriStore } from "./utils";
+import { loadThemeFromStore, saveThemeToStore } from "./utils";
 
 const initialState = {
   theme: "system" as Theme,
@@ -32,14 +32,14 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setTheme(newTheme);
     setIsDarkMode(calculateIsDarkMode(newTheme));
     try {
-      await saveThemeToTauriStore(newTheme);
+      await saveThemeToStore(newTheme);
     } catch {
       toast.error(i18n.t("common.settings.theme.saveFailed"));
     }
   }, []);
 
   const initializeTheme = useCallback(async () => {
-    const savedTheme = await loadThemeFromTauriStore();
+    const savedTheme = await loadThemeFromStore();
     if (savedTheme) {
       setTheme(savedTheme);
       setIsDarkMode(calculateIsDarkMode(savedTheme));

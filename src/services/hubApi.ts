@@ -1,10 +1,9 @@
 /**
  * Archive hub read API client (spec: openspec/specs/archive-search-api/spec.md).
  *
- * Talks to the cchv archive hub DIRECTLY from the frontend (Tauri webview and
- * WebUI alike) with plain `fetch` — deliberately NOT through `services/api.ts`:
- * the hub is a separate service (`crates/hub`, `/v1/*` GET endpoints, bearer
- * token) and adding per-command Tauri/axum proxies would re-open the
+ * Talks to the cchv archive hub DIRECTLY from the frontend with plain `fetch` —
+ * deliberately NOT through `services/api.ts`: the hub is a separate service (`crates/hub`, `/v1/*` GET endpoints, bearer
+ * token) and adding per-command axum proxies would re-open the
  * command/route parity bug class (#340/#355). CORS on the hub side makes the
  * direct call possible from browser contexts.
  *

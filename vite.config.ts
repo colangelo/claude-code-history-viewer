@@ -127,11 +127,6 @@ export default defineConfig(async () => {
             return "data-vendor";
           }
 
-          // Tauri specific bundle
-          if (id.includes("@tauri-apps")) {
-            return "tauri";
-          }
-
           // Virtual scrolling bundle
           if (
             id.includes("react-window") ||
@@ -168,11 +163,6 @@ export default defineConfig(async () => {
       "react-markdown",
       "lucide-react",
     ],
-    exclude: [
-      "@tauri-apps/api",
-      "@tauri-apps/plugin-dialog",
-      "@tauri-apps/plugin-store",
-    ],
   },
 
   // Test configuration
@@ -183,16 +173,11 @@ export default defineConfig(async () => {
     include: [
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
-      "src-tauri/tests/**/*.test.ts",
       // second-loop T1 evals share the T2 dir (the loop requires one evals
       // dir); cargo ignores .tsx there, vitest ignores .rs here. history-core
       // holds frozen evals from earlier runs; loop-evals is the current home.
       "crates/history-core/tests/**/*.test.tsx",
       "crates/loop-evals/tests/**/*.test.tsx",
-    ],
-    environmentMatchGlobs: [
-      // Node environment for file system tests
-      ["src-tauri/tests/**", "node"],
     ],
   },
 };

@@ -1,13 +1,13 @@
 import type { Theme } from "@/contexts/theme/context";
 import { storageAdapter } from "@/services/storage";
 
-export const saveThemeToTauriStore = async (theme: Theme) => {
+export const saveThemeToStore = async (theme: Theme) => {
   const store = await storageAdapter.load("settings.json", { defaults: {}, autoSave: false });
   await store.set("theme", theme);
   await store.save();
 };
 
-export const loadThemeFromTauriStore = async () => {
+export const loadThemeFromStore = async () => {
   try {
     const store = await storageAdapter.load("settings.json", { defaults: {}, autoSave: false });
     return (await store.get("theme")) as Theme | null;

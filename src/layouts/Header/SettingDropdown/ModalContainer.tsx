@@ -2,7 +2,6 @@ import {
   FeedbackModalContainer,
   FolderSelectorContainer,
   GlobalSearchModalContainer,
-  SessionPickerModalContainer,
 } from "@/components/modals";
 
 export const ModalContainer = () => {
@@ -11,7 +10,6 @@ export const ModalContainer = () => {
       <FolderSelectorContainer />
       <FeedbackModalContainer />
       <GlobalSearchModalContainer />
-      <SessionPickerModalContainer />
     </>
   );
 };

@@ -62,8 +62,6 @@
   "archive.browse.empty.title": "アーカイブなし",
   "archive.browse.empty.description": "重要な会話履歴を保存するために最初のアーカイブを作成してください",
   "archive.browse.empty.cta": "アーカイブを作成",
-  "archive.browse.openFolder": "ファイルマネージャーで開く",
-  "archive.browse.openFolderFailed": "フォルダーを開けませんでした",
   "archive.browse.card.sessions": "{{count}}セッション",
   "archive.browse.card.source": "ソース：{{name}}",
   "archive.browse.card.viewSessions": "セッションを表示",

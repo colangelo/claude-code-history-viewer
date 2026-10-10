@@ -26,7 +26,6 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isTauri } from "@/utils/platform";
 import { api } from "@/services/api";
 import { useAppStore } from "@/store/useAppStore";
 import type { CustomClaudePath } from "@/types";
@@ -76,25 +75,6 @@ export function CustomDirectoriesSection({
   const pathInputId = React.useId();
   const labelInputId = React.useId();
   const editLabelInputId = React.useId();
-
-  const handleSelectFolder = async () => {
-    try {
-      if (isTauri()) {
-        const dialogModule = await import("@tauri-apps/plugin-dialog");
-        const selected = await dialogModule.open({
-          directory: true,
-          multiple: false,
-          title: t("settings.customDirectories.addDirectory"),
-        });
-        if (selected && typeof selected === "string") {
-          setNewPath(selected);
-          setAddError(null);
-        }
-      }
-    } catch (err) {
-      console.error("Folder selection failed:", err);
-    }
-  };
 
   const handleAdd = async () => {
     if (!newPath.trim()) return;
@@ -320,17 +300,6 @@ export function CustomDirectoriesSection({
                     )}
                     className="h-8 text-xs font-mono"
                   />
-                  {isTauri() && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 shrink-0"
-                      onClick={handleSelectFolder}
-                      aria-label={t("settings.customDirectories.addDirectory")}
-                    >
-                      <FolderOpen className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
                 </div>
               </div>
 

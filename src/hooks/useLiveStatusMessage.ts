@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
  * Computes a live status message for screen readers based on loading states.
  */
 export function useLiveStatusMessage(deps: {
-  isChecking: boolean;
   isLoading: boolean;
   isAnyLoading: boolean;
   isLoadingMessages: boolean;
@@ -15,9 +14,6 @@ export function useLiveStatusMessage(deps: {
   const { t } = useTranslation();
 
   return useMemo(() => {
-    if (deps.isChecking) {
-      return t("common.settings.checking");
-    }
     if (deps.isLoading) {
       return t("status.initializing");
     }
@@ -35,7 +31,6 @@ export function useLiveStatusMessage(deps: {
     }
     return "";
   }, [
-    deps.isChecking,
     deps.isLoading,
     deps.isAnyLoading,
     deps.isLoadingMessages,

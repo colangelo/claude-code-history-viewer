@@ -20,7 +20,6 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof SessionContext
     supportsNativeRename: false,
     supportsResumeCommand: true,
     supportsSessionDeletion: true,
-    supportsRevealInFinder: true,
     providerId: "claude",
     onClose: vi.fn(),
     onRenameClick: vi.fn(),
@@ -29,7 +28,6 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof SessionContext
     onCopySessionId: vi.fn(),
     onCopyResumeCommand: vi.fn(),
     onCopyFilePath: vi.fn(),
-    onRevealInFinder: vi.fn(),
     onDeleteSession: vi.fn(),
     ...overrides,
   };

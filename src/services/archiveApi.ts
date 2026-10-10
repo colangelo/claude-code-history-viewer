@@ -2,7 +2,6 @@
  * Archive API Service
  *
  * Thin wrapper around the api() adapter for archive-related backend commands.
- * Works in both Tauri desktop mode and WebUI server mode.
  */
 
 import { api } from './api';

@@ -62,8 +62,6 @@
   "archive.browse.empty.title": "沒有封存",
   "archive.browse.empty.description": "建立您的第一個封存以保存重要的對話歷史",
   "archive.browse.empty.cta": "建立封存",
-  "archive.browse.openFolder": "在檔案管理員中開啟",
-  "archive.browse.openFolderFailed": "無法開啟資料夾",
   "archive.browse.card.sessions": "{{count}} 個工作階段",
   "archive.browse.card.source": "來源：{{name}}",
   "archive.browse.card.viewSessions": "檢視工作階段",

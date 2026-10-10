@@ -14,7 +14,6 @@ import enTools from './locales/en/tools.json';
 import enError from './locales/en/error.json';
 import enMessage from './locales/en/message.json';
 import enRenderers from './locales/en/renderers.json';
-import enUpdate from './locales/en/update.json';
 import enFeedback from './locales/en/feedback.json';
 import enRecentEdits from './locales/en/recentEdits.json';
 import enArchive from './locales/en/archive.json';
@@ -29,7 +28,6 @@ import koTools from './locales/ko/tools.json';
 import koError from './locales/ko/error.json';
 import koMessage from './locales/ko/message.json';
 import koRenderers from './locales/ko/renderers.json';
-import koUpdate from './locales/ko/update.json';
 import koFeedback from './locales/ko/feedback.json';
 import koRecentEdits from './locales/ko/recentEdits.json';
 import koArchive from './locales/ko/archive.json';
@@ -44,7 +42,6 @@ import jaTools from './locales/ja/tools.json';
 import jaError from './locales/ja/error.json';
 import jaMessage from './locales/ja/message.json';
 import jaRenderers from './locales/ja/renderers.json';
-import jaUpdate from './locales/ja/update.json';
 import jaFeedback from './locales/ja/feedback.json';
 import jaRecentEdits from './locales/ja/recentEdits.json';
 import jaArchive from './locales/ja/archive.json';
@@ -59,7 +56,6 @@ import zhCNTools from './locales/zh-CN/tools.json';
 import zhCNError from './locales/zh-CN/error.json';
 import zhCNMessage from './locales/zh-CN/message.json';
 import zhCNRenderers from './locales/zh-CN/renderers.json';
-import zhCNUpdate from './locales/zh-CN/update.json';
 import zhCNFeedback from './locales/zh-CN/feedback.json';
 import zhCNRecentEdits from './locales/zh-CN/recentEdits.json';
 import zhCNArchive from './locales/zh-CN/archive.json';
@@ -74,7 +70,6 @@ import zhTWTools from './locales/zh-TW/tools.json';
 import zhTWError from './locales/zh-TW/error.json';
 import zhTWMessage from './locales/zh-TW/message.json';
 import zhTWRenderers from './locales/zh-TW/renderers.json';
-import zhTWUpdate from './locales/zh-TW/update.json';
 import zhTWFeedback from './locales/zh-TW/feedback.json';
 import zhTWRecentEdits from './locales/zh-TW/recentEdits.json';
 import zhTWArchive from './locales/zh-TW/archive.json';
@@ -114,7 +109,6 @@ export const namespaces = [
   'error',
   'message',
   'renderers',
-  'update',
   'feedback',
   'recentEdits',
   'archive',
@@ -147,7 +141,6 @@ const resources = {
       enError,
       enMessage,
       enRenderers,
-      enUpdate,
       enFeedback,
       enRecentEdits,
       enArchive,
@@ -164,7 +157,6 @@ const resources = {
       koError,
       koMessage,
       koRenderers,
-      koUpdate,
       koFeedback,
       koRecentEdits,
       koArchive,
@@ -181,7 +173,6 @@ const resources = {
       jaError,
       jaMessage,
       jaRenderers,
-      jaUpdate,
       jaFeedback,
       jaRecentEdits,
       jaArchive,
@@ -198,7 +189,6 @@ const resources = {
       zhCNError,
       zhCNMessage,
       zhCNRenderers,
-      zhCNUpdate,
       zhCNFeedback,
       zhCNRecentEdits,
       zhCNArchive,
@@ -215,7 +205,6 @@ const resources = {
       zhTWError,
       zhTWMessage,
       zhTWRenderers,
-      zhTWUpdate,
       zhTWFeedback,
       zhTWRecentEdits,
       zhTWArchive,

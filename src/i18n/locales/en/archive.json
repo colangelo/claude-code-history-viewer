@@ -62,8 +62,6 @@
   "archive.browse.empty.title": "No Archives",
   "archive.browse.empty.description": "Create your first archive to preserve important conversation history",
   "archive.browse.empty.cta": "Create Archive",
-  "archive.browse.openFolder": "Open in file manager",
-  "archive.browse.openFolderFailed": "Failed to open folder",
   "archive.browse.card.sessions": "{{count}} sessions",
   "archive.browse.card.source": "Source: {{name}}",
   "archive.browse.card.viewSessions": "View Sessions",

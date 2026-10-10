@@ -22,7 +22,6 @@ import { MessageNavigator } from "@/components/MessageNavigator";
 import { TokenStatsViewer } from "@/components/TokenStatsViewer";
 import { AnalyticsDashboard } from "@/components/AnalyticsDashboard";
 import { RecentEditsViewer } from "@/components/RecentEditsViewer";
-import { SimpleUpdateManager } from "@/components/SimpleUpdateManager";
 import { SettingsManager } from "@/components/SettingsManager";
 import { SessionBoard } from "@/components/SessionBoard/SessionBoard";
 import { ArchiveManager } from "@/components/ArchiveManager";
@@ -31,7 +30,6 @@ import { BottomTabBar } from "@/components/mobile/BottomTabBar";
 import { MobileNavigatorSheet } from "@/components/mobile/MobileNavigatorSheet";
 import { Header } from "@/layouts/Header/Header";
 import { ModalContainer } from "@/layouts/Header/SettingDropdown/ModalContainer";
-import { DesktopOnly } from "@/contexts/platform";
 import { useAppStore } from "@/store/useAppStore";
 import {
   AppErrorType,
@@ -45,7 +43,6 @@ import {
   type AppError,
 } from "@/types";
 import type { UseAnalyticsReturn } from "@/types/analytics";
-import type { UseUpdaterReturn } from "@/hooks/useUpdater";
 import type { SearchState, SearchFilterType } from "@/store/slices/types";
 import type { WorktreeGroup, DirectoryGroup } from "@/utils/worktreeUtils";
 import type { ProjectTokenStatsPagination } from "@/store/slices/messageSlice";
@@ -78,12 +75,8 @@ export interface AppLayoutProps {
   analyticsActions: UseAnalyticsReturn["actions"];
   computed: UseAnalyticsReturn["computed"];
 
-  // Updater
-  updater: UseUpdaterReturn;
-  appVersion: string;
 
   // Platform
-  isDesktop: boolean;
   isMobile: boolean;
 
   // Local state
@@ -162,9 +155,6 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
     analyticsState,
     analyticsActions,
     computed,
-    updater,
-    appVersion,
-    isDesktop,
     isMobile,
     isViewingGlobalStats,
     isSidebarCollapsed,
@@ -288,7 +278,6 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
         <Header
           analyticsActions={analyticsActions}
           analyticsComputed={computed}
-          updater={updater}
         />
 
         {/* Mobile Sidebar Drawer */}
@@ -636,11 +625,7 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
         <footer className="h-7 px-4 hidden md:flex items-center justify-between bg-sidebar border-t border-border/50 text-2xs text-muted-foreground">
           <div className="flex items-center gap-3 font-mono tabular-nums">
             <span>
-              {isDesktop
-                ? t("status.versionLabel", "v{{version}}", {
-                    version: appVersion,
-                  })
-                : t("status.webMode", "Web")}
+              {t("status.webMode", "Web")}
             </span>
             <span className="text-border">&bull;</span>
             <span>{t("project.count", { count: projects.length })}</span>
@@ -688,11 +673,6 @@ export const AppLayout: React.FC<AppLayoutProps> = (props) => {
         >
           {liveStatusMessage}
         </div>
-
-        {/* Update Manager (desktop only) */}
-        <DesktopOnly>
-          <SimpleUpdateManager updater={updater} />
-        </DesktopOnly>
 
         {/* Mobile Bottom Tab Bar */}
         {isMobile && (

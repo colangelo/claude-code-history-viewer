@@ -17,7 +17,7 @@ function isExternalUrl(href: string): boolean {
 
 /**
  * Global click handler that intercepts external `<a>` links and opens
- * them in the system default browser instead of the Tauri WebView.
+ * them in a new browser tab instead of navigating the app away.
  *
  * Mount once at the app root (e.g. in App.tsx or main.tsx).
  */

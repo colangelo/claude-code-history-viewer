@@ -1,13 +1,10 @@
 /**
- * Platform detection utilities for Tauri desktop vs WebUI server mode.
- *
- * Uses the presence of `__TAURI_INTERNALS__` on the global window to
- * distinguish between the two runtime environments.
+ * Platform utilities for the WebUI: OS detection, API base paths, auth and
+ * external links.
  */
 
 declare global {
   interface Window {
-    __TAURI_INTERNALS__?: unknown;
     __WEBUI_API_BASE__?: string;
     __WEBUI_BASE_PATH__?: string;
   }
@@ -24,13 +21,6 @@ export const isWindows = (): boolean =>
 /** True when the action modifier key is held (Cmd on macOS, Ctrl elsewhere). */
 export const isActionModifier = (e: { metaKey: boolean; ctrlKey: boolean }): boolean =>
   isMacOS() ? e.metaKey : e.ctrlKey;
-
-/** True when running inside the Tauri desktop shell. */
-export const isTauri = (): boolean =>
-  typeof window !== "undefined" && window.__TAURI_INTERNALS__ != null;
-
-/** True when running in the browser against the Axum WebUI server. */
-export const isWebUI = (): boolean => !isTauri();
 
 const normalizeWebUIBasePath = (value?: string): string => {
   if (!value) return "";
@@ -74,7 +64,7 @@ export const getAssetPath = (path: string): string => {
 };
 
 // ---------------------------------------------------------------------------
-// Auth token helpers (WebUI server mode only)
+// Auth token helpers
 // ---------------------------------------------------------------------------
 
 const AUTH_TOKEN_KEY = "webui-auth-token";
@@ -101,8 +91,6 @@ export interface WebUILoginResult {
  * Referer headers or browser history.
  */
 export function initAuthToken(): void {
-  if (isTauri()) return;
-
   const url = new URL(window.location.href);
   const token = url.searchParams.get("token");
   if (token) {
@@ -114,16 +102,12 @@ export function initAuthToken(): void {
 
 /** True when the app should render the WebUI login screen. */
 export function hasAuthErrorQuery(): boolean {
-  if (isTauri()) return false;
-
   const url = new URL(window.location.href);
   return url.searchParams.get("auth_error") === "1";
 }
 
 /** Remove the explicit WebUI auth-error marker from the current URL. */
 export function clearAuthErrorQuery(): void {
-  if (isTauri()) return;
-
   const url = new URL(window.location.href);
   url.searchParams.delete("auth_error");
   window.history.replaceState(window.history.state, "", url.toString());
@@ -192,8 +176,6 @@ export async function loginWebUI(
  * failure, the localStorage token is kept so existing Bearer auth still works.
  */
 export async function syncAuthCookieFromStoredToken(): Promise<boolean> {
-  if (isTauri()) return false;
-
   const token = getAuthToken();
   if (!token) return false;
 
@@ -203,8 +185,6 @@ export async function syncAuthCookieFromStoredToken(): Promise<boolean> {
 
 /** Ask the WebUI server to clear its HttpOnly auth cookie. */
 export async function clearAuthCookie(): Promise<void> {
-  if (isTauri()) return;
-
   try {
     await fetch(`${getApiBase()}/api/auth/logout`, {
       method: "POST",
@@ -240,8 +220,8 @@ export function getCsrfToken(): string | null {
 /**
  * Open a URL in the system default browser.
  *
- * In Tauri mode, uses `@tauri-apps/plugin-opener` to open links externally.
- * In WebUI/browser mode, falls back to a secure anchor click.
+ * Uses a hidden `noopener` anchor click, which browsers allow from a user
+ * gesture.
  */
 export async function openExternalUrl(url: string): Promise<void> {
   const normalized = url.trim();
@@ -249,28 +229,23 @@ export async function openExternalUrl(url: string): Promise<void> {
     throw new Error(`Unsupported URL scheme: ${normalized}`);
   }
 
-  if (isTauri()) {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(normalized);
-  } else {
-    const root = document.body ?? document.documentElement;
-    if (!root) {
-      throw new Error("Document root unavailable");
-    }
+  const root = document.body ?? document.documentElement;
+  if (!root) {
+    throw new Error("Document root unavailable");
+  }
 
-    const link = document.createElement("a");
-    link.href = normalized;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.style.display = "none";
-    link.setAttribute(EXTERNAL_OPEN_HELPER_ATTRIBUTE, "true");
+  const link = document.createElement("a");
+  link.href = normalized;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.style.display = "none";
+  link.setAttribute(EXTERNAL_OPEN_HELPER_ATTRIBUTE, "true");
 
-    root.appendChild(link);
-    try {
-      link.click();
-    } finally {
-      root.removeChild(link);
-    }
+  root.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    root.removeChild(link);
   }
 }
 
