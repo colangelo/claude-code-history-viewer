@@ -770,6 +770,30 @@ it. A relay handing off a rev marker should carry both counts, new **and** old.
 > local-build fallback there is no published digest and step 6b's marker remains the only
 > pre-restart probe.
 
+**2026-10-10, `cchv-v0.22.0` → `cchv-v0.23.0` (relay `d5203465`) — timings from the release,
+and what the rebased PRs needed on the Gitea side.** Release commit `7c566a49`; four PRs
+(#50, #53, #54, #55) went in.
+
+- Hub swap via infra: ~**2 min** from relay send (~11:08Z) to the 0.23.0 hub answering
+  (11:10:13Z). Webapp swap live at 11:11:53Z.
+- `hub mirror rebuild`, run on m4m as `HUB_CONFIG=~/.config/cchv/hub.runtime.toml lockf -k
+  /tmp/m4m-heavy.lock nice -n 15 ~/.local/bin/cchv-hub mirror rebuild`: cold build
+  11:14:09Z → swapped in 11:19:37Z, about **5.5 min**, for 2,411,840 messages / 372,254
+  tool_uses / 371,929 tool_results. `/v1/healthz/stats` stayed 200 throughout and stats
+  were served from the old mirror until the swap, as §1 says they will be. (The v0.16.0
+  entry below measured 480 s for 2,920,083 messages on a different corpus — the two are
+  not a like-for-like speed comparison.)
+- One-transaction Codex dedupe (#52 part 2): 5,493 rows in 19 sessions deleted, with a
+  backup table kept, ~**3 s** of statement time in total.
+
+**A rebased PR is not marked merged by Gitea, and the API will not do it for you.** The
+four PRs reached `main` by cherry-pick, i.e. rebased onto new hashes. Repointing each PR
+branch at its rebased commit and pushing `main` did **not** make Gitea mark them merged,
+and `"Do":"manually-merged"` on the merge endpoint answered *"manually-merged is not
+allowed an allowed merge style for this repository"*. So close a rebased PR by hand, with
+a comment naming the merged commit and the release tag. Changing the repository's allowed
+merge styles is the repo owner's call, not a release step.
+
 **2026-08-23, `cchv-v0.21.0` → `cchv-v0.21.1` (release `b911e088`) — all three steps
 landed in 76 seconds, and the release that decided NOT to build an index.** The journal
 fold was spilling to disk on every health poll at the 4 MB `work_mem` default; both
@@ -1863,6 +1887,14 @@ Post-swap verification (ours), all against the **deployed** build:
 > not necessarily today's. The durable part is the gate gap, which no fix to
 > either failure removes: pin or match the CI toolchain if the release gate is
 > ever meant to predict CI.
+>
+> **2026-10-10 (`cchv-v0.23.0`): the same gate needs `dist/` in a fresh worktree.**
+> `cargo clippy --workspace --all-targets --all-features -- -D warnings` fails there with
+> `#[derive(RustEmbed)] folder '.../src-tauri/../dist' does not exist`: `--all-features`
+> enables `webui-server`, which embeds `dist/`, and a new worktree has none. Run `pnpm
+> build` first (measured in the release worktree). Once it ran, the gate also caught a
+> Rust 1.99 lint already sitting on `main` — `assert!(!v.is_empty())` in
+> `crates/loop-evals/tests/journal-entries_eval.rs` — fixed in `9538113c`.
 
 **2026-07-26, v0.17.0 webapp swap follow-up (infra reply `cfe80f81` on thread
 `6b9a2ae5`, deploy thread `e05b6f2e`): our §2c ask REDELIVERED after completion;
@@ -2896,6 +2928,25 @@ REV=$(git rev-parse --short HEAD)
 ssh ac-mbm5 'mkdir -p ~/.config/cchv/staging'
 scp target/release/sync-daemon "ac-mbm5:~/.config/cchv/staging/cchv-sync-daemon-$REV"
 ```
+
+**Preferred path since 2026-10-10: a Syncthing drop, no ssh.** The `ssh`/`scp` above
+works, but every Mac→Mac hop is a 1Password Touch ID prompt for ac. The `cchv-v0.23.0`
+daemon reached ac-mbm5 without one:
+
+- Build once on m4m (`cargo build --release -p sync-daemon`, under the heavy-job lock;
+  40 s).
+- Put the binary, its `.sha256` and a `SWAP.md` in a Syncthing-shared drop folder,
+  `~/_sync/ac-devops/_data/cchv-daemon-<version>/`.
+- The target Mac verifies with `shasum -a 256 -c`, then swaps per the recipe below (with
+  the swap lock), all locally. On 2026-10-10 mac-m5 did exactly this and reverted the #49
+  stopgap in the same sitting.
+- Read-back markers, measured both ways: `strings -a ~/.local/bin/cchv-sync-daemon | grep
+  -c prefix_digest` → **2** (old binary: 0); `messages_already_acknowledged` → **1**
+  (old: 0).
+
+Expect one warning on m4m until it is fixed: the local stable toolchain's `rust-objcopy`
+failed with a missing `libLLVM.dylib`, so that release binary came out **unstripped**.
+Harmless — larger, not wrong.
 
 Swap (attended, on the target machine — same codesign-aware shape as §2b:
 rm-first, re-sign, `bootout`+`bootstrap`, never `kickstart -k`):
