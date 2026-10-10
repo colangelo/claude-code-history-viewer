@@ -43,8 +43,10 @@
 
 ## 5. Gate
 
-- [ ] 5.1 fmt, clippy on CI's Rust version, all crate tests with `--test-threads=1`,
-      distiller pytest.
+- [x] 5.1 fmt, clippy on CI's Rust version, all crate tests with `--test-threads=1`,
+      distiller pytest. **2026-10-10 on m4m at cb490782:** fmt clean; clippy Rust 1.99
+      `--workspace --all-targets --all-features -D warnings` clean; history-core, protocol,
+      hub and sync-daemon on a fresh Postgres 18: 819 passed, 0 failed; pytest 19 passed.
 
 ## 6. Ship (needs ac)
 
