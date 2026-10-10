@@ -11,22 +11,25 @@ dropped work resurfaces, and today it doesn't (Gitea #15).
 
 ## What Changes
 
-- New hub read endpoint `GET /v1/journal/open-questions`. It returns, per project, the open
-  questions from a time window, **grouped into threads**: near-duplicates across days merge
-  into one thread carrying first seen, last seen, occurrences and the entry ids behind it.
-- Each question gets an embedding from the model the hub already runs for journal search
-  (bge-small-en-v1.5). Grouping is cosine similarity over those embeddings within one
-  project. The existing embed sweep fills them; no new model and no external call.
-- Each thread gets a **state** derived only from data the archive has:
-  - `recurring`: restated on two or more days;
-  - `quiet`: not restated since the project's last N active days, so possibly resolved and
-    possibly dropped. The archive can't tell which, and the report says so.
-  - `new`: seen once, recently.
-- `cchv-find` documents the endpoint as the way to answer "what did I leave hanging in
-  <project>?".
-- **Not in this change:** an explicit "resolved" signal. That needs the distiller to compare a
-  day's work against earlier questions: a prompt change with per-run model cost, ac's
-  decision (design.md Q1). No webapp UI yet either (Q2).
+ac decided design.md Q1 on 2026-10-10 (relayed by manager-lab): **the distiller links new open
+questions to earlier ones and marks the ones a day resolved.** Task 1.2 had shown that embedding
+similarity cannot do the grouping, so thread identity comes from the distiller, which already has
+the day's work in context.
+
+- The distiller fetches the project's recent unresolved threads before it writes an entry and
+  gets them in the prompt (under 1 k extra tokens). For each open question it answers
+  `continues <thread id>` or new, and it lists the threads the day resolved.
+- `journal_entries` gains `open_question_threads BIGINT[]` (one thread id per open question)
+  and `resolved_threads BIGINT[]`. The hub assigns ids to new threads and rejects ids that are
+  not open questions of the same project. A re-distill replaces both, like every other field.
+- The migration gives every existing open question its own thread id, so new questions can be
+  linked to them from the first run. No re-distillation of old days.
+- New read endpoint `GET /v1/journal/open-questions`: per project, threads with latest wording,
+  first and last seen, occurrences, entry dates and a state: `resolved`, `open` or `quiet`
+  (unresolved, not restated in the project's last N active days). The distiller and people use
+  the same endpoint.
+- **Not in this change:** a webapp panel (Q2); retro-merging restatements written before the
+  change (each stays its own thread).
 
 ## Capabilities
 
@@ -37,15 +40,14 @@ dropped work resurfaces, and today it doesn't (Gitea #15).
 
 ### Modified Capabilities
 
-None. `journal-entries` already requires that `open_questions` be stored. This change only
-reads them. The embed sweep gains a source but its requirements are unchanged.
+- `journal-entries`: the write endpoint accepts and validates thread links and resolutions,
+  and the distiller is given the project's open threads and asked to link and resolve them.
 
 ## Impact
 
-- **Hub:** a migration for `journal_question_embeddings`, a `embed_sweep.rs` source, the
-  endpoint and the grouping in `journal.rs` (or a new module), plus read-auth like the other
-  `/v1/journal` reads.
-- **Load:** about 2.5 k short strings to embed once, then a few per distiller run. Grouping
-  works on one project's window, at most a few hundred vectors, in memory per request.
-- **Distiller, daemon, webapp:** unchanged.
-- **Docs:** the `cchv-find` skill section (CONTEXT; relayed to its owner if needed).
+- **Hub:** migration `0012`, the POST validation and upsert in `journal.rs`, and the new
+  endpoint with read auth like the other `/v1/journal` reads.
+- **Distiller:** prompt, output parsing and validation in `scripts/cchv-distill.py`. It is an
+  installed copy, so it ships only through a release plus an infra reinstall.
+- **Daemon, webapp:** unchanged.
+- **Docs:** `cchv-find` skill section (CONTEXT, relayed to its owner).

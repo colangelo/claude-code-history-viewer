@@ -20,6 +20,7 @@ pub mod identities;
 pub mod identity_filter;
 pub mod ingest;
 pub mod journal;
+pub mod journal_threads;
 pub mod mirror;
 pub mod pagination;
 pub mod redact;
@@ -119,6 +120,10 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
             get(journal::browse).post(journal::create),
         )
         .route("/v1/journal/ticks", post(journal::record_tick))
+        .route(
+            "/v1/journal/open-questions",
+            get(journal_threads::open_questions),
+        )
         .route("/v1/projects", get(browse::list_projects))
         .route("/v1/sessions", get(browse::list_sessions))
         .route("/v1/sessions/{id}/messages", get(browse::session_messages))
