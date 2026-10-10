@@ -300,7 +300,7 @@ async fn attachment_payload_in_raw_is_redacted() {
         "the attachment payload kept the value"
     );
     assert!(raw.contains("[REDACTED:prefix]"), "raw lacks the marker");
-    assert!(content.is_empty());
+    assert_eq!(content, "", "an attachment row has no content");
     assert_eq!(
         findings_for(&hub, id).await,
         vec![("raw".to_string(), "prefix".to_string(), true)]
