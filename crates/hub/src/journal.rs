@@ -5,6 +5,7 @@
 //!   `(entry_date, project_path)` groups needing distillation.
 //! * `POST /v1/journal/entries`  (machine-token) — validated upsert by group key.
 //! * `GET  /v1/journal/entries`  (read-auth) — browse `entry`-status rows.
+//! * `GET  /v1/journal/open-questions` lives in [`crate::journal_threads`].
 //!
 //! The `/v1/search` journal block ([`search_journal`]) lives here too, next to
 //! the schema knowledge, and is called from [`crate::search`].
@@ -291,6 +292,13 @@ pub struct EntryPayload {
     pub session_ids: Vec<i64>,
     #[serde(default)]
     pub model: Option<String>,
+    /// One optional thread id per open question, same order (#15): `null` (or the
+    /// whole field absent) = a new thread, whose id the hub assigns.
+    #[serde(default)]
+    pub open_question_threads: Option<Vec<Option<i64>>>,
+    /// Threads this day's work settled (#15).
+    #[serde(default)]
+    pub resolved_threads: Vec<i64>,
     /// The `as_of` snapshot echoed from `GET /v1/journal/pending`. When set,
     /// dirty-detection is anchored to the moment the distiller *read* the
     /// group; when omitted (manual callers, tests) it defaults to POST time.
@@ -440,6 +448,22 @@ pub async fn create(
             })?;
     }
 
+    // Thread links (#15): validated and given ids before anything is written.
+    // Skip rows carry none.
+    let (thread_ids, resolved_threads) = if is_skip {
+        (Vec::new(), Vec::new())
+    } else {
+        crate::journal_threads::resolve_links(
+            &state.pool,
+            payload.entry_date,
+            &payload.project_path,
+            &payload.open_questions,
+            payload.open_question_threads.as_deref(),
+            &payload.resolved_threads,
+        )
+        .await?
+    };
+
     // -- upsert ------------------------------------------------------------
     // Skip rows carry no content and no FTS text (they never surface in browse
     // or search); entries carry the flattened search_text.
@@ -471,9 +495,9 @@ pub async fn create(
         INSERT INTO journal_entries
             (entry_date, project_path, status, headline, summary, topics,
              open_questions, session_ids, model, generated_at, generated_snapshot,
-             search_text)
+             search_text, open_question_threads, resolved_threads)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(),
-                coalesce($10::pg_snapshot, pg_current_snapshot()), $11)
+                coalesce($10::pg_snapshot, pg_current_snapshot()), $11, $12, $13)
         ON CONFLICT (entry_date, project_path)
         DO UPDATE SET status             = excluded.status,
                       headline           = excluded.headline,
@@ -484,7 +508,9 @@ pub async fn create(
                       model              = excluded.model,
                       generated_at       = clock_timestamp(),
                       generated_snapshot = excluded.generated_snapshot,
-                      search_text        = excluded.search_text
+                      search_text        = excluded.search_text,
+                      open_question_threads = excluded.open_question_threads,
+                      resolved_threads   = excluded.resolved_threads
         ",
     )
     .bind(payload.entry_date)
@@ -504,6 +530,8 @@ pub async fn create(
     .bind(&payload.model)
     .bind(&payload.as_of)
     .bind(search_text)
+    .bind(&thread_ids)
+    .bind(&resolved_threads)
     .execute(&state.pool)
     .await?;
 
