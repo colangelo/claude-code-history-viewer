@@ -23,8 +23,8 @@ bugs.
 - `cargo` is blocked locally — never claim Rust compiles; defer to CI.
 
 ## The provider abstraction (anchor every review to this)
-Existing providers live in `src-tauri/src/providers/` (`codex.rs`, `opencode.rs`)
-and are wired through `src-tauri/src/commands/multi_provider.rs`. Claude Code is
+Existing providers live in `crates/viewer/src/providers/` (`codex.rs`, `opencode.rs`)
+and are wired through `crates/viewer/src/commands/multi_provider.rs`. Claude Code is
 the built-in default. Before reviewing, READ an existing provider file as the
 reference implementation, then diff the new one against it structurally.
 

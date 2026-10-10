@@ -312,7 +312,7 @@ release and the query-floor measurements).
 
 ## Project Overview
 
-Claude Code History Viewer is a web application — a React frontend served by a Rust WebUI server (`src-tauri`, `--serve`), plus the cross-machine archive stack (`crates/hub`, `crates/sync-daemon`) — that lets users browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
+Claude Code History Viewer is a web application — a React frontend served by a Rust WebUI server (`crates/viewer`, `--serve`), plus the cross-machine archive stack (`crates/hub`, `crates/sync-daemon`) — that lets users browse and analyze conversation history from multiple AI coding assistants: Claude Code (`~/.claude`), Codex CLI (`~/.codex`), OpenCode (`~/.local/share/opencode/`), GitHub Copilot CLI (`~/.copilot/session-state/`), and VS Code Copilot Chat (`<UserData>/workspaceStorage/<hash>/chatSessions/`).
 
 ## Development Commands
 
@@ -448,9 +448,9 @@ pnpm lint                       # ESLint (no-explicit-any 등)
 pnpm build                      # webui-server가 dist/를 임베드 — 새 worktree에서는 이게 없으면 clippy --all-features 실패
 
 # ===== Backend 검증 =====
-cd src-tauri && cargo test -- --test-threads=1 && cd ..  # Rust 테스트 (단일 스레드 필수)
-cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings && cd ..  # Rust 린트
-cd src-tauri && cargo fmt --all -- --check && cd ..      # Rust 포맷 체크
+cd crates/viewer && cargo test -- --test-threads=1 && cd ../..  # Rust 테스트 (단일 스레드 필수)
+cd crates/viewer && cargo clippy --all-targets --all-features -- -D warnings && cd ../..  # Rust 린트
+cd crates/viewer && cargo fmt --all -- --check && cd ../..      # Rust 포맷 체크
 
 # ===== i18n 검증 =====
 pnpm run i18n:validate          # 5개 언어 키 동기화 확인 (en, ko, ja, zh-CN, zh-TW)
@@ -684,7 +684,7 @@ gh release view cchv-v0.13.0 -R "$FORK"   # expect 3 assets: hub bin + .sha256 +
 
 There is no Tauri desktop app any more — not as a distribution and, since the
 web-only cut (`openspec/changes/web-only-cut/`, Gitea #23), not as a dependency
-either. `src-tauri` is a plain Rust crate whose binary does two things, both
+either. `crates/viewer` is a plain Rust crate whose binary does two things, both
 dispatched from `lib.rs::run()`: `--export` (headless session export) and
 `--serve` (the WebUI server). With neither flag it prints usage and exits 2.
 
@@ -718,9 +718,9 @@ Checked 2026-07-26. Useful when deciding whether a red check is worth fixing.
 |---|---|---|
 | `cchv-webapp.tar.gz` | `server-release.yml`, every `cchv-v*` tag | **Us** — infra swaps it into m4m's `static_dir`; the live archive browser |
 | `cchv-hub-<v>-aarch64-apple-darwin` + `.sha256` | `server-release.yml`, every tag (macos-14) | **Us** — becomes `~/.local/bin/cchv-hub` on m4m (`docs/archive/deployment.md` §2b) |
-| 4× WebUI server binaries (`src-tauri --features webui-server`) | `server-release.yml`, **dispatch-only** | **Nobody today.** Free unless dispatched |
+| 4× WebUI server binaries (`crates/viewer --features webui-server`) | `server-release.yml`, **dispatch-only** | **Nobody today.** Free unless dispatched |
 
-`src-tauri` therefore ships to no one — but it is **not dead code**. It is the
+`crates/viewer` therefore ships to no one — but it is **not dead code**. It is the
 local CLI the `cchv-find` skill §3 drives, built from source on demand:
 `--export <id|path> --format html` and `--serve` both verified working
 2026-07-26. So `rust-tests.yml` guards a real local tool, just not a shipped
@@ -813,7 +813,7 @@ VS Code Copilot:    <UserData>/workspaceStorage/<hash>/chatSessions/*.jsonl     
 
 ### Backend (Rust WebUI server)
 
-- **Main Commands** (in `src-tauri/src/commands/`, routed by `src-tauri/src/server/mod.rs`):
+- **Main Commands** (in `crates/viewer/src/commands/`, routed by `crates/viewer/src/server/mod.rs`):
   - `get_claude_folder_path` - Locates user's `.claude` directory
   - `scan_projects` - Scans for all Claude projects
   - `load_project_sessions` - Loads sessions for a specific project
@@ -1024,9 +1024,9 @@ Assistant messages contain additional metadata within the `message` object:
 
 ### CLI flags
 
-- `--serve [--port N] [--host H] [--dist D] [--token T | --no-auth]` — WebUI headless mode (requires `webui-server` feature build). Parsed in `src-tauri/src/lib.rs::run_server`.
-- `--export <session-id|/abs/path.jsonl> [--format html|json] [--output <file>]` — headless session export; writes to `--output` or stdout, then exits. Dispatched first in `src-tauri/src/lib.rs::run`. Session ids resolve under `~/.claude/projects` (id prefix accepted when unambiguous). HTML rendering lives in `src-tauri/src/export.rs`, a Rust port of `src/services/export/{contentExtractor,htmlExporter}.ts` (markdown via `comrak`); keep the two in sync when adding content types.
-- **Shared argv helper**: `src-tauri/src/cli_args.rs::extract_flag_value` is the canonical `--flag=value` / `--flag value` parser used by both the `--export` and `--serve` code paths.
+- `--serve [--port N] [--host H] [--dist D] [--token T | --no-auth]` — WebUI headless mode (requires `webui-server` feature build). Parsed in `crates/viewer/src/lib.rs::run_server`.
+- `--export <session-id|/abs/path.jsonl> [--format html|json] [--output <file>]` — headless session export; writes to `--output` or stdout, then exits. Dispatched first in `crates/viewer/src/lib.rs::run`. Session ids resolve under `~/.claude/projects` (id prefix accepted when unambiguous). HTML rendering lives in `crates/viewer/src/export.rs`, a Rust port of `src/services/export/{contentExtractor,htmlExporter}.ts` (markdown via `comrak`); keep the two in sync when adding content types.
+- **Shared argv helper**: `crates/viewer/src/cli_args.rs::extract_flag_value` is the canonical `--flag=value` / `--flag value` parser used by both the `--export` and `--serve` code paths.
 
 ### Static archive webapp
 
@@ -1034,7 +1034,7 @@ Assistant messages contain additional metadata within the `message` object:
 
 ## Important Patterns
 
-- Backend commands are async and return `Result<T, String>`; a new one needs a handler and a route in `src-tauri/src/server/`
+- Backend commands are async and return `Result<T, String>`; a new one needs a handler and a route in `crates/viewer/src/server/`
 - Frontend calls backend commands through `api()` in `src/services/api.ts`
 - All file paths must be absolute when passed to Rust commands
 - The app uses Tailwind CSS with custom Claude brand colors defined in `tailwind.config.js`

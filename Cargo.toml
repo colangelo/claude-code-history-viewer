@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/history-core", "crates/protocol", "crates/hub", "crates/sync-daemon", "crates/loop-evals"]
+members = ["crates/viewer", "crates/history-core", "crates/protocol", "crates/hub", "crates/sync-daemon", "crates/loop-evals"]
 
 # ---------------------------------------------------------------------------
 # Single fork-owned version line (`cchv-v*` tags). Every crate inherits this

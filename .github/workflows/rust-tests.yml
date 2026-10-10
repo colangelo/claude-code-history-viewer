@@ -4,8 +4,8 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - "src-tauri/**"
-      # src-tauri depends on crates/history-core by path, and the workspace
+      - "crates/viewer/**"
+      # crates/viewer depends on crates/history-core by path, and the workspace
       # lock/manifest decide its dependency graph, so a change there can break
       # this suite's lint and tests. Without these a crates/** fix cannot
       # re-run a red rust-tests run (#14).
@@ -16,8 +16,8 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
-      - "src-tauri/**"
-      # src-tauri depends on crates/history-core by path, and the workspace
+      - "crates/viewer/**"
+      # crates/viewer depends on crates/history-core by path, and the workspace
       # lock/manifest decide its dependency graph, so a change there can break
       # this suite's lint and tests. Without these a crates/** fix cannot
       # re-run a red rust-tests run (#14).
@@ -55,11 +55,11 @@ jobs:
         run: mkdir -p dist && touch dist/index.html
 
       - name: Check formatting
-        working-directory: src-tauri
+        working-directory: crates/viewer
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        working-directory: src-tauri
+        working-directory: crates/viewer
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   # Main test job - runs in parallel with lint
@@ -95,14 +95,14 @@ jobs:
         run: mkdir -p dist && touch dist/index.html
 
       - name: Run tests with nextest
-        working-directory: src-tauri
+        working-directory: crates/viewer
         run: cargo nextest run --profile ci --retries 2
 
       # webui-server gates extra command surface (incl. is_safe_session_path),
       # which the default run does not compile. Exercise it explicitly so those
       # paths get real test coverage (e.g. the #355 symlinked-root regression).
       - name: Run tests with nextest (webui-server feature)
-        working-directory: src-tauri
+        working-directory: crates/viewer
         run: cargo nextest run --profile ci --retries 2 --features webui-server
 
       - name: Upload test results
@@ -141,14 +141,14 @@ jobs:
 
 
       - name: Generate coverage report
-        working-directory: src-tauri
+        working-directory: crates/viewer
         run: |
           cargo llvm-cov nextest --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: src-tauri/lcov.info
+          files: crates/viewer/lcov.info
           flags: rust
           fail_ci_if_error: false
         env:
@@ -158,7 +158,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: src-tauri/lcov.info
+          path: crates/viewer/lcov.info
           retention-days: 7
 
   # Benchmark tests - main branch only
@@ -180,14 +180,14 @@ jobs:
 
 
       - name: Run benchmarks
-        working-directory: src-tauri
+        working-directory: crates/viewer
         run: cargo bench --no-run
 
       - name: Store benchmark result
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: src-tauri/target/criterion
+          path: crates/viewer/target/criterion
           retention-days: 30
 
   # Security audit lives in security-audit.yml — it is time-dependent (a new
@@ -213,7 +213,7 @@ jobs:
 
 
       - name: Check documentation
-        working-directory: src-tauri
+        working-directory: crates/viewer
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps --document-private-items

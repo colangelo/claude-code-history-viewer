@@ -2,7 +2,7 @@ name: Archive Tests
 
 # Tests for the cross-machine history archive crates (history-core, protocol,
 # hub, sync-daemon). These need a Postgres service, which rust-tests.yml (the
-# viewer suite) does not provide. The viewer crate (src-tauri) is intentionally
+# viewer suite) does not provide. The viewer crate (crates/viewer) is intentionally
 # NOT built here — it is covered by rust-tests.yml.
 
 on:
@@ -10,6 +10,8 @@ on:
     branches: [main, develop]
     paths:
       - "crates/**"
+      # the viewer moved under crates/ (#23) but is not built here: rust-tests.yml
+      - "!crates/viewer/**"
       - "migrations/**"
       - ".sqlx/**"
       - "Cargo.toml"
@@ -19,6 +21,8 @@ on:
     branches: [main, develop]
     paths:
       - "crates/**"
+      # the viewer moved under crates/ (#23) but is not built here: rust-tests.yml
+      - "!crates/viewer/**"
       - "migrations/**"
       - ".sqlx/**"
       - "Cargo.toml"

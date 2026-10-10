@@ -22,7 +22,7 @@ Skills must:
 
 - Treat **only the root `CLAUDE.md` / `AGENTS.md`** as project-level guidance.
 - Treat **only `CONTEXT.md` / `CONTEXT-MAP.md` / `docs/adr/`** as domain documentation.
-- If you encounter any nested `CLAUDE.md` (e.g. `src/CLAUDE.md`, `src-tauri/src/commands/CLAUDE.md`), **ignore it**. These are local activity snapshots — not authoritative — and may reference unrelated projects (claude-mem cross-pollination).
+- If you encounter any nested `CLAUDE.md` (e.g. `src/CLAUDE.md`, `crates/viewer/src/commands/CLAUDE.md`), **ignore it**. These are local activity snapshots — not authoritative — and may reference unrelated projects (claude-mem cross-pollination).
 
 ## File structure
 

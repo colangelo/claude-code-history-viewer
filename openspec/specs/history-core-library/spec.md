@@ -4,7 +4,7 @@
 
 The `history-core` Rust library owns provider detection and the parse/normalize
 pipeline for all supported AI coding agents. It is tauri-free so it can be linked
-into headless binaries, and is shared by both the desktop app (`src-tauri`) and
+into headless binaries, and is shared by both the desktop app (`crates/viewer`) and
 the sync daemon.
 
 ## Requirements
@@ -53,7 +53,7 @@ The normalized output produced by `history-core` for a given input file SHALL be
 
 ### Requirement: Desktop application consumes the library without behavior change
 
-The desktop application (`src-tauri`) SHALL depend on `history-core` for all extraction and retain its `#[tauri::command]` wrappers as thin adapters. The desktop app's existing validation MUST remain green.
+The desktop application (`crates/viewer`) SHALL depend on `history-core` for all extraction and retain its `#[tauri::command]` wrappers as thin adapters. The desktop app's existing validation MUST remain green.
 
 #### Scenario: Desktop validation stays green after extraction
 

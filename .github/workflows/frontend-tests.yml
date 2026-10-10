@@ -1,7 +1,7 @@
 name: Frontend Tests
 
 # Gates the React/TypeScript frontend on every PR/push that touches it.
-# `rust-tests.yml` only covers `src-tauri/**` (cargo fmt/clippy/test), so
+# `rust-tests.yml` only covers `crates/viewer/**` (cargo fmt/clippy/test), so
 # without this job the frontend tests (plus tsc/eslint/i18n) would be ungated.
 on:
   push:

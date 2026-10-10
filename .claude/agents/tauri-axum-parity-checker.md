@@ -14,10 +14,10 @@ model: haiku
 You check command-surface parity for **claude-code-history-viewer**, which ships
 two backends over the same handlers:
 - **Desktop (Tauri)**: commands registered in `tauri::generate_handler![ ... ]`
-  inside `src-tauri/src/lib.rs` (around line 154).
+  inside `crates/viewer/src/lib.rs` (around line 154).
 - **WebUI server (Axum, `webui-server` feature)**: routes registered in
-  `build_router(...)` inside `src-tauri/src/server/mod.rs`, dispatching to
-  handlers in `src-tauri/src/server/handlers.rs`.
+  `build_router(...)` inside `crates/viewer/src/server/mod.rs`, dispatching to
+  handlers in `crates/viewer/src/server/handlers.rs`.
 
 When the frontend calls a command via `invoke()` / the HTTP client, it must be
 reachable on BOTH surfaces, or the WebUI `--serve` mode returns 404/405 (this is
@@ -29,12 +29,12 @@ exactly what broke in #340 `get_session_subagents` and related reports).
 ## Procedure
 1. Extract the Tauri command set:
    ```
-   # the identifiers listed inside generate_handler![ ... ] in src-tauri/src/lib.rs
+   # the identifiers listed inside generate_handler![ ... ] in crates/viewer/src/lib.rs
    ```
    Read `lib.rs` and collect every command name in the `generate_handler!` macro.
 2. Extract the Axum route set:
    ```
-   # every .route("/<name>", post(h::<name>)) in src-tauri/src/server/mod.rs
+   # every .route("/<name>", post(h::<name>)) in crates/viewer/src/server/mod.rs
    ```
    Grep `server/mod.rs` for `.route(` and collect the path + handler name.
 3. Normalize and diff the two sets by command name:

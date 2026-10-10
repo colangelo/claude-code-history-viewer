@@ -20,7 +20,7 @@ webui-server = ["dep:axum", "dep:tower-http", "dep:tower", "dep:tokio-stream", "
 
 [dependencies]
 # Tauri-free extraction/parse library shared with the sync daemon.
-history-core = { path = "../crates/history-core" }
+history-core = { path = "../history-core" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"

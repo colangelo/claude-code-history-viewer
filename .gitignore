@@ -21,13 +21,13 @@ dist-ssr
 
 # Rust / Cargo workspace build output (root target/ since the workspace move)
 /target/
-src-tauri/target/
+crates/viewer/target/
 # Cargo.lock is committed (now at the workspace root): this is a binary app, so a
 # pinned lockfile gives reproducible builds and shields CI from transient
 # crates.io download failures.
-src-tauri/gen/
-src-tauri/.env
-src-tauri/tauri.local.conf.json
+crates/viewer/gen/
+crates/viewer/.env
+crates/viewer/tauri.local.conf.json
 
 # Editor directories and files
 .vscode/*

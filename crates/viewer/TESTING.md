@@ -131,7 +131,7 @@ just rust-bench
 ## Test Organization
 
 ```
-src-tauri/
+crates/viewer/
 ├── src/
 │   ├── commands/
 │   │   ├── mod.rs
@@ -201,7 +201,7 @@ let assistant_msg = MessageBuilder::assistant()
 just rust-coverage-open
 
 # LCOV format (for CI/CD)
-cd src-tauri && cargo llvm-cov nextest --lcov --output-path lcov.info
+cd crates/viewer && cargo llvm-cov nextest --lcov --output-path lcov.info
 ```
 
 ### Coverage Targets

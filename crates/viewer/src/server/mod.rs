@@ -136,10 +136,10 @@ const READ_ONLY_MUTATING_API_PATHS: &[&str] = &[
 /// Frontend assets embedded at compile time from the `dist/` directory.
 ///
 /// When building with `cargo build --features webui-server`, the contents of
-/// `../dist` (relative to `src-tauri/`) are baked into the binary. At runtime
+/// `../../dist` (relative to `crates/viewer/`) are baked into the binary. At runtime
 /// the embedded files are served directly from memory — no filesystem access needed.
 #[derive(Embed)]
-#[folder = "../dist"]
+#[folder = "../../dist"]
 struct EmbeddedAssets;
 
 #[derive(Clone)]

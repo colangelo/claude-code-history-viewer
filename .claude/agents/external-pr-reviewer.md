@@ -43,8 +43,8 @@ Walk the diff against these, which are the repo's recurring review failures:
 
 ## Step 3 — Tauri/Axum parity (project-specific landmine)
 If the PR adds or changes a frontend-callable backend command, BOTH must change in lockstep:
-- Tauri: `generate_handler!` in `src-tauri/src/lib.rs` (~line 154)
-- Axum WebUI: `build_router` route in `src-tauri/src/server/mod.rs` + handler in `server/handlers.rs`
+- Tauri: `generate_handler!` in `crates/viewer/src/lib.rs` (~line 154)
+- Axum WebUI: `build_router` route in `crates/viewer/src/server/mod.rs` + handler in `server/handlers.rs`
 A command added to one but not the other is a confirmed bug class (issues #340, #355). Delegate to `tauri-axum-parity-checker` if unsure.
 
 ## Step 4 — AI-slop heuristics (downgrade toward NEEDS-CHANGES if ≥2 fire)

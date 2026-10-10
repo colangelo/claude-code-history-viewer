@@ -46,7 +46,7 @@ jobs:
 
       - name: Run security audit
         # Lockfile lives at the workspace root since the crates extraction
-        # (was src-tauri/Cargo.lock). Run audit from the root.
+        # (was crates/viewer/Cargo.lock). Run audit from the root.
         run: cargo audit
 
       # SOME ignores in .cargo/audit.toml rest on "the crate is not in the build

@@ -18,12 +18,12 @@ commands = [
 #   served via --dist, bypassing the compile-time embed, mirroring `just serve-dev`).
 # - cargo run --release reuses the [setup] build; it only relinks/rebuilds if the
 #   implementation touched Rust. It also resolves the target dir itself (the
-#   justfile `serve` recipe hardcodes src-tauri/target/release, which is fragile).
+#   justfile `serve` recipe hardcodes crates/viewer/target/release, which is fragile).
 # - --host 127.0.0.1 is REQUIRED: the server refuses non-loopback binds without
 #   auth (default host is 0.0.0.0). --no-auth is explicitly allowed on loopback
 #   and keeps the UI reachable without a token.
 [serve]
-start = "just frontend-build && cd src-tauri && cargo run --release --features webui-server -- --serve --host 127.0.0.1 --port 3727 --no-auth --dist ../dist"
+start = "just frontend-build && cd crates/viewer && cargo run --release --features webui-server -- --serve --host 127.0.0.1 --port 3727 --no-auth --dist ../../dist"
 health_url = "http://127.0.0.1:3727/health"
 ready_timeout_ms = 420000
 
@@ -42,7 +42,7 @@ commands = [
   "pnpm exec vitest run",
   "just rust-fmt-check",
   "just rust-lint",
-  "cd src-tauri && cargo test --features webui-server -- --test-threads=1",
+  "cd crates/viewer && cargo test --features webui-server -- --test-threads=1",
   "cargo test -p history-core -- --test-threads=1",
   "SQLX_OFFLINE=true TEST_DATABASE_URL=postgres://ac@localhost/cchv_archive_test cargo test -p loop-evals -- --test-threads=1",
 ]

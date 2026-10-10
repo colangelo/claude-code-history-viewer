@@ -40,4 +40,4 @@ jobs:
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 12
-            --append-system-prompt "This is claude-code-history-viewer, a solo-maintained web viewer and archive stack (React frontend, Rust WebUI server). Follow CLAUDE.md. PRs target the develop branch, never main. Reply in English. Do not run cargo locally. For any user-facing string, ensure the key exists in all dirs under src/i18n/locales/. If a frontend-callable command is added, register it in the Axum router in src-tauri/src/server/mod.rs."
+            --append-system-prompt "This is claude-code-history-viewer, a solo-maintained web viewer and archive stack (React frontend, Rust WebUI server). Follow CLAUDE.md. PRs target the develop branch, never main. Reply in English. Do not run cargo locally. For any user-facing string, ensure the key exists in all dirs under src/i18n/locales/. If a frontend-callable command is added, register it in the Axum router in crates/viewer/src/server/mod.rs."

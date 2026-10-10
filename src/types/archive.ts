@@ -1,6 +1,6 @@
 /**
  * Archive Manager Types
- * Maps to Rust structs in src-tauri/src/commands/archive.rs
+ * Maps to Rust structs in crates/viewer/src/commands/archive.rs
  */
 
 export interface ArchiveManifest {

@@ -178,7 +178,7 @@ registering it in `mod.rs` — the daemon, hub and viewer pick it up for free.
 
 ## Local viewer and CLI
 
-`src-tauri` is no longer a shipped artifact, but it is not dead code: it's the
+`crates/viewer` is no longer a shipped artifact, but it is not dead code: it's the
 local tool you build from source when you want to read *this* machine's history
 without a hub, or export a session.
 
@@ -217,7 +217,7 @@ cargo build --release -p hub -p sync-daemon
 ```
 
 **Requirements:** Node.js 18+, pnpm, Rust 1.80+ (the hub's embedder dependency
-graph sets the floor; the other crates are fine at 1.77.2). Building `src-tauri`
+graph sets the floor; the other crates are fine at 1.77.2). Building `crates/viewer`
 additionally needs the platform webview toolchain — on Debian/Ubuntu,
 `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
 
@@ -268,7 +268,7 @@ history, see `git tag -n 'cchv-v*'` and the
 [Releases](https://github.com/colangelo/claude-code-history-viewer/releases) page.
 
 The desktop *distribution* is retired here; the desktop *dependency* is not.
-`src-tauri` still compiles the full webview stack and its GUI path still runs —
+`crates/viewer` still compiles the full webview stack and its GUI path still runs —
 see `AGENTS.md` for exactly what that does and does not mean before you act on it.
 
 ## Contributing

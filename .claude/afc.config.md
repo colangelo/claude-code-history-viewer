@@ -6,16 +6,16 @@
 ## CI Commands
 
 ```yaml
-ci: "pnpm install && pnpm tsc --build . && pnpm lint && pnpm vitest run && cd src-tauri && cargo test -- --test-threads=1 && cargo clippy --all-targets --all-features -- -D warnings && cargo fmt --all -- --check && cd .."
-gate: "pnpm tsc --build . && pnpm lint && cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings && cd .."
-test: "pnpm vitest run && cd src-tauri && cargo test -- --test-threads=1 && cd .."
+ci: "pnpm install && pnpm tsc --build . && pnpm lint && pnpm vitest run && cd crates/viewer && cargo test -- --test-threads=1 && cargo clippy --all-targets --all-features -- -D warnings && cargo fmt --all -- --check && cd ../.."
+gate: "pnpm tsc --build . && pnpm lint && cd crates/viewer && cargo clippy --all-targets --all-features -- -D warnings && cd ../.."
+test: "pnpm vitest run && cd crates/viewer && cargo test -- --test-threads=1 && cd ../.."
 test_frontend: "pnpm vitest run --reporter=verbose"
-test_backend: "cd src-tauri && cargo test -- --test-threads=1"
+test_backend: "cd crates/viewer && cargo test -- --test-threads=1"
 typecheck: "pnpm tsc --build ."
 lint: "pnpm lint"
 lint_fix: "pnpm lint --fix"
-clippy: "cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings"
-fmt_check: "cd src-tauri && cargo fmt --all -- --check"
+clippy: "cd crates/viewer && cargo clippy --all-targets --all-features -- -D warnings"
+fmt_check: "cd crates/viewer && cargo fmt --all -- --check"
 i18n_validate: "pnpm run i18n:validate"
 build_frontend: "pnpm build"
 build_tauri: "pnpm tauri:build"
@@ -38,18 +38,18 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 - **Indicators**: `src/indicators/` — Status/progress indicators
 - **Risk**: `src/risk/` — Risk assessment or related UI
 
-### Backend (src-tauri/src/)
-- **Commands**: `src-tauri/src/commands/` — Tauri IPC command handlers (public API)
-- **Models**: `src-tauri/src/models/` — Data structures, JSONL message types, serialization
-- **Providers**: `src-tauri/src/providers/` — File system providers (Claude, Codex, OpenCode)
-- **Server** (optional feature `webui-server`): `src-tauri/src/server/` — Axum web server for HTTP mode
-- **Store**: `src-tauri/src/store/` — Persistent settings via Tauri store plugin
-- **Components**: `src-tauri/src/components/` — Backend data processing (parsing, filtering)
-- **Hooks**: `src-tauri/src/hooks/` — Utilities for event handling
-- **AI**: `src-tauri/src/ai/` — AI-related logic
-- **Trading**: `src-tauri/src/trading/` — Domain-specific logic (if applicable)
-- **Contexts**: `src-tauri/src/contexts/` — Shared state contexts
-- **Database**: `src-tauri/src/database/` — Data access, schema
+### Backend (crates/viewer/src/)
+- **Commands**: `crates/viewer/src/commands/` — Tauri IPC command handlers (public API)
+- **Models**: `crates/viewer/src/models/` — Data structures, JSONL message types, serialization
+- **Providers**: `crates/viewer/src/providers/` — File system providers (Claude, Codex, OpenCode)
+- **Server** (optional feature `webui-server`): `crates/viewer/src/server/` — Axum web server for HTTP mode
+- **Store**: `crates/viewer/src/store/` — Persistent settings via Tauri store plugin
+- **Components**: `crates/viewer/src/components/` — Backend data processing (parsing, filtering)
+- **Hooks**: `crates/viewer/src/hooks/` — Utilities for event handling
+- **AI**: `crates/viewer/src/ai/` — AI-related logic
+- **Trading**: `crates/viewer/src/trading/` — Domain-specific logic (if applicable)
+- **Contexts**: `crates/viewer/src/contexts/` — Shared state contexts
+- **Database**: `crates/viewer/src/database/` — Data access, schema
 
 ### Import Rules
 - **Upper → Lower**: Components depend on hooks/services/types, never the reverse
@@ -164,7 +164,7 @@ The project is a **Tauri 2 desktop application** with a layered, module-based ar
 - **Framework**: Built-in `#[cfg(test)]` modules
 - **Runner**: `cargo test` (no separate test framework needed)
 - **Thread Safety**: `--test-threads=1` mandatory (settings tests modify `env::set_var("HOME")`)
-- **Test Utils**: `src-tauri/src/test_utils.rs` (shared helpers)
+- **Test Utils**: `crates/viewer/src/test_utils.rs` (shared helpers)
 
 ## i18n Internationalization
 

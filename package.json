@@ -101,6 +101,6 @@
     "src/**/*.{ts,tsx}": [
       "eslint"
     ],
-    "src-tauri/src/**/*.rs": "bash -c 'cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'"
+    "crates/viewer/src/**/*.rs": "bash -c 'cargo fmt --manifest-path crates/viewer/Cargo.toml -- --check && cargo clippy --manifest-path crates/viewer/Cargo.toml --all-targets --all-features -- -D warnings'"
   }
 }

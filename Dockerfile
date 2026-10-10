@@ -24,10 +24,10 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
        libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY src-tauri/ src-tauri/
+COPY crates/viewer/ crates/viewer/
 # rust-embed reads dist/ at compile time
 COPY --from=frontend /app/dist dist/
-WORKDIR /app/src-tauri
+WORKDIR /app/crates/viewer
 RUN cargo build --release --features webui-server
 
 # ── Stage 3: Minimal runtime image ──────────────────────────────────
@@ -46,7 +46,7 @@ ENV http_proxy= https_proxy=
 # Run as non-root user for security
 RUN groupadd -r cchv && useradd -r -g cchv -d /home/cchv -s /sbin/nologin -m cchv
 
-COPY --from=backend /app/src-tauri/target/release/claude-code-history-viewer /usr/local/bin/cchv-server
+COPY --from=backend /app/crates/viewer/target/release/claude-code-history-viewer /usr/local/bin/cchv-server
 
 ENV PORT=3727
 EXPOSE 3727
