@@ -50,6 +50,10 @@
 
 ## 6. Ship (needs ac)
 
-- [ ] 6.1 Release (hub + migration); infra reinstalls the distiller in the same batch.
+- [x] 6.1 Release (hub + migration); infra reinstalls the distiller in the same batch.
       Live check: one entry written after the swap has `open_question_threads` set.
-- [ ] 6.2 `cchv-find` skill: document the endpoint (relay to the CONTEXT owner).
+      **Done:** cchv-v0.24.0 (ac a1010-35), live on m4m 2026-10-10. Verified 2026-10-13:
+      migration 11 → 12, the installed distiller is the v0.24.0 blob, 26 `threads … offered`
+      log lines and 0 fetch failures, 64 resolved threads across 81 projects.
+- [x] 6.2 `cchv-find` skill: document the endpoint (relay to the CONTEXT owner).
+      **Done:** CONTEXT 2b987e7, checked against the live hub by the CONTEXT owner.

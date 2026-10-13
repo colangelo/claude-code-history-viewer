@@ -86,17 +86,21 @@
 - [x] 4.5 Update AGENTS.md (*Desktop app (retired…)*, *What CI builds*, Project Overview
       dev commands), the Justfile (`dev`, `tauri-build`), and `cchv-find` §3 (relay to the
       CONTEXT owner if its commands change).
-- [ ] 4.6 Record the "after" numbers from 1.1 in the PR/commit message. CI green on every
+- [x] 4.6 Record the "after" numbers from 1.1 in the PR/commit message. CI green on every
       workflow for the final sha.
       **After, 2026-10-10** (m4m, same settings as 1.1, both trees from `cargo clean
       --release`): dependency graph **664 → 237** crates (1.1's method, reproduced exactly
       on `main`); release build compiles **437 → 156** crates in **2m03s → 41s** (cargo's
       own `Finished` time; the after run's wall clock included heavy-lock wait); release
       binary **38,917,088 → 16,904,480 bytes** (−57 %). (1.1's 40,269,912 was an older
-      frontend; `main` measured today is the fair "before".) CI green: pending the PR.
+      frontend; `main` measured today is the fair "before".) CI: shipped in cchv-v0.24.0
+      (merge 35a6660b). On the tag (ff940a33) four workflows were green; Rust Tests failed
+      in three main-only jobs (Coverage, Benchmarks, Documentation) that lacked the `dist/`
+      placeholder. Fixed at a58c3994, where all six jobs are green.
 
 ## 5. Optional, after group 4 is green (Q2)
 
-- [ ] 5.1 Rename `src-tauri` → `crates/viewer` (or the agreed name) in its own commit:
+- [x] 5.1 Rename `src-tauri` → `crates/viewer` (or the agreed name) in its own commit:
       path-only, no logic. Update workflows, Justfile, docs and the `cchv-find` skill in
-      that same commit.
+      that same commit. **Done** as 0aebf1ba (kept separate in the merge, per Q2); the
+      `cchv-find` and `cchv-deploy` skill edits went to the CONTEXT owner.
