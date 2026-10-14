@@ -553,6 +553,34 @@ semantic leg fell back to keyword.
 > vault `AC-DevOps` is the human vault + fallback), referenced by path/item title,
 > never committed.
 
+### The hub host must stay awake (m4m)
+
+The hub assumes its host is always on, and nothing in it can serve through a sleep.
+m4m's AC power setting is `pmset -c sleep 1` (idle sleep after one minute). From
+2026-10-10 to 10-13 it stayed awake only because coreaudiod happened to hold audio
+sleep assertions. They released at 2026-10-13T23:15:26Z and m4m began idle-sleeping
+and dark-waking: 37 sleeps by 08:00Z the next day.
+
+What that looks like:
+
+- **While asleep:** every Gatus cchv check times out, plain `/v1/healthz` included.
+- **On each dark wake:** the 10 pooled pg1 connections are dead (`ping on idle
+  connection … Connection reset by peer`). Requests wait past the 5 s
+  `acquire_timeout`, so `healthz` returns 503 after exactly 5 s and ingest or journal
+  POSTs return 500. Every stall on 2026-10-14 began 5–20 s after a DarkWake in
+  `pmset -g log`.
+- **The distiller:** a model call that spans a sleep "hangs" for as long as the Mac
+  sleeps, so the backlog drains at the pace of the wakes. `/v1/healthz/journal` stays
+  `stale` meanwhile.
+
+**Diagnose a hub stall on m4m against `pmset -g log` first** (local time, `+0200`).
+Pool timeouts that line up with DarkWakes are this, not the database. No hub change
+fixes it: `acquire_timeout` is doing its job.
+
+Fix: a keep-awake on AC. An interim no-sudo `caffeinate -s` LaunchAgent went on m4m
+2026-10-14. The permanent power policy is ac's decision, asks row
+`gestore-lab.a1014-01`; the recommendation is to stay awake on AC.
+
 ## 2b. House deployment: swapping the m4m hub binary
 
 > **Swap proof, from `cchv-v0.21.0` on: read the version off the running hub.**
