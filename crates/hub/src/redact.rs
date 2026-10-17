@@ -48,7 +48,7 @@ pub struct Finding {
 const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
 const PATTERNS: [&str; 4] = [
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
-    r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,})",
+    r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,})",
     r"\b(?i:Bearer)[ \t]+(?P<value>[A-Za-z0-9._~+/=\-]{20,})",
     r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
 ];
@@ -497,6 +497,52 @@ mod tests {
                 prefix,
                 "before [REDACTED:prefix] after",
             );
+        }
+    }
+
+    // LM Studio keys are `sk-lm-<8>:<20>`: the colon ends the generic sk- run at
+    // 11 chars, under its 20-char floor, so one was stored in clear (Gitea #64).
+    #[test]
+    fn lm_studio_colon_form() {
+        let value = format!(
+            "sk-lm-{}:{}",
+            synthetic(8, ALPHABET),
+            synthetic(20, ALPHABET)
+        );
+        positive(
+            &format!(r#"{{"apiKey":"{value}"}}"#),
+            &value,
+            Rule::Prefix,
+            "sk-lm-",
+            r#"{"apiKey":"[REDACTED:prefix]"}"#,
+        );
+        positive(
+            &format!("export LM_KEY {value} now"),
+            &value,
+            Rule::Prefix,
+            "sk-lm- bare",
+            "export LM_KEY [REDACTED:prefix] now",
+        );
+        for (fixture, text) in [
+            (
+                "short tail",
+                format!(
+                    "sk-lm-{}:{}",
+                    synthetic(8, ALPHABET),
+                    synthetic(15, ALPHABET)
+                ),
+            ),
+            (
+                "short head",
+                format!(
+                    "sk-lm-{}:{}",
+                    synthetic(7, ALPHABET),
+                    synthetic(20, ALPHABET)
+                ),
+            ),
+            ("prose", "the sk-lm-prefix: a key format".to_owned()),
+        ] {
+            assert_eq!(scan(&text).len(), 0, "rule prefix fixture {fixture}");
         }
     }
 
