@@ -436,8 +436,40 @@ redact = ["pem", "prefix"]
 ```
 
 Applies from the next hub start, to new ingest only. Rows already archived are
-untouched until the retroactive run (#34 task 3.3) exists; the Mac-side
-transcript files are never touched, so a finding still means "rotate".
+rewritten only by the real run below; the Mac-side transcript files are never
+touched, so a finding still means "rotate".
+
+**The real run (`hub findings redact`, #34 task 3.3).** It runs the same dry run
+first and rewrites exactly the rows that dry run lists, for the rules named, and
+nothing else:
+
+```bash
+hub findings dry-run  --rule pem --rule prefix --expect <known leak>      # read N rows
+hub findings redact   --rule pem --rule prefix --expect <known leak> --max-rows N
+hub findings dry-run  --rule pem --rule prefix                            # expect 0 hits
+```
+
+- **Refusals, all before the first write:** no `--rule`; a missed `--expect`
+  (verdict COULD NOT LOOK); more rows than `--max-rows`. `--max-rows` is required:
+  it is the row count the operator read from their own dry run, so a scan that grew
+  since stops the run.
+- **Per row, one transaction:** the row is re-read `FOR UPDATE`, and its hits for the
+  named rules must equal the dry run's field by field, or that row rolls back and the
+  run stops. Rows already rewritten stay rewritten; rerunning the same command finds
+  nothing left in them.
+- **What a rewrite touches:**
+  - `raw`, `content`, `search_text`, with `text_search` regenerated from them;
+  - `message_id`;
+  - the findings rows, upserted as `redacted`;
+  - `ingest_xid`, restamped so the row's journal day reads dirty and is re-distilled
+    (expect `/v1/healthz/journal` to show those days pending until the distiller drains
+    them; days older than its horizon need a `--backfill`);
+  - tool rows, re-derived only when the redacted payload extracts differently.
+- **Needs no rebuild:** the stats mirror holds no message text.
+- **Not reached:** journal text already distilled from those days stays as it is until
+  re-distilled (scanning it is out of scope, task 3.4), and the Mac-side files.
+- **Backups:** take a fresh pg1 backup point first. The run cannot be undone from the
+  database, because the replaced values exist nowhere else in it.
 
 Monitoring: `GET /v1/healthz/findings?since=24h` is unauthenticated like the
 other health checks and carries counts only: `200` (`status: ok`) while no

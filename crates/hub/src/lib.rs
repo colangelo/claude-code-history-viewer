@@ -257,6 +257,31 @@ pub async fn run_findings_dry_run(opts: findings::DryRunOptions) -> anyhow::Resu
     Ok(())
 }
 
+/// `hub findings redact`: the real run (task 3.3). A writable pool, one
+/// connection, so its row transactions run strictly one after another.
+pub async fn run_findings_redact(opts: findings::RedactOptions) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout = '60s'")
+                    .execute(&mut *conn)
+                    .await?;
+                sqlx::query("SET lock_timeout = '10s'")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    let report = findings::redact_existing(&pool, &opts).await?;
+    print!("{}", report.render());
+    Ok(())
+}
+
 pub async fn run_mirror_rebuild() -> anyhow::Result<()> {
     let config = HubConfig::load()?;
     let pool = PgPoolOptions::new()

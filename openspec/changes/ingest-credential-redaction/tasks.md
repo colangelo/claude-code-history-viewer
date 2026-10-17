@@ -57,8 +57,18 @@
       [--expect ROW|SESSION:UUID]... [--batch N]` (the `redact-existing` name is kept for the
       real run, 3.3). Read-only pool (`default_transaction_read_only`, 60 s statement timeout),
       no migration. Verdicts: UNVERIFIED (no `--expect`) / COULD NOT LOOK / FLOOR.
-- [ ] 3.3 Real run: rewrite, insert findings, re-derive (tool rows, `message_embeddings`
+- [x] 3.3 Real run: rewrite, insert findings, re-derive (tool rows, `message_embeddings`
       delete, journal day dirty, mirror rebuild note). Tested on the throwaway PG.
+      **Done 2026-10-17** as `hub findings redact --rule ID... --max-rows N [--since]
+      [--expect]... [--batch N]` (ac's go a1017-07, "yes one release"). It runs `dry_run`
+      itself and rewrites exactly the rows it lists. Each row is re-checked under
+      `FOR UPDATE` against the dry run's per-field counts. Refusals (no rule, COULD NOT
+      LOOK, over `--max-rows`) come before any write. Re-derives `message_id`, tool rows
+      (only when changed), findings (`redacted`) and `ingest_xid` (journal day dirty). No
+      `message_embeddings` table exists on prod, and the mirror holds no text, so neither
+      needs anything. Test: `redact_existing_rewrites_exactly_what_the_dry_run_lists`,
+      mutation-checked: redacting all rules, skipping the `ingest_xid` restamp, or dropping
+      the row cap each fail it.
 - [ ] 3.4 Flag-only scan of `journal_entries` text (design Q5 residual). **Out of scope
       (ac, 2026-10-10):** it would read journal text.
 

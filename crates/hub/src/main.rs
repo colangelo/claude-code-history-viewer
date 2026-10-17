@@ -14,6 +14,10 @@ USAGE:
     hub findings dry-run [--since 7d|<RFC3339>] [--rule ID]... [--expect ROW|SESSION:UUID]... [--batch N]
                                          scan stored messages for credential shapes,
                                          read-only; prints locations and shapes, never values
+    hub findings redact --rule ID... --max-rows N [--since ...] [--expect ...]... [--batch N]
+                                         the REAL run: rewrites exactly the rows the same dry
+                                         run lists for the named rules; refuses before writing
+                                         on a missed --expect or more than N rows
 ";
 
 /// Every value of a repeatable `--flag V` / `--flag=V`.
@@ -122,6 +126,18 @@ async fn main() -> anyhow::Result<()> {
         },
         Some("findings") => match args.get(1).map(String::as_str) {
             Some("dry-run") => hub::run_findings_dry_run(dry_run_options(&args[2..])).await,
+            Some("redact") => {
+                let scan = dry_run_options(&args[2..]);
+                if scan.rules.is_empty() {
+                    usage_error("findings redact needs at least one --rule");
+                }
+                let max_rows = flag_i64(&args[2..], "--max-rows").unwrap_or_else(|| {
+                    usage_error(
+                        "findings redact needs --max-rows N (the row count of your dry run)",
+                    )
+                });
+                hub::run_findings_redact(hub::findings::RedactOptions { scan, max_rows }).await
+            }
             other => usage_error(&format!(
                 "unknown findings subcommand: {}",
                 other.unwrap_or("(none)")

@@ -425,6 +425,269 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
     Ok(report)
 }
 
+// ---------------------------------------------------------------------------
+// Real run (task 3.3)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+pub struct RedactOptions {
+    /// The dry run this real run executes. Its rules must be non-empty: a real
+    /// run names what it replaces.
+    pub scan: DryRunOptions,
+    /// Refuse when the dry run lists more rows than this. The operator states
+    /// the count they read from their own dry run, so a run that has grown
+    /// since (a new rule, a wider `--since`) stops before writing.
+    pub max_rows: i64,
+}
+
+#[derive(Debug, Default)]
+pub struct RedactReport {
+    /// The dry run the rewrite executed, as it would print on its own.
+    pub dry_run: DryRunReport,
+    /// Row ids rewritten, ascending.
+    pub rewritten: Vec<i64>,
+    /// Rewritten rows whose tool rows changed and were re-derived.
+    pub tool_rows_rederived: Vec<i64>,
+    /// Chosen-rule hits a rescan of the rewritten rows still finds (expect 0).
+    pub after_hits: usize,
+}
+
+impl RedactReport {
+    /// Contains no detected value: the dry run's report plus row ids and counts.
+    pub fn render(&self) -> String {
+        let mut o = self.dry_run.render();
+        let _ = writeln!(o, "\nREAL RUN");
+        let _ = writeln!(o, "  rows rewritten: {}", self.rewritten.len());
+        let ids: Vec<String> = self.rewritten.iter().map(i64::to_string).collect();
+        let _ = writeln!(o, "  row ids: {}", ids.join(" "));
+        let _ = writeln!(
+            o,
+            "  tool rows re-derived: {}",
+            self.tool_rows_rederived.len()
+        );
+        let _ = writeln!(
+            o,
+            "  journal days re-dirtied: each rewritten row's session-day (ingest_xid restamped)"
+        );
+        let _ = writeln!(
+            o,
+            "  rescan of rewritten rows, chosen rules: {} hits",
+            self.after_hits
+        );
+        o
+    }
+}
+
+/// `(row, field, rule) → hits` for the chosen rules, from detector output.
+type HitCounts = BTreeMap<(i64, &'static str, &'static str), u32>;
+
+/// Rewrite the rows a dry run lists, replacing the chosen rules' values with
+/// the ingest marker, and nothing else.
+///
+/// Parity with the dry run is by construction and then checked: the rows come
+/// from [`dry_run`] itself, each row is re-read under `FOR UPDATE` and its
+/// chosen-rule hits must equal the dry run's for that row field by field, or
+/// the row's transaction rolls back and the run stops. Every guard that can
+/// refuse (no rule, a missed `--expect`, more rows than `max_rows`) refuses
+/// before the first write.
+///
+/// Per rewritten row, in one transaction: `raw`/`content`/`search_text`
+/// rewritten (`text_search` is generated from them); `message_id` re-derived;
+/// tool rows re-derived only when the redacted payload extracts differently;
+/// findings upserted as `redacted`; `ingest_xid` restamped so the row's journal
+/// day reads dirty and is re-distilled. The stats mirror holds no message text
+/// and keys tool rows above its watermark, so it needs no rebuild.
+pub async fn redact_existing(pool: &PgPool, opts: &RedactOptions) -> anyhow::Result<RedactReport> {
+    let rules = opts.scan.rules.clone();
+    anyhow::ensure!(!rules.is_empty(), "a real run needs at least one --rule");
+    let report = dry_run(pool, &opts.scan).await?;
+    anyhow::ensure!(
+        !report.expected.iter().any(|(_, found)| !found),
+        "{} — nothing written",
+        report.verdict()
+    );
+    let mut expected: HitCounts = BTreeMap::new();
+    for h in &report.hits {
+        *expected
+            .entry((h.row_id, h.field, h.rule.id()))
+            .or_default() += 1;
+    }
+    let targets: BTreeSet<i64> = report.hits.iter().map(|h| h.row_id).collect();
+    let n_rows = i64::try_from(targets.len()).unwrap_or(i64::MAX);
+    anyhow::ensure!(
+        n_rows <= opts.max_rows,
+        "the dry run lists {n_rows} rows, above --max-rows {} — nothing written",
+        opts.max_rows
+    );
+
+    let mut out = RedactReport {
+        dry_run: report,
+        ..RedactReport::default()
+    };
+    for &id in &targets {
+        if rewrite_row(pool, id, &rules, &expected).await? {
+            out.tool_rows_rederived.push(id);
+        }
+        out.rewritten.push(id);
+        tracing::info!(
+            row = id,
+            done = out.rewritten.len(),
+            of = targets.len(),
+            "redacted"
+        );
+    }
+
+    // Rescan the rewritten rows only: a full rescan would repeat the whole scan,
+    // and the operator's own dry run afterwards is the archive-wide check.
+    for &id in &targets {
+        let row = sqlx::query("SELECT raw, content, search_text FROM messages WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+        let mut raw: serde_json::Value = row.get("raw");
+        let mut content: Option<serde_json::Value> = row.get("content");
+        let mut search_text: Option<String> = row.get("search_text");
+        let hits = redact::apply_to_message(&mut raw, content.as_mut(), search_text.as_mut(), &[]);
+        out.after_hits += hits
+            .iter()
+            .filter(|h| rules.contains(&h.rule))
+            .map(|h| h.hits as usize)
+            .sum::<usize>();
+    }
+    Ok(out)
+}
+
+/// Rewrite one row in its own transaction. Returns whether its tool rows were
+/// re-derived. Errors (and rolls back) when the row's chosen-rule hits no
+/// longer match what the dry run counted.
+async fn rewrite_row(
+    pool: &PgPool,
+    id: i64,
+    rules: &[Rule],
+    expected: &HitCounts,
+) -> anyhow::Result<bool> {
+    use crate::extract;
+
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(
+        "SELECT session_id, type, raw, content, search_text FROM messages WHERE id = $1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let session_pk: i64 = row.get("session_id");
+    let message_type: Option<String> = row.get("type");
+    let mut raw: serde_json::Value = row.get("raw");
+    let mut content: Option<serde_json::Value> = row.get("content");
+    let mut search_text: Option<String> = row.get("search_text");
+    let old_uses = extract::tool_uses(message_type.as_deref(), content.as_ref(), &raw);
+    let old_results = extract::tool_results(content.as_ref());
+
+    let hits = redact::apply_to_message(&mut raw, content.as_mut(), search_text.as_mut(), rules);
+    let found: HitCounts = hits
+        .iter()
+        .filter(|h| rules.contains(&h.rule))
+        .map(|h| ((id, h.field, h.rule.id()), h.hits))
+        .collect();
+    let listed: HitCounts = expected
+        .range((id, "", "")..)
+        .take_while(|((row, ..), _)| *row == id)
+        .map(|(k, v)| (*k, *v))
+        .collect();
+    anyhow::ensure!(
+        found == listed,
+        "row {id}: hits differ from the dry run's (row changed since the scan?) — rolled back"
+    );
+
+    sqlx::query(
+        r"
+        UPDATE messages
+        SET raw = $2, content = $3, search_text = $4, message_id = $5,
+            ingest_xid = pg_current_xact_id()
+        WHERE id = $1
+        ",
+    )
+    .bind(id)
+    .bind(&raw)
+    .bind(&content)
+    .bind(&search_text)
+    .bind(extract::message_id(&raw))
+    .execute(&mut *tx)
+    .await?;
+
+    for h in hits.iter().filter(|h| rules.contains(&h.rule)) {
+        sqlx::query(
+            r"
+            INSERT INTO credential_findings
+                (message_ref, field, rule, hits, key_names, redacted, detector_version)
+            VALUES ($1, $2, $3, $4, $5, true, $6)
+            ON CONFLICT (message_ref, field, rule, detector_version)
+                DO UPDATE SET redacted = true
+            ",
+        )
+        .bind(id)
+        .bind(h.field)
+        .bind(h.rule.id())
+        .bind(i32::try_from(h.hits).unwrap_or(i32::MAX))
+        .bind(&h.key_names)
+        .bind(i32::try_from(redact::DETECTOR_VERSION).unwrap_or(i32::MAX))
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    let new_uses = extract::tool_uses(message_type.as_deref(), content.as_ref(), &raw);
+    let new_results = extract::tool_results(content.as_ref());
+    let rederive = new_uses != old_uses || new_results != old_results;
+    if rederive {
+        sqlx::query("DELETE FROM message_tool_uses WHERE message_ref = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM message_tool_results WHERE message_ref = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        for u in &new_uses {
+            sqlx::query(
+                r"
+                INSERT INTO message_tool_uses
+                    (message_ref, session_id, seq, tool_name, tool_use_id, skill_name,
+                     subagent_type, is_error)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ",
+            )
+            .bind(id)
+            .bind(session_pk)
+            .bind(u.seq)
+            .bind(&u.tool_name)
+            .bind(&u.tool_use_id)
+            .bind(&u.skill_name)
+            .bind(&u.subagent_type)
+            .bind(u.is_error)
+            .execute(&mut *tx)
+            .await?;
+        }
+        for r in &new_results {
+            sqlx::query(
+                r"
+                INSERT INTO message_tool_results
+                    (message_ref, session_id, seq, tool_use_id, is_error)
+                VALUES ($1, $2, $3, $4, $5)
+                ",
+            )
+            .bind(id)
+            .bind(session_pk)
+            .bind(r.seq)
+            .bind(&r.tool_use_id)
+            .bind(r.is_error)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(rederive)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

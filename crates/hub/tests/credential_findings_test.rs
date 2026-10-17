@@ -581,3 +581,205 @@ async fn findings_health_pages_on_a_finding_without_auth_or_values() {
     let bad = get("forever").await;
     assert_eq!(bad.status(), 400);
 }
+
+/// `(raw, content, search_text, ingest_xid)` of a row, as text.
+async fn row_state(pool: &PgPool, id: i64) -> (String, String, String, String) {
+    let row: (
+        serde_json::Value,
+        Option<serde_json::Value>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT raw, content, search_text, ingest_xid::text FROM messages WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (
+        row.0.to_string(),
+        row.1.map(|c| c.to_string()).unwrap_or_default(),
+        row.2.unwrap_or_default(),
+        row.3.unwrap_or_default(),
+    )
+}
+
+/// Task 3.3: the real run rewrites exactly the rows the dry run lists for the
+/// chosen rules, refuses before writing on every guard, and leaves nothing for
+/// a second run.
+#[tokio::test]
+async fn redact_existing_rewrites_exactly_what_the_dry_run_lists() {
+    let hub = spawn(Vec::new()).await;
+    let base: DateTime<Utc> = "2094-05-01T00:00:00Z".parse().unwrap();
+    // This test counts rows in its window, so clear the window first: it owns
+    // 2094 in the test database, and an earlier aborted run leaves rows there.
+    sqlx::query(
+        r#"DELETE FROM messages WHERE "timestamp" >= '2094-01-01' AND "timestamp" < '2095-01-01'"#,
+    )
+    .execute(&hub.pool)
+    .await
+    .unwrap();
+    let run = Uuid::new_v4().simple().to_string();
+    let ts = (base
+        + chrono::Duration::seconds(i64::from(u16::from_str_radix(&run[..4], 16).unwrap())))
+    .to_rfc3339();
+    let secret = synthetic_token();
+    let assigned = format!("pw{}", Uuid::new_v4().simple());
+    let mixed_secret = synthetic_token();
+    let mixed_assigned = format!("pw{}", Uuid::new_v4().simple());
+    let session = format!("s-real-{run}");
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            &session,
+            vec![
+                msg(
+                    &session,
+                    &format!("{run}-prefix"),
+                    &ts,
+                    &format!("export GH_TOKEN {secret} now"),
+                ),
+                msg(
+                    &session,
+                    &format!("{run}-assign"),
+                    &ts,
+                    &format!("password={assigned}"),
+                ),
+                msg(
+                    &session,
+                    &format!("{run}-clean"),
+                    &ts,
+                    "nothing to see, 4096 tokens",
+                ),
+                msg(
+                    &session,
+                    &format!("{run}-mixed"),
+                    &ts,
+                    &format!("password={mixed_assigned} pushed {mixed_secret}"),
+                ),
+            ],
+        ),
+    )
+    .await;
+    let (prefix_id, ..) = stored(&hub, &format!("{run}-prefix")).await;
+    let (assign_id, ..) = stored(&hub, &format!("{run}-assign")).await;
+    let (clean_id, ..) = stored(&hub, &format!("{run}-clean")).await;
+    let (mixed_id, ..) = stored(&hub, &format!("{run}-mixed")).await;
+    let before = [
+        row_state(&hub.pool, prefix_id).await,
+        row_state(&hub.pool, assign_id).await,
+        row_state(&hub.pool, clean_id).await,
+    ];
+    let unchanged = |what: &str, ok: bool| assert!(ok, "{what}: a refused run changed a row");
+
+    let opts = |rules: Vec<Rule>, expect: Vec<Expect>, max_rows: i64| findings::RedactOptions {
+        scan: DryRunOptions {
+            since: Some(base),
+            rules,
+            expect,
+            batch: 1,
+        },
+        max_rows,
+    };
+
+    // Refusals, each before any write.
+    for (what, o) in [
+        (
+            "no rule",
+            opts(Vec::new(), vec![Expect::Row(prefix_id)], 10),
+        ),
+        (
+            "could not look",
+            opts(vec![Rule::Prefix], vec![Expect::Row(clean_id)], 10),
+        ),
+        (
+            "over max rows",
+            opts(vec![Rule::Prefix], vec![Expect::Row(prefix_id)], 1),
+        ),
+    ] {
+        assert!(
+            findings::redact_existing(&hub.pool, &o).await.is_err(),
+            "{what}: the run must refuse"
+        );
+        unchanged(what, row_state(&hub.pool, prefix_id).await == before[0]);
+        unchanged(what, row_state(&hub.pool, assign_id).await == before[1]);
+    }
+
+    // The real run, prefix only.
+    let o = opts(vec![Rule::Prefix], vec![Expect::Row(prefix_id)], 2);
+    let dry = findings::dry_run(&read_only_pool().await, &o.scan)
+        .await
+        .unwrap();
+    let report = findings::redact_existing(&hub.pool, &o)
+        .await
+        .expect("real run");
+    let listed: std::collections::BTreeSet<i64> = dry.hits.iter().map(|h| h.row_id).collect();
+    let rewritten: std::collections::BTreeSet<i64> = report.rewritten.iter().copied().collect();
+    assert_eq!(
+        rewritten, listed,
+        "the real run must rewrite exactly the dry run's rows"
+    );
+    assert_eq!(report.rewritten, vec![prefix_id, mixed_id]);
+    assert_eq!(
+        report.after_hits, 0,
+        "a rescan of the rewritten rows must find nothing"
+    );
+    assert!(
+        !report.render().contains(&secret),
+        "the report must never carry a value"
+    );
+
+    let (raw, content, search, xid) = row_state(&hub.pool, prefix_id).await;
+    for (name, field) in [
+        ("raw", &raw),
+        ("content", &content),
+        ("search_text", &search),
+    ] {
+        assert!(!field.contains(&secret), "{name} still holds the value");
+        assert!(
+            field.contains("[REDACTED:prefix]"),
+            "{name} lacks the marker"
+        );
+    }
+    assert_ne!(
+        xid, before[0].3,
+        "the rewritten row must re-dirty its journal day"
+    );
+    assert_eq!(
+        findings_for(&hub, prefix_id).await,
+        all_fields("prefix", true)
+    );
+    // In a rewritten row, only the chosen rule's span changes: the assigned
+    // value beside it survives, because assign was not chosen.
+    let (raw, content, search, _) = row_state(&hub.pool, mixed_id).await;
+    for (name, field) in [
+        ("raw", &raw),
+        ("content", &content),
+        ("search_text", &search),
+    ] {
+        assert!(
+            !field.contains(&mixed_secret),
+            "{name}: mixed row still holds the token"
+        );
+        assert!(
+            field.contains(&mixed_assigned),
+            "{name}: an unchosen rule's value was removed"
+        );
+    }
+    // A rule not chosen and a clean row are untouched, byte for byte.
+    assert!(
+        row_state(&hub.pool, assign_id).await == before[1],
+        "assign row changed"
+    );
+    assert!(
+        row_state(&hub.pool, clean_id).await == before[2],
+        "clean row changed"
+    );
+
+    // Idempotent: nothing left for the same run.
+    let again = findings::redact_existing(&hub.pool, &opts(vec![Rule::Prefix], Vec::new(), 1))
+        .await
+        .expect("second run");
+    assert!(again.rewritten.is_empty());
+}
