@@ -22,7 +22,8 @@
 --   a keeper still on an old key is re-keyed to the new one, unless another
 --   row already holds that key (then it is left alone; see the last query).
 --
--- Run as the hub's role: psql "$URL" -v ON_ERROR_STOP=1 -f scripts/rekey-synthesized-rows.sql
+-- Run as the hub's role: psql -v ON_ERROR_STOP=1 -f scripts/rekey-synthesized-rows.sql
+--   (connection from PG* env + a mode-600 PGPASSFILE; never a URL with the password in argv, where any ps on the host reads it)
 -- Safe to re-run. Concurrent ingest is fine: a daemon insert racing the
 -- re-key hits the unique index and is ignored, or the re-key of that row is
 -- skipped. Either way it ends with one row per record.

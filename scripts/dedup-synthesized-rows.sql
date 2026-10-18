@@ -15,7 +15,8 @@
 -- deleted (the dry run found 0; the guard below re-checks).
 --
 -- HOW TO RUN (operator, off-peak), as the hub's database role:
---   psql "$URL" -v ON_ERROR_STOP=1 -f scripts/dedup-synthesized-rows.sql
+--   psql -v ON_ERROR_STOP=1 -f scripts/dedup-synthesized-rows.sql
+--   (connection from PG* env + a mode-600 PGPASSFILE; never a URL with the password in argv, where any ps on the host reads it)
 -- Then, once it finishes:
 --   VACUUM (ANALYZE, VERBOSE) messages;   -- or VACUUM FULL to give disk back
 --   hub mirror rebuild                     -- the mirror still holds the copies
