@@ -64,7 +64,7 @@ DEFAULT_HUB_URL = "http://127.0.0.1:8790"  # hub is loopback-bound on m4m
 # kill runs when an interactive Claude session was active (#13). `claude` stays
 # available as a fallback backend.
 DEFAULT_BACKEND = "aiproxy"  # aiproxy | claude
-DEFAULT_MODEL = "gpt-5.6-sol"  # aiproxy model id; for backend=claude use e.g. "haiku"
+DEFAULT_MODEL = "gpt-6.1-sol"  # aiproxy model id; for backend=claude use e.g. "haiku"
 DEFAULT_EFFORT = "low"  # reasoning_effort for aiproxy (none|minimal|low|medium|high|xhigh|max)
 
 
