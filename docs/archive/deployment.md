@@ -2773,8 +2773,11 @@ equivalently.
   Requires `uv` on PATH (PEP 723 script). **LLM backend (default `aiproxy`):**
   an OpenAI-compatible HTTP call to infra's CLIProxyAPI node
   (`https://aiproxy.internal`, model **`gpt-6.1-sol`**,
-  `reasoning_effort=low`; was `gpt-5.6-sol` until upstream retired it on
-  2026-10-19, which turned every run into a 403 `model_blocked`) — no `claude -p`, so no shared-OAuth contention (the
+  `reasoning_effort=low`; was `gpt-5.6-sol` until 2026-10-19, when one transient
+  upstream 502 made the gateway hide that model until a request succeeded. Its
+  `*` allow-list then answered every run with a 403 `model_blocked` that never
+  reached upstream, so the block sustained itself ~08:52–12:24Z. The model was
+  not retired, and serves again; the switch to the current Sol stays) — no `claude -p`, so no shared-OAuth contention (the
   old #13 failure mode when an interactive Claude session ran concurrently).
   `--backend claude` keeps `claude -p` (needs the `claude` CLI + `zsh -lc`
   `CLAUDE_CONFIG_DIR`) as a fallback. Runs **hourly** (`StartInterval`) + on
