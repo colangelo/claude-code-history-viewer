@@ -48,7 +48,7 @@ pub struct Finding {
 const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
 const PATTERNS: [&str; 4] = [
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
-    r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,})",
+    r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,}|gl(?:pat|rt)-[A-Za-z0-9_\-]{20,}(?:\.[A-Za-z0-9_\-]+)*)",
     r"\b(?i:Bearer)[ \t]+(?P<value>[A-Za-z0-9._~+/=\-]{20,})",
     r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
 ];
@@ -385,7 +385,7 @@ mod tests {
     use super::*;
 
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const PREFIXES: [(&str, usize); 20] = [
+    const PREFIXES: [(&str, usize); 22] = [
         ("ghp_", 36),
         ("gho_", 36),
         ("ghu_", 36),
@@ -405,6 +405,8 @@ mod tests {
         ("hvs.", 20),
         ("hvb.", 20),
         ("hvr.", 20),
+        ("glpat-", 20),
+        ("glrt-", 20),
         ("sk-proj-", 64),
     ];
 
@@ -541,6 +543,45 @@ mod tests {
                 ),
             ),
             ("prose", "the sk-lm-prefix: a key format".to_owned()),
+        ] {
+            assert_eq!(scan(&text).len(), 0, "rule prefix fixture {fixture}");
+        }
+    }
+
+    // GitLab tokens: legacy `glpat-<20>`/`glrt-<20>`, and the routable form
+    // `<prefix><payload>.<version>.<check>` whose dotted tail must go with it.
+    // A runner list printed two runner tokens into a transcript in clear
+    // (Gitea #70, 2026-10-17).
+    #[test]
+    fn gitlab_routable_form() {
+        for prefix in ["glpat-", "glrt-"] {
+            let value = format!(
+                "{prefix}t1_{}.01.{}",
+                synthetic(27, ALPHABET),
+                synthetic(9, ALPHABET)
+            );
+            positive(
+                &format!("runner Token={value} URL=https://gitlab.example"),
+                &value,
+                Rule::Prefix,
+                prefix,
+                "runner Token=[REDACTED:prefix] URL=https://gitlab.example",
+            );
+            positive(
+                &format!("ends a sentence {value}."),
+                &value,
+                Rule::Prefix,
+                prefix,
+                "ends a sentence [REDACTED:prefix].",
+            );
+        }
+        for (fixture, text) in [
+            (
+                "glpat prose",
+                "the glpat- prefix marks a GitLab PAT".to_owned(),
+            ),
+            ("glrt prose", "glrt-runner tokens rotate".to_owned()),
+            ("glrt short", format!("glrt-{}", synthetic(19, ALPHABET))),
         ] {
             assert_eq!(scan(&text).len(), 0, "rule prefix fixture {fixture}");
         }
@@ -685,7 +726,7 @@ mod tests {
 
     #[test]
     fn prefix_and_bearer_length_floors() {
-        for (prefix, len) in PREFIXES.into_iter().take(19) {
+        for (prefix, len) in PREFIXES.into_iter().take(PREFIXES.len() - 1) {
             let value = token(prefix, len - 1);
             assert_eq!(scan(&value).len(), 0, "rule prefix fixture {prefix}");
         }
