@@ -49,6 +49,9 @@ BAO_ADDR="${BAO_ADDR:-}"
 BAO_HOST="${BAO_ADDR#*://}"; BAO_HOST="${BAO_HOST%%[:/]*}"
 APPROLE_FILE="$CFG_DIR/bao-approle"
 HOST="$(hostname -s)"
+# Fixed machine id of agent1 (homelab guest, ingest-only); pre-created on the
+# guest so its daemon and this hub agree before the first ingest.
+AGENT1_MACHINE_ID="7ac7e806-c4df-4a25-9151-b25ee1a9d636"
 
 MODE="${1:-}"
 RENDER_ONLY="${2:-}"
@@ -99,11 +102,14 @@ bao_login() {
 }
 
 # bao_kv <secret-name> <field>  → value on stdout, or fail
-bao_kv() {
+bao_kv() { bao_kv_path "infra/cchv/$1" "$2"; }
+
+# bao_kv_path <path under kv/> <field>  → value on stdout, or fail.
+bao_kv_path() {
   [ -n "$BAO_TOKEN" ] || return 1
   local val
   val="$(curl -sf --max-time 10 -H "X-Vault-Token: $BAO_TOKEN" \
-    "$BAO_ADDR/v1/kv/data/infra/cchv/$1" | jq -r --arg f "$2" '.data.data[$f] // empty')"
+    "$BAO_ADDR/v1/kv/data/$1" | jq -r --arg f "$2" '.data.data[$f] // empty')"
   [ -n "$val" ] && echo "$val"
 }
 
@@ -187,6 +193,19 @@ render() {
       content="${content//@M4M_TOKEN@/$m4m_token}"
       content="${content//@AC_MBM5_TOKEN@/$mbm5_token}"
       content="${content//@AC_MBP_TOKEN@/$mbp_token}"
+      # agent1, the fenced homelab guest: an INGEST-ONLY token (no read routes,
+      # no journal writes), read from the guest's own entry so the value has one
+      # source. Optional by design: a missing or malformed token renders the hub
+      # without agent1, so the Macs are never blocked by the guest. The shape
+      # check is what keeps a bad value from injecting TOML into the hub config.
+      local agent1_token
+      if agent1_token="$(bao_kv_path agents/cchv-agent1 token)" \
+        && [[ "$agent1_token" =~ ^[0-9a-f]{64}$ ]]; then
+        content+=$'\n[[tokens]]\ntoken = "'"$agent1_token"$'"\nmachine_id = "'"$AGENT1_MACHINE_ID"$'"\nlabel = "agent1"\ningest_only = true\n'
+        log "agent1: ingest-only token rendered"
+      else
+        log "agent1: no valid token at kv/agents/cchv-agent1 — rendering the hub without agent1"
+      fi
       ;;
   esac
 
