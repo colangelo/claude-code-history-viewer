@@ -3,7 +3,7 @@
 //! convenience for single-machine/dev use, from environment variables.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -182,6 +182,10 @@ pub struct TokenEntry {
     pub machine_id: Uuid,
     #[serde(default)]
     pub label: Option<String>,
+    /// Limit this token to `/v1/ingest`: no read routes, no journal writes.
+    /// For fenced guests that archive their own sessions (Macs leave it unset).
+    #[serde(default)]
+    pub ingest_only: bool,
 }
 
 fn default_bind_addr() -> String {
@@ -214,6 +218,7 @@ impl HubConfig {
                 token,
                 machine_id: machine_id.parse()?,
                 label: None,
+                ingest_only: false,
             });
         }
         let static_dir = std::env::var("HUB_STATIC_DIR").ok().map(PathBuf::from);
@@ -243,11 +248,49 @@ impl HubConfig {
         })
     }
 
+    /// The tokens limited to `/v1/ingest` (see `TokenEntry::ingest_only`).
+    pub fn ingest_only_tokens(&self) -> HashSet<String> {
+        self.tokens
+            .iter()
+            .filter(|t| t.ingest_only)
+            .map(|t| t.token.clone())
+            .collect()
+    }
+
     /// Build the token → machine-id lookup used by the auth layer.
     pub fn token_map(&self) -> HashMap<String, Uuid> {
         self.tokens
             .iter()
             .map(|t| (t.token.clone(), t.machine_id))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID: &str = "7ac7e806-c4df-4a25-9151-b25ee1a9d636";
+
+    #[test]
+    fn token_entries_default_to_full_scope() {
+        let entry: TokenEntry =
+            toml::from_str(&format!("token = \"t\"\nmachine_id = \"{ID}\"")).unwrap();
+        assert!(!entry.ingest_only);
+    }
+
+    #[test]
+    fn ingest_only_tokens_are_collected() {
+        let config: HubConfig = toml::from_str(&format!(
+            "database_url = \"postgres://x\"\n\
+             [[tokens]]\ntoken = \"mac\"\nmachine_id = \"{ID}\"\n\
+             [[tokens]]\ntoken = \"guest\"\nmachine_id = \"{ID}\"\ningest_only = true\n"
+        ))
+        .unwrap();
+        assert_eq!(config.token_map().len(), 2);
+        assert_eq!(
+            config.ingest_only_tokens(),
+            HashSet::from(["guest".to_string()])
+        );
     }
 }

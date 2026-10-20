@@ -1,7 +1,7 @@
 //! Shared application state: the Postgres pool, the token → machine-id map,
 //! and the (optional) sentence embedder for semantic journal search.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use sqlx::PgPool;
@@ -16,6 +16,10 @@ pub struct AppState {
     pub pool: PgPool,
     /// Bearer token → machine id. `Arc` so the state stays cheap to clone per request.
     pub tokens: Arc<HashMap<String, Uuid>>,
+    /// Tokens (a subset of `tokens`) limited to `/v1/ingest`: refused by every
+    /// read route and every other machine-token write. For fenced guests that
+    /// archive their own sessions but must not read the archive.
+    pub ingest_only: Arc<HashSet<String>>,
     /// Tailscale logins granted READ scope via the `Tailscale-User-Login`
     /// header (see `HubConfig::trust_tailscale_identity`). Empty = disabled.
     pub trusted_identities: Arc<Vec<String>>,
@@ -45,12 +49,19 @@ impl AppState {
         Self {
             pool,
             tokens: Arc::new(tokens),
+            ingest_only: Arc::new(HashSet::new()),
             trusted_identities: Arc::new(trusted_identities),
             embedder: None,
             embed_nudge: Arc::new(Notify::new()),
             mirror: None,
             redact_rules: Arc::new(Vec::new()),
         }
+    }
+
+    /// Limit these tokens to `/v1/ingest` (builder-style, same reason).
+    pub fn with_ingest_only_tokens(mut self, tokens: HashSet<String>) -> Self {
+        self.ingest_only = Arc::new(tokens);
+        self
     }
 
     /// Put these credential rules in redact mode (builder-style, same reason).

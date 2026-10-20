@@ -15,7 +15,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
-use crate::auth::AuthedMachine;
+use crate::auth::IngestMachine;
 use crate::error::HubError;
 use crate::extract;
 use crate::redact;
@@ -125,7 +125,7 @@ fn sanitize_batch(batch: &mut IngestBatch) {
 }
 
 pub async fn ingest(
-    AuthedMachine(token_machine): AuthedMachine,
+    IngestMachine(token_machine): IngestMachine,
     State(state): State<AppState>,
     Json(mut batch): Json<IngestBatch>,
 ) -> Result<Json<IngestResponse>, HubError> {

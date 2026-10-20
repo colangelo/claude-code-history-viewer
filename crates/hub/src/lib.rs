@@ -327,6 +327,7 @@ pub async fn run() -> anyhow::Result<()> {
         config.token_map(),
         config.trust_tailscale_identity.clone(),
     )
+    .with_ingest_only_tokens(config.ingest_only_tokens())
     .with_redact_rules(redact_rules);
     if let Some(dir) = &config.embed_model_dir {
         tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");
