@@ -410,7 +410,7 @@ def test_process_group_posts_links_for_offered_threads(monkeypatch) -> None:
             "topics": ["a", "b", "c"],
             "open_questions": [{"q": "again", "continues": 12}, {"q": "new", "continues": None}],
             "resolved": [13],
-        }
+        }, "m"
 
     monkeypatch.setattr(d, "generate", fake_generate)
     posted: list[dict] = []
@@ -442,3 +442,148 @@ def test_open_threads_failure_never_costs_the_entry(monkeypatch) -> None:
 
     monkeypatch.setattr(hub, "get", boom)
     assert hub.open_threads("/w/p", "2026-10-10") == []
+
+
+# --- protected routing (openspec/changes/distill-protected-routing) ------------
+#
+# Markers and terms below are made up: the real ones live in the routing file
+# outside the repo, so a client name never enters this public fork.
+
+ENTRY_JSON = '{"status": "entry", "headline": "h", "summary": "s", "topics": ["a", "b", "c"]}'
+
+
+def _routing(tmp_path, body: str):
+    f = tmp_path / "distill-routing.toml"
+    f.write_text(body)
+    return d.load_routing(f)
+
+
+ROUTING_TOML = """
+[protected]
+model = "claude-haiku-5-5"
+path_markers = ["/_clientx/", "/Clientx-Ops"]
+content_terms = ["clientx.example", "BuildThing"]
+"""
+
+
+def test_routing_file_is_read(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_TOML)
+    assert not r.protect_all
+    assert r.model == "claude-haiku-5-5"
+
+
+def test_path_marker_protects_on_any_host_case_insensitively(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_TOML)
+    assert r.is_protected("/Users/ac/_sync/dev/_clientx/repo", "hello")
+    assert r.is_protected("/home/agent/_CLIENTX/repo", "hello")
+    assert r.is_protected("/Users/ac/x/clientx-ops/tool", "hello")
+    assert not r.is_protected("/Users/ac/_sync/dev/other", "hello")
+
+
+def test_content_term_protects_a_group_outside_the_markers(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_TOML)
+    assert r.is_protected("/Users/ac/_sync/dev/other", "see https://CLIENTX.example/x")
+    assert r.is_protected("/Users/ac/_sync/dev/other", "the buildthing job")
+
+
+@pytest.mark.parametrize("body", [None, "not = [valid", "[protected]\npath_markers = []\n"])
+def test_missing_or_invalid_routing_protects_everything(tmp_path, body) -> None:
+    f = tmp_path / "distill-routing.toml"
+    if body is not None:
+        f.write_text(body)
+    r = d.load_routing(f)
+    assert r.protect_all and r.reason
+    assert r.model == d.FALLBACK_PROTECTED_MODEL
+    assert r.is_protected("/anything", "anything")
+
+
+def _llm(routing, backend="aiproxy", model="gpt-6.1-sol"):
+    return d.LLM(backend=backend, model=model, effort="low", routing=routing)
+
+
+def test_protected_group_goes_to_claude_with_the_exact_id(tmp_path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda *a: pytest.fail("GPT was called"))
+    monkeypatch.setattr(
+        d, "_claude_generate",
+        lambda model, prompt, direct=False: calls.append((model, direct)) or (ENTRY_JSON, {"claude-haiku-5-5"}),
+    )
+    llm = _llm(_routing(tmp_path, ROUTING_TOML))
+    entry, served = d.generate(llm, "2026-10-20", "/Users/ac/_sync/dev/_clientx/r", "hi", [])
+    assert calls == [("claude-haiku-5-5", True)]
+    assert entry["status"] == "entry" and served == "claude-haiku-5-5"
+
+
+def test_general_group_goes_to_the_general_backend(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "_claude_generate", lambda *a, **k: pytest.fail("claude was called"))
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, prompt: (ENTRY_JSON, "gpt-6.1-sol"))
+    llm = _llm(_routing(tmp_path, ROUTING_TOML))
+    _, served = d.generate(llm, "2026-10-20", "/Users/ac/_sync/dev/other", "hi", [])
+    assert served == "gpt-6.1-sol"
+
+
+def test_threads_count_toward_the_content_match(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda *a: pytest.fail("GPT was called"))
+    monkeypatch.setattr(d, "_claude_generate", lambda m, p, direct=False: (ENTRY_JSON, {m}))
+    llm = _llm(_routing(tmp_path, ROUTING_TOML))
+    threads = [{"thread_id": 1, "question": "ask BuildThing about the mirror"}]
+    _, served = d.generate(llm, "2026-10-20", "/w/other", "hi", threads)
+    assert served == "claude-haiku-5-5"
+
+
+@pytest.mark.parametrize("usage", [set(), {"claude-haiku-5-5", "gpt-6.1-sol"}, {"claude-fable-5-dd-x"}])
+def test_guard_refuses_a_protected_result_from_any_other_model(tmp_path, monkeypatch, usage) -> None:
+    monkeypatch.setattr(d, "_claude_generate", lambda m, p, direct=False: (ENTRY_JSON, usage))
+    llm = _llm(_routing(tmp_path, ROUTING_TOML))
+    with pytest.raises(d.Refused):
+        d.generate(llm, "2026-10-20", "/x/_clientx/r", "hi", [])
+
+
+def test_a_refused_group_is_not_posted(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "_claude_generate", lambda m, p, direct=False: (ENTRY_JSON, {"other"}))
+    posted: list[dict] = []
+
+    class PostingHub(StubHub):
+        def open_threads(self, project_path, before):
+            return []
+
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    group = {"entry_date": "2026-10-20", "project_path": "/x/_clientx/r", "session_ids": [11], "as_of": None}
+    with pytest.raises(d.Refused):
+        d.process_group(PostingHub(), group, _llm(_routing(tmp_path, ROUTING_TOML)), dry_run=False)
+    assert posted == []
+
+
+def test_stored_model_is_the_serving_model(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, prompt: (ENTRY_JSON, "gpt-6.1-sol-2026"))
+    posted: list[dict] = []
+
+    class PostingHub(StubHub):
+        def open_threads(self, project_path, before):
+            return []
+
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    group = {"entry_date": "2026-10-20", "project_path": "/w/other", "session_ids": [11], "as_of": None}
+    assert d.process_group(PostingHub(), group, _llm(_routing(tmp_path, ROUTING_TOML)), dry_run=False)
+    assert posted[0]["model"] == "gpt-6.1-sol-2026"
+
+
+def test_direct_claude_call_strips_proxy_env_and_reports_model_usage(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.invalid")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "x")
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw.get("env")
+        out = d.json.dumps({"result": "ok", "modelUsage": {"claude-haiku-5-5": {}}})
+        return d.subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(d.subprocess, "run", fake_run)
+    result, served = d._claude_generate("claude-haiku-5-5", "p", direct=True)
+    assert (result, served) == ("ok", {"claude-haiku-5-5"})
+    assert seen["cmd"][:4] == ["claude", "-p", "--model", "claude-haiku-5-5"]
+    assert "ANTHROPIC_BASE_URL" not in seen["env"] and "ANTHROPIC_AUTH_TOKEN" not in seen["env"]

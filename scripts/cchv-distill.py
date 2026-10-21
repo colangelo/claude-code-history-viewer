@@ -44,6 +44,7 @@ import re
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -66,6 +67,16 @@ DEFAULT_HUB_URL = "http://127.0.0.1:8790"  # hub is loopback-bound on m4m
 DEFAULT_BACKEND = "aiproxy"  # aiproxy | claude
 DEFAULT_MODEL = "gpt-6.1-sol"  # aiproxy model id; for backend=claude use e.g. "haiku"
 DEFAULT_EFFORT = "low"  # reasoning_effort for aiproxy (none|minimal|low|medium|high|xhigh|max)
+
+# Protected routing (openspec/changes/distill-protected-routing): groups from
+# client projects go to one exact Claude id on the direct login, never to the
+# general backend. The markers live in this file, outside the repo, so a client
+# name never enters this public fork. Missing or invalid → every group protected.
+ROUTING_FILE = Path(
+    os.environ.get("CCHV_DISTILL_ROUTING")
+    or Path.home() / ".config/cchv/distill-routing.toml"
+)
+FALLBACK_PROTECTED_MODEL = "claude-haiku-5-5"
 
 
 def _endpoints() -> dict[str, str]:
@@ -600,6 +611,52 @@ sessions, only automated health checks), respond instead with:
 """
 
 
+class Refused(RuntimeError):
+    """A protected group's result came from a model other than the protected id."""
+
+
+@dataclass
+class Routing:
+    model: str
+    path_markers: list[str] = field(default_factory=list)
+    content_terms: list[str] = field(default_factory=list)
+    protect_all: bool = False
+    reason: str = ""
+
+    def is_protected(self, project_path: str, prompt: str) -> bool:
+        if self.protect_all:
+            return True
+        path, text = project_path.lower(), prompt.lower()
+        return any(m.lower() in path for m in self.path_markers) or any(
+            t.lower() in text for t in self.content_terms
+        )
+
+
+def load_routing(path: Path = ROUTING_FILE) -> Routing:
+    """Read the routing file; any failure protects every group (fail closed)."""
+
+    def protect_all(reason: str) -> Routing:
+        return Routing(model=FALLBACK_PROTECTED_MODEL, protect_all=True, reason=reason)
+
+    try:
+        cfg = tomllib.loads(path.read_text())
+    except FileNotFoundError:
+        return protect_all(f"{path} not found")
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        return protect_all(f"{path} unreadable: {e}")
+    sect = cfg.get("protected")
+    if not isinstance(sect, dict):
+        return protect_all(f"{path} has no [protected] table")
+    model = sect.get("model")
+    markers, terms = sect.get("path_markers", []), sect.get("content_terms", [])
+    if not isinstance(model, str) or not model.strip():
+        return protect_all(f"{path}: [protected].model missing")
+    if not all(isinstance(x, list) and all(isinstance(v, str) and v for v in x)
+               for x in (markers, terms)):
+        return protect_all(f"{path}: path_markers/content_terms must be lists of strings")
+    return Routing(model=model.strip(), path_markers=markers, content_terms=terms)
+
+
 @dataclass
 class LLM:
     backend: str  # "aiproxy" | "claude"
@@ -607,10 +664,11 @@ class LLM:
     effort: str
     aiproxy_url: str = DEFAULT_AIPROXY_URL
     aiproxy_key: str | None = None
+    routing: Routing = field(default_factory=lambda: load_routing())
 
 
-def _aiproxy_generate(llm: LLM, prompt: str) -> str:
-    """One OpenAI-compatible chat completion via CLIProxyAPI → raw content str."""
+def _aiproxy_generate(llm: LLM, prompt: str) -> tuple[str, str]:
+    """One OpenAI-compatible chat completion via CLIProxyAPI → (content, serving model)."""
     r = requests.post(
         f"{llm.aiproxy_url}/v1/chat/completions",
         headers={
@@ -626,11 +684,20 @@ def _aiproxy_generate(llm: LLM, prompt: str) -> str:
     )
     if r.status_code >= 400:
         raise RuntimeError(f"aiproxy {r.status_code}: {r.text[:400]}")
-    return r.json()["choices"][0]["message"]["content"]
+    body = r.json()
+    return body["choices"][0]["message"]["content"], str(body.get("model") or llm.model)
 
 
-def _claude_generate(model: str, prompt: str) -> str:
-    """One `claude -p` call → raw result str (fallback backend)."""
+# Without these the child `claude` can only use the direct login.
+PROXY_ENV = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
+
+
+def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str, set[str]]:
+    """One `claude -p` call → (result, the models its `modelUsage` reports).
+
+    `direct` strips the proxy variables, so the call cannot leave the direct login.
+    """
+    env = {k: v for k, v in os.environ.items() if not (direct and k in PROXY_ENV)}
 
     def run_claude() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -640,6 +707,7 @@ def _claude_generate(model: str, prompt: str) -> str:
             text=True,
             timeout=CLAUDE_TIMEOUT_SECS,
             cwd=Path.home(),
+            env=env,
         )
 
     proc = run_claude()
@@ -663,7 +731,8 @@ def _claude_generate(model: str, prompt: str) -> str:
         ) from e
     if wrapper.get("is_error"):
         raise RuntimeError(f"claude -p returned an error result: {str(wrapper)[:400]}")
-    return wrapper.get("result", "")
+    usage = wrapper.get("modelUsage")
+    return wrapper.get("result", ""), set(usage) if isinstance(usage, dict) else set()
 
 
 NO_THREADS_TEXT = """There are no open threads from earlier days of this project: set every \
@@ -749,16 +818,29 @@ def thread_links(entry: dict, offered: set[int]) -> tuple[list[str], list[int | 
 
 def generate(
     llm: LLM, entry_date: str, project: str, transcript: str, threads: list[dict]
-) -> dict:
+) -> tuple[dict, str]:
+    """Generate one entry → (entry, serving model). Raises `Refused` per the guard."""
     prompt = build_prompt(entry_date, project, transcript, threads)
-    if llm.backend == "aiproxy":
-        raw = _aiproxy_generate(llm, prompt)
+    label = f"{entry_date} {project}"
+    if llm.routing.is_protected(project, prompt):
+        want = llm.routing.model
+        raw, usage = _claude_generate(want, prompt, direct=True)
+        served = ",".join(sorted(usage)) or "<none>"
+        log(f"call {label}: route=protected requested={want} served={served}")
+        if usage != {want}:
+            log(f"REFUSED {label}: served={served}, protected route requires exactly {want}")
+            raise Refused(f"protected group served by {served}, not {want}")
+    elif llm.backend == "aiproxy":
+        raw, served = _aiproxy_generate(llm, prompt)
+        log(f"call {label}: route=general backend=aiproxy requested={llm.model} served={served}")
     else:
-        raw = _claude_generate(llm.model, prompt)
+        raw, usage = _claude_generate(llm.model, prompt)
+        served = ",".join(sorted(usage)) or llm.model
+        log(f"call {label}: route=general backend=claude requested={llm.model} served={served}")
     # tolerate stray code fences despite the instruction
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
     try:
-        return json.loads(raw)
+        return json.loads(raw), served
     except json.JSONDecodeError as e:
         raise RuntimeError(
             f"{llm.backend} result is not entry JSON (result[:300]={raw[:300]!r})"
@@ -808,11 +890,12 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
 
     transcript = build_transcript(hub, session_ids, entry_date)
     threads: list[dict] = []
+    served: str | None = None  # no call, no model: a local skip records none
     if not transcript.strip():
         entry = {"status": "skip", "skip_reason": "no textual content in this day's messages"}
     else:
         threads = hub.open_threads(project_path, entry_date)
-        entry = generate(llm, entry_date, project_path, transcript, threads)
+        entry, served = generate(llm, entry_date, project_path, transcript, threads)
 
     if err := validate(entry):
         log(f"REJECTED {label}: {err} — leaving pending")
@@ -830,7 +913,7 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
         "summary": entry.get("summary"),
         "topics": entry.get("topics") or [],
         "session_ids": session_ids,
-        "model": llm.model,
+        "model": served,
     }
     if entry["status"] == "entry":
         offered = {int(t["thread_id"]) for t in threads}
@@ -898,10 +981,16 @@ def main() -> int:
 
     llm = LLM(backend=args.backend, model=args.model, effort=args.effort,
               aiproxy_url=args.aiproxy_url)
-    if llm.backend == "aiproxy":
+    if llm.backend == "aiproxy" and not llm.routing.protect_all:
         llm.aiproxy_key = resolve_aiproxy_key()
     log(f"backend={llm.backend} model={llm.model}"
         + (f" effort={llm.effort}" if llm.backend == "aiproxy" else ""))
+    r = llm.routing
+    if r.protect_all:
+        log(f"WARN: routing: every group protected ({r.reason}) → {r.model}")
+    else:
+        log(f"routing: protected → {r.model}; {len(r.path_markers)} path marker(s), "
+            f"{len(r.content_terms)} content term(s)")
 
     hub = Hub(args.hub_url, resolve_token())
     try:

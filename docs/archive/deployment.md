@@ -2783,6 +2783,28 @@ equivalently.
   `CLAUDE_CONFIG_DIR`) as a fallback. Runs **hourly** (`StartInterval`) + on
   load; logs `/tmp/cchv-distiller.{log,err}`. `CCHV_RETRY_SLEEP_SECS` tunes the
   transient-retry backoff (default 30s).
+- **Protected routing** (since cchv-v0.27.0, `openspec/changes/distill-protected-routing/`).
+  Some projects hold client data whose owner allows only an exact Claude id on the direct login.
+  The distiller reads `~/.config/cchv/distill-routing.toml` (override `CCHV_DISTILL_ROUTING`).
+  The file lives on the host, never in this repo, because the markers name the client:
+
+  ```toml
+  [protected]
+  model = "claude-haiku-5-5"            # exact id, never an alias
+  path_markers = ["/_clientx/"]         # case-insensitive substrings of project_path, any host
+  content_terms = ["clientx.example"]   # case-insensitive substrings of the full prompt
+  ```
+
+  A group that matches either list goes to `claude -p --model <id>`, with `ANTHROPIC_BASE_URL`
+  and `ANTHROPIC_AUTH_TOKEN` stripped, whatever the general backend is. **A missing or invalid
+  file protects every group** (the run logs `WARN: routing: every group protected (…)`).
+  - **What the log shows:** every call logs `call <day> <path>: route=… requested=… served=…`.
+    The served model comes from `claude -p`'s `modelUsage` or aiproxy's response `model`.
+  - **What gets refused:** a protected result whose `modelUsage` is not exactly `{<id>}` is
+    logged `REFUSED` and not stored. The group stays pending, so Gatus `cchv-journal` pages
+    after its grace.
+  - **What gets stored:** `journal_entries.model` is the served model. A skip made without any
+    call records none.
 - **Secrets** (both same env → bao → 0600-cache floor shape):
   - **Hub token** — `$CCHV_HUB_TOKEN` → AppRole reading
     `kv/infra/cchv/hub-tokens/<host>_token` → `~/.config/cchv/distill-hub-token`
