@@ -9,6 +9,6 @@
 
 ## 2. Release and ops
 
-- [ ] 2.1 cchv-v0.27.0 tagged and published; install only the distiller (hub and webapp unchanged).
-- [ ] 2.2 Write the routing file on m4m before installing.
-- [ ] 2.3 Remove the interim plist overrides; prove one protected group served by the protected id and one general group served by GPT, from the call log.
+- [x] 2.1 cchv-v0.27.0 tagged and published; install only the distiller (hub and webapp unchanged).
+- [x] 2.2 Write the routing file on m4m before installing.
+- [ ] 2.3 Remove the interim plist overrides (done 2026-10-21 11:17Z; the synthetic two-route probe passed); prove one protected group served by the protected id and one general group served by GPT, from the call log.
