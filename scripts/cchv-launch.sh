@@ -49,9 +49,6 @@ BAO_ADDR="${BAO_ADDR:-}"
 BAO_HOST="${BAO_ADDR#*://}"; BAO_HOST="${BAO_HOST%%[:/]*}"
 APPROLE_FILE="$CFG_DIR/bao-approle"
 HOST="$(hostname -s)"
-# LEGACY (drop after the migration to kv/agents/cchv/agent1): agent1's machine
-# id for its old entry kv/agents/cchv-agent1, which holds only the token.
-AGENT1_LEGACY_MACHINE_ID="7ac7e806-c4df-4a25-9151-b25ee1a9d636"
 
 MODE="${1:-}"
 RENDER_ONLY="${2:-}"
@@ -234,14 +231,6 @@ render() {
         seen+="$gid "; rendered=$((rendered + 1))
         log "guest $guest: ingest-only token rendered"
       done
-      # LEGACY agent1 entry (token only), until it moves to kv/agents/cchv/agent1.
-      if [[ "$seen" == *" $AGENT1_LEGACY_MACHINE_ID "* ]]; then
-        log "agent1 legacy: kv/agents/cchv-agent1 ignored — agent1 already rendered from kv/agents/cchv/ (dedupe)"
-      elif gtoken="$(bao_kv_path agents/cchv-agent1 token)" && [[ "$gtoken" =~ ^[0-9a-f]{64}$ ]]; then
-        content+="$(guest_token_block "$gtoken" "$AGENT1_LEGACY_MACHINE_ID" agent1)"$'\n'
-        rendered=$((rendered + 1))
-        log "agent1 legacy: ingest-only token rendered from kv/agents/cchv-agent1"
-      fi
       log "guests: $rendered ingest-only token(s) rendered"
       ;;
   esac
