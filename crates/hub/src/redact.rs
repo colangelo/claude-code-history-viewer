@@ -207,6 +207,26 @@ fn gitlab_file_name(value: &str) -> bool {
         && (extensions.is_empty() || extensions.split('.').all(lower_alnum))
 }
 
+/// The prefix rule's leading token marker, stripped before judging the payload.
+static PREFIX_HEAD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:gh[pousr]_|github_pat_|sk-ant-|sk-lm-|sk-proj-|sk-|xox[abposr]-|AKIA|hv[sbr]\.|gl(?:pat|rt)-)")
+        .expect("static prefix head must compile")
+});
+
+/// A placeholder (`XXXX…`) or a same-length mask of a token (letters to `A`/`a`,
+/// digits to `9`): 16+ payload characters drawn from three or fewer distinct
+/// ones. A random payload that long essentially never does (below 1e-13).
+fn mask_or_placeholder(value: &str) -> bool {
+    let payload = PREFIX_HEAD
+        .find(value)
+        .map_or(value, |head| &value[head.end()..]);
+    let chars: Vec<u8> = payload.bytes().filter(u8::is_ascii_alphanumeric).collect();
+    let mut distinct = chars.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    chars.len() >= 16 && distinct.len() <= 3
+}
+
 fn spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     for index in DETECTOR.prefilter.matches(text) {
@@ -230,6 +250,7 @@ fn spans(text: &str) -> Vec<Span> {
                             .strip_prefix(prefix)
                             .is_some_and(|v| v.len() < 20)
                     }) || gitlab_file_name(value.as_str())
+                        || mask_or_placeholder(value.as_str())
                     {
                         continue;
                     }
@@ -628,6 +649,42 @@ mod tests {
             ] {
                 let text = format!("backup in ~/.config/cchv/backups/{prefix}{tail} (mode 600)");
                 assert_eq!(scan(&text).len(), 0, "file name {prefix}{tail}");
+            }
+        }
+    }
+
+    // A placeholder (`XXXX…`) or a same-length mask of a token (letters to
+    // `A`/`a`, digits to `9`) is not a token, though it keeps the token's shape:
+    // posting such masks on 2026-10-21 created new findings. Real payloads are
+    // random, so 16+ characters drawn from three or fewer distinct ones is the tell.
+    fn mask(payload: &str) -> String {
+        payload
+            .chars()
+            .map(|c| match c {
+                'A'..='Z' => 'A',
+                'a'..='z' => 'a',
+                '0'..='9' => '9',
+                other => other,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn placeholders_and_masks_are_not_tokens() {
+        for (prefix, len) in PREFIXES {
+            if len < 16 {
+                continue;
+            }
+            let real = token(prefix, len);
+            for (fixture, text) in [
+                ("mask", format!("{prefix}{}", mask(&real[prefix.len()..]))),
+                ("placeholder", format!("{prefix}{}", "X".repeat(len))),
+            ] {
+                assert_eq!(
+                    scan(&format!("value {text} here")).len(),
+                    0,
+                    "{fixture} after {prefix}"
+                );
             }
         }
     }
