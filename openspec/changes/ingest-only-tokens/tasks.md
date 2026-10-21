@@ -9,6 +9,9 @@
 ## 2. Launcher
 - [x] 2.1 `scripts/cchv-launch.sh`: render agent1's ingest-only entry from `kv/agents/cchv-agent1` (64-hex shape check), skip it when missing or malformed. Sandbox-tested: valid / malformed / missing.
 
+- [x] 2.2 One ingest-only entry per guest from `kv/agents/cchv/<guest>` (fields `token`, `machine_id`; label = guest name, `^[a-z0-9][a-z0-9-]{0,31}$`), listed via `kv/metadata/agents/cchv/`; each malformed or unreadable guest is skipped alone. The legacy `kv/agents/cchv-agent1` entry is still read, deduplicated by machine id, until infra moves agent1. Sandbox-tested: migrated (dedupe), legacy-only, malformed set (name, token, id, duplicate), none.
+- [ ] 2.3 After the migration: drop the legacy path and `AGENT1_LEGACY_MACHINE_ID`.
+
 ## 3. Release and rollout (ac's call, asks a1021-01)
 - [ ] 3.1 Release cchv-v0.26.0 with the Linux x86_64 sync-daemon attached; infra swaps the hub and reinstalls the launcher.
 - [ ] 3.2 Infra: `kv/agents/cchv-agent1`, hub AppRole read on it, ACL `tag:ai-agent -> m4m:8788`, Gatus excludes, daemon on agent1.

@@ -49,9 +49,9 @@ BAO_ADDR="${BAO_ADDR:-}"
 BAO_HOST="${BAO_ADDR#*://}"; BAO_HOST="${BAO_HOST%%[:/]*}"
 APPROLE_FILE="$CFG_DIR/bao-approle"
 HOST="$(hostname -s)"
-# Fixed machine id of agent1 (homelab guest, ingest-only); pre-created on the
-# guest so its daemon and this hub agree before the first ingest.
-AGENT1_MACHINE_ID="7ac7e806-c4df-4a25-9151-b25ee1a9d636"
+# LEGACY (drop after the migration to kv/agents/cchv/agent1): agent1's machine
+# id for its old entry kv/agents/cchv-agent1, which holds only the token.
+AGENT1_LEGACY_MACHINE_ID="7ac7e806-c4df-4a25-9151-b25ee1a9d636"
 
 MODE="${1:-}"
 RENDER_ONLY="${2:-}"
@@ -103,6 +103,19 @@ bao_login() {
 
 # bao_kv <secret-name> <field>  → value on stdout, or fail
 bao_kv() { bao_kv_path "infra/cchv/$1" "$2"; }
+
+# bao_kv_list <path under kv/>  → one key per line on stdout, or fail.
+bao_kv_list() {
+  [ -n "$BAO_TOKEN" ] || return 1
+  curl -sf --max-time 10 -X LIST -H "X-Vault-Token: $BAO_TOKEN" \
+    "$BAO_ADDR/v1/kv/metadata/$1/" | jq -r '.data.keys[]? // empty'
+}
+
+# guest_token_block <token> <machine_id> <label>  → one ingest-only [[tokens]]
+# entry. Callers validate all three first: these values land in TOML.
+guest_token_block() {
+  printf '\n[[tokens]]\ntoken = "%s"\nmachine_id = "%s"\nlabel = "%s"\ningest_only = true\n' "$1" "$2" "$3"
+}
 
 # bao_kv_path <path under kv/> <field>  → value on stdout, or fail.
 bao_kv_path() {
@@ -193,19 +206,43 @@ render() {
       content="${content//@M4M_TOKEN@/$m4m_token}"
       content="${content//@AC_MBM5_TOKEN@/$mbm5_token}"
       content="${content//@AC_MBP_TOKEN@/$mbp_token}"
-      # agent1, the fenced homelab guest: an INGEST-ONLY token (no read routes,
-      # no journal writes), read from the guest's own entry so the value has one
-      # source. Optional by design: a missing or malformed token renders the hub
-      # without agent1, so the Macs are never blocked by the guest. The shape
-      # check is what keeps a bad value from injecting TOML into the hub config.
-      local agent1_token
-      if agent1_token="$(bao_kv_path agents/cchv-agent1 token)" \
-        && [[ "$agent1_token" =~ ^[0-9a-f]{64}$ ]]; then
-        content+=$'\n[[tokens]]\ntoken = "'"$agent1_token"$'"\nmachine_id = "'"$AGENT1_MACHINE_ID"$'"\nlabel = "agent1"\ningest_only = true\n'
-        log "agent1: ingest-only token rendered"
-      else
-        log "agent1: no valid token at kv/agents/cchv-agent1 — rendering the hub without agent1"
+      # Fenced homelab guests: one INGEST-ONLY token each (no read routes, no
+      # journal writes), from kv/agents/cchv/<guest> (fields token, machine_id);
+      # the label is the guest's name, which is also the hostname its daemon
+      # reports. Each guest reads only its own entry, so every value has one
+      # source. Optional by design: a guest that is unreadable or malformed is
+      # skipped and logged, and the others and the Macs render regardless. The
+      # shape checks are what keep a bad value from injecting TOML.
+      local guests guest gtoken gid seen=" " rendered=0
+      guests="$(bao_kv_list agents/cchv)" || { guests=""; log "guests: cannot list kv/agents/cchv/ — rendering no guest tokens from it"; }
+      for guest in $guests; do
+        if [[ ! "$guest" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
+          log "guests: skipped an entry whose name is not a valid guest name"; continue
+        fi
+        gtoken="$(bao_kv_path "agents/cchv/$guest" token)" || gtoken=""
+        gid="$(bao_kv_path "agents/cchv/$guest" machine_id)" || gid=""
+        if [[ ! "$gtoken" =~ ^[0-9a-f]{64}$ ]]; then
+          log "guest $guest: token missing or not 64 lowercase hex — skipped"; continue
+        fi
+        if [[ ! "$gid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+          log "guest $guest: machine_id missing or not a lowercase UUID — skipped"; continue
+        fi
+        if [[ "$seen" == *" $gid "* ]]; then
+          log "guest $guest: machine_id already rendered — skipped as a duplicate"; continue
+        fi
+        content+="$(guest_token_block "$gtoken" "$gid" "$guest")"$'\n'
+        seen+="$gid "; rendered=$((rendered + 1))
+        log "guest $guest: ingest-only token rendered"
+      done
+      # LEGACY agent1 entry (token only), until it moves to kv/agents/cchv/agent1.
+      if [[ "$seen" == *" $AGENT1_LEGACY_MACHINE_ID "* ]]; then
+        log "agent1 legacy: kv/agents/cchv-agent1 ignored — agent1 already rendered from kv/agents/cchv/ (dedupe)"
+      elif gtoken="$(bao_kv_path agents/cchv-agent1 token)" && [[ "$gtoken" =~ ^[0-9a-f]{64}$ ]]; then
+        content+="$(guest_token_block "$gtoken" "$AGENT1_LEGACY_MACHINE_ID" agent1)"$'\n'
+        rendered=$((rendered + 1))
+        log "agent1 legacy: ingest-only token rendered from kv/agents/cchv-agent1"
       fi
+      log "guests: $rendered ingest-only token(s) rendered"
       ;;
   esac
 
