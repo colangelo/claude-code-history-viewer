@@ -183,6 +183,30 @@ struct Span {
     finding: Finding,
 }
 
+/// A file name that merely starts with a GitLab prefix, not a token: lowercase
+/// words and numbers joined by hyphens (at least two segments, the first a word),
+/// with an optional lowercase extension. A real tail is random mixed case.
+fn gitlab_file_name(value: &str) -> bool {
+    let Some(tail) = value
+        .strip_prefix("glpat-")
+        .or_else(|| value.strip_prefix("glrt-"))
+    else {
+        return false;
+    };
+    let lower_alnum = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    };
+    let (stem, extensions) = tail.split_once('.').unwrap_or((tail, ""));
+    let segments: Vec<&str> = stem.split('-').collect();
+    segments.len() >= 2
+        && segments[0].len() >= 3
+        && segments[0].bytes().all(|b| b.is_ascii_lowercase())
+        && segments.iter().all(|s| lower_alnum(s))
+        && (extensions.is_empty() || extensions.split('.').all(lower_alnum))
+}
+
 fn spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     for index in DETECTOR.prefilter.matches(text) {
@@ -205,7 +229,8 @@ fn spans(text: &str) -> Vec<Span> {
                             .as_str()
                             .strip_prefix(prefix)
                             .is_some_and(|v| v.len() < 20)
-                    }) {
+                    }) || gitlab_file_name(value.as_str())
+                    {
                         continue;
                     }
                     (value, finding(rule, None, value.as_str()))
@@ -584,6 +609,40 @@ mod tests {
             ("glrt short", format!("glrt-{}", synthetic(19, ALPHABET))),
         ] {
             assert_eq!(scan(&text).len(), 0, "rule prefix fixture {fixture}");
+        }
+    }
+
+    // A file name that merely starts with a GitLab prefix is not a token: cchv's
+    // own backup names tripped the rule on 2026-10-21, and every message that
+    // quoted them re-tripped it. Real tails are random mixed case; these are
+    // lowercase words and numbers joined by hyphens, maybe with an extension.
+    // Fixtures are assembled from parts so this source never holds the literal.
+    #[test]
+    fn gitlab_prefix_file_names_are_not_tokens() {
+        let date = "2026".to_owned() + "1019";
+        for prefix in ["glpat-", "glrt-"] {
+            for tail in [
+                format!("redact-{date}-record"),
+                format!("redact-{date}-record.txt"),
+                format!("redact-{date}-113091590.tsv"),
+            ] {
+                let text = format!("backup in ~/.config/cchv/backups/{prefix}{tail} (mode 600)");
+                assert_eq!(scan(&text).len(), 0, "file name {prefix}{tail}");
+            }
+        }
+    }
+
+    #[test]
+    fn gitlab_hyphenated_tail_with_upper_case_is_still_a_token() {
+        for prefix in ["glpat-", "glrt-"] {
+            let value = format!("{prefix}aB3d-{}", synthetic(20, ALPHABET));
+            positive(
+                &format!("token {value} here"),
+                &value,
+                Rule::Prefix,
+                prefix,
+                "token [REDACTED:prefix] here",
+            );
         }
     }
 
