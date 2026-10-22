@@ -326,6 +326,51 @@ fn spans(text: &str) -> Vec<Span> {
 }
 
 /// Scan every rule; return metadata only, including overlapping detections.
+/// Detection paired with each hit's matched value, for the keyed fingerprints of
+/// `findings dry-run --fingerprint-key-file` only: the caller hashes the value
+/// at once and keeps nothing else. `Finding` itself stays free of values.
+pub(crate) fn scan_values(text: &str) -> Vec<(Finding, &str)> {
+    spans(text)
+        .into_iter()
+        .map(|span| {
+            let value = &text[span.start..span.end];
+            (span.finding, value)
+        })
+        .collect()
+}
+
+/// [`scan_values`] over a JSON value, walked as [`redact_json`] walks it.
+pub(crate) fn json_values(v: &Value) -> Vec<(Finding, String)> {
+    fn walk(v: &Value, key: Option<&str>, out: &mut Vec<(Finding, String)>) {
+        match v {
+            Value::String(text) => {
+                if let Some(hit) = key.and_then(|key| assignment_finding(key, text, false)) {
+                    out.push((hit, text.clone()));
+                }
+                out.extend(
+                    scan_values(text)
+                        .into_iter()
+                        .map(|(f, value)| (f, value.to_owned())),
+                );
+            }
+            Value::Array(values) => {
+                for value in values {
+                    walk(value, None, out);
+                }
+            }
+            Value::Object(values) => {
+                for (key, value) in values {
+                    walk(value, Some(key), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, None, &mut out);
+    out
+}
+
 pub fn scan(text: &str) -> Vec<Finding> {
     spans(text).into_iter().map(|span| span.finding).collect()
 }

@@ -11,7 +11,7 @@ USAGE:
     hub backfill-analytics [--batch N]   derive analytics fields over stored messages
     hub mirror rebuild                   rebuild the statistics mirror and swap it in
                                          (required after backfill-analytics)
-    hub findings dry-run [--since 7d|<RFC3339>] [--rule ID]... [--expect ROW|SESSION:UUID]... [--batch N]
+    hub findings dry-run [--since 7d|<RFC3339>] [--rule ID]... [--expect ROW|SESSION:UUID]... [--batch N] [--fingerprint-key-file PATH]
                                          scan stored messages for credential shapes,
                                          read-only; prints locations and shapes, never values
     hub findings redact --rule ID... --max-rows N [--since ...] [--expect ...]... [--batch N]
@@ -79,6 +79,21 @@ fn dry_run_options(args: &[String]) -> hub::findings::DryRunOptions {
         rules,
         expect,
         batch: flag_i64(args, "--batch").unwrap_or(1000),
+        fingerprint_key: flag_values(args, "--fingerprint-key-file")
+            .pop()
+            .map(|path| {
+                let hex = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| usage_error(&format!("reading {path}: {e}")));
+                let hex = hex.trim();
+                if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    usage_error(&format!(
+                        "{path}: expected 64 hex characters (a 32-byte key)"
+                    ));
+                }
+                (0..32)
+                    .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("checked hex"))
+                    .collect()
+            }),
     }
 }
 

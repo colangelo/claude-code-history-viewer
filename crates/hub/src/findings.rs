@@ -208,7 +208,45 @@ pub struct DryRunOptions {
     pub expect: Vec<Expect>,
     /// Messages per query.
     pub batch: i64,
+    /// When set, each hit also carries a keyed fingerprint of its value: the
+    /// first 12 hex of HMAC-SHA256(key, value). Never the value or a plain hash,
+    /// which a guessed passphrase could be tested against offline.
+    pub fingerprint_key: Option<Vec<u8>>,
 }
+
+/// HMAC-SHA256 (RFC 2104) over `sha2`, so the fingerprint needs no new crate.
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut block = [0_u8; 64];
+    if key.len() > 64 {
+        block[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let ipad: Vec<u8> = block.iter().map(|b| b ^ 0x36).collect();
+    let opad: Vec<u8> = block.iter().map(|b| b ^ 0x5c).collect();
+    let inner = Sha256::new()
+        .chain_update(&ipad)
+        .chain_update(msg)
+        .finalize();
+    Sha256::new()
+        .chain_update(&opad)
+        .chain_update(inner)
+        .finalize()
+        .into()
+}
+
+/// The first 12 hex of HMAC-SHA256(key, value).
+pub fn fingerprint(key: &[u8], value: &str) -> String {
+    let mut hex = String::with_capacity(12);
+    for b in &hmac_sha256(key, value.as_bytes())[..6] {
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
+}
+
+/// One field's detections, each with its keyed fingerprint when asked for.
+type FieldHits = (&'static str, Vec<(Finding, Option<String>)>);
 
 /// One detection, with everything a rotation needs and no value.
 #[derive(Debug, Clone)]
@@ -223,6 +261,8 @@ pub struct Hit {
     pub key: Option<String>,
     pub value_len_bucket: &'static str,
     pub value_classes: u8,
+    /// Keyed fingerprint, only with `DryRunOptions::fingerprint_key`.
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -321,7 +361,7 @@ impl DryRunReport {
             "\nHITS (location, rule, key, value shape — never the value)"
         );
         for h in &self.hits {
-            let _ = writeln!(
+            let _ = write!(
                 o,
                 "  row={} session={} message={} machine={} at={} field={} rule={} key={} shape={}/{}",
                 h.row_id,
@@ -335,6 +375,14 @@ impl DryRunReport {
                 h.value_len_bucket,
                 classes(h.value_classes),
             );
+            match &h.fingerprint {
+                Some(fp) => {
+                    let _ = writeln!(o, " fp={fp}");
+                }
+                None => {
+                    let _ = writeln!(o);
+                }
+            }
         }
         o
     }
@@ -405,17 +453,43 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
             let mut raw: serde_json::Value = row.get("raw");
             let content: Option<serde_json::Value> = row.get("content");
             let search_text: Option<String> = row.get("search_text");
+            let key = opts.fingerprint_key.as_deref();
+            let keyed = |hits: Vec<(Finding, String)>| -> Vec<(Finding, Option<String>)> {
+                hits.into_iter()
+                    .map(|(f, value)| (f, key.map(|k| fingerprint(k, &value))))
+                    .collect()
+            };
+            let plain = |hits: Vec<Finding>| -> Vec<(Finding, Option<String>)> {
+                hits.into_iter().map(|f| (f, None)).collect()
+            };
             // `&[]`: detect only, never replace.
-            let mut per_field: Vec<(&'static str, Vec<Finding>)> =
-                vec![("raw", redact::redact_json(&mut raw, &[]))];
-            if let Some(mut c) = content {
-                per_field.push(("content", redact::redact_json(&mut c, &[])));
-            }
-            if let Some(t) = &search_text {
-                per_field.push(("search_text", redact::scan(t)));
+            let mut per_field: Vec<FieldHits> = Vec::new();
+            if key.is_some() {
+                per_field.push(("raw", keyed(redact::json_values(&raw))));
+                if let Some(c) = &content {
+                    per_field.push(("content", keyed(redact::json_values(c))));
+                }
+                if let Some(t) = &search_text {
+                    let hits = redact::scan_values(t)
+                        .into_iter()
+                        .map(|(f, v)| (f, v.to_owned()))
+                        .collect();
+                    per_field.push(("search_text", keyed(hits)));
+                }
+            } else {
+                per_field.push(("raw", plain(redact::redact_json(&mut raw, &[]))));
+                if let Some(mut c) = content {
+                    per_field.push(("content", plain(redact::redact_json(&mut c, &[]))));
+                }
+                if let Some(t) = &search_text {
+                    per_field.push(("search_text", plain(redact::scan(t))));
+                }
             }
             for (field, findings) in per_field {
-                for f in findings.into_iter().filter(|f| f.rule.selected(&rules)) {
+                for (f, fp) in findings
+                    .into_iter()
+                    .filter(|(f, _)| f.rule.selected(&rules))
+                {
                     report.hits.push(Hit {
                         row_id: id,
                         session_id: row.get("session_id"),
@@ -427,6 +501,7 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                         key: f.key,
                         value_len_bucket: f.value_len_bucket,
                         value_classes: f.value_classes,
+                        fingerprint: fp,
                     });
                 }
             }

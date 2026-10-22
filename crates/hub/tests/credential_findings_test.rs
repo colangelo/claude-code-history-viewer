@@ -456,6 +456,92 @@ async fn messages_by_rule_counts_a_request_copy_once() {
     assert_eq!(delta(&before.messages_by_rule, &after.messages_by_rule), 1);
 }
 
+/// RFC 4231 test case 2: the fingerprint's HMAC is the standard one.
+#[test]
+fn hmac_sha256_matches_rfc_4231() {
+    let mac = findings::hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+    let hex = mac.iter().fold(String::new(), |mut hex, b| {
+        use std::fmt::Write;
+        let _ = write!(hex, "{b:02x}");
+        hex
+    });
+    assert_eq!(
+        hex,
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    );
+}
+
+/// Pre-sweep inventory (manager-lab and security, 2026-10-22): each hit gets a
+/// keyed fingerprint, the same for the same value and key, never the value.
+#[tokio::test]
+async fn dry_run_fingerprints_are_keyed_and_stable() {
+    let hub = spawn(Vec::new()).await;
+    let base: DateTime<Utc> = "2094-06-01T00:00:00Z".parse().unwrap();
+    let run = Uuid::new_v4().simple().to_string();
+    let ts = (base
+        + chrono::Duration::seconds(i64::from(u16::from_str_radix(&run[..4], 16).unwrap())))
+    .to_rfc3339();
+    let secret = format!("aB3-{}", synthetic_token());
+    let session = format!("s-fp-{run}");
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            &session,
+            vec![
+                msg(
+                    &session,
+                    &format!("{run}-a"),
+                    &ts,
+                    &format!("API_TOKEN={secret}"),
+                ),
+                msg(
+                    &session,
+                    &format!("{run}-b"),
+                    &ts,
+                    &format!("API_TOKEN={secret}"),
+                ),
+            ],
+        ),
+    )
+    .await;
+    let (a, ..) = stored(&hub, &format!("{run}-a")).await;
+    let (b, ..) = stored(&hub, &format!("{run}-b")).await;
+    let key = [7_u8; 32];
+    let pool = read_only_pool().await;
+    let report = findings::dry_run(
+        &pool,
+        &DryRunOptions {
+            since: Some(base),
+            rules: vec![Rule::AssignStrong],
+            expect: Vec::new(),
+            batch: 100,
+            fingerprint_key: Some(key.to_vec()),
+        },
+    )
+    .await
+    .expect("dry run on a read-only pool");
+    let want = findings::fingerprint(&key, &secret);
+    assert_eq!(want.len(), 12);
+    for row in [a, b] {
+        let fps: Vec<_> = report
+            .hits
+            .iter()
+            .filter(|h| h.row_id == row)
+            .map(|h| h.fingerprint.clone())
+            .collect();
+        assert!(!fps.is_empty(), "row {row} not reported");
+        assert!(fps.iter().all(|f| f.as_deref() == Some(want.as_str())));
+    }
+    let rendered = report.render();
+    assert!(
+        !rendered.contains(&secret),
+        "the report must never carry a value"
+    );
+    assert!(rendered.contains(&format!("fp={want}")));
+    assert_ne!(findings::fingerprint(&[8_u8; 32], &secret), want);
+}
+
 /// A pool whose sessions refuse writes, as the CLI builds it.
 async fn read_only_pool() -> PgPool {
     PgPoolOptions::new()
@@ -523,6 +609,7 @@ async fn dry_run_reports_locations_never_values() {
                 Expect::parse(&format!("{session}:u-{run}-hit")).unwrap(),
             ],
             batch: 1,
+            fingerprint_key: None,
         },
     )
     .await
@@ -556,6 +643,7 @@ async fn dry_run_reports_locations_never_values() {
             rules: Vec::new(),
             expect: vec![Expect::Row(hit_id), Expect::Row(miss_id)],
             batch: 100,
+            fingerprint_key: None,
         },
     )
     .await
@@ -571,6 +659,7 @@ async fn dry_run_reports_locations_never_values() {
             rules: vec![Rule::Pem],
             expect: vec![Expect::Row(hit_id)],
             batch: 100,
+            fingerprint_key: None,
         },
     )
     .await
@@ -723,6 +812,7 @@ async fn redact_existing_rewrites_exactly_what_the_dry_run_lists() {
             rules,
             expect,
             batch: 1,
+            fingerprint_key: None,
         },
         max_rows,
     };
