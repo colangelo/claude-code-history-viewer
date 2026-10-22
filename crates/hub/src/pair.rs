@@ -153,6 +153,33 @@ fn plain_name(raw: &str) -> Option<String> {
     .then(|| name.to_owned())
 }
 
+/// A location, not a secret (ac/security 28ca77a): the name's last token is
+/// DIR, PATH or FILE, and the value has no spaces and starts at an anchored
+/// root: `~/`, `./`, `../`, a drive letter, or `/` plus a known top-level
+/// directory. A bare leading `/` is not enough: base64 key material can begin
+/// with it (`/9j/…`) and uses `/` freely.
+fn names_a_path(name: &str, value: &str) -> bool {
+    const ROOTS: [&str; 14] = [
+        "Users", "home", "tmp", "var", "etc", "opt", "run", "srv", "mnt", "private", "Library",
+        "Volumes", "usr", "data",
+    ];
+    let last = tokens(name).pop();
+    if !matches!(last.as_deref(), Some("DIR" | "PATH" | "FILE"))
+        || value.contains(char::is_whitespace)
+    {
+        return false;
+    }
+    let b = value.as_bytes();
+    let drive =
+        b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
+    let rooted = value.strip_prefix('/').is_some_and(|rest| {
+        ROOTS
+            .iter()
+            .any(|r| rest == *r || rest.strip_prefix(r).is_some_and(|t| t.starts_with('/')))
+    });
+    drive || rooted || ["~/", "./", "../"].iter().any(|p| value.starts_with(p))
+}
+
 fn truthy(v: &str) -> bool {
     v.trim().eq_ignore_ascii_case("true")
 }
@@ -211,7 +238,11 @@ pub fn object_pair(map: &Map<String, Value>) -> Option<ObjectPair> {
     let basis = Basis::of(secret_named(&name), flagged)?;
     let value_keys: Vec<String> = map
         .iter()
-        .filter(|(k, v)| is_field(&VALUE_FIELDS, k) && v.as_str().is_some_and(passes_floor))
+        .filter(|(k, v)| {
+            is_field(&VALUE_FIELDS, k)
+                && v.as_str()
+                    .is_some_and(|v| passes_floor(v) && !names_a_path(&name, v))
+        })
         .map(|(k, _)| k.clone())
         .collect();
     (!value_keys.is_empty()).then_some(ObjectPair {
@@ -246,7 +277,7 @@ fn judge(text: &str, fields: &[Field], out: &mut Vec<TextPair>) {
         let (start, end) = trim_range(text, f.start, f.end);
         let value = &text[start..end];
         // A trailing `,` or `;` is a line of code (`value: compute(x),`).
-        if !value.ends_with([',', ';']) && passes_floor(value) {
+        if !value.ends_with([',', ';']) && passes_floor(value) && !names_a_path(&name, value) {
             out.push(TextPair {
                 start,
                 end,
@@ -523,6 +554,32 @@ mod tests {
         for code in [rust.to_owned(), go] {
             assert!(pairs(&code).is_empty(), "flagged code: {code}");
         }
+    }
+
+    #[test]
+    fn a_path_under_a_dir_path_or_file_name_does_not_fire() {
+        let path = format!(
+            r#"{{"Name": "CHATGPT_{}_DIR", "Value": "/home/someone/.config/app"}}"#,
+            "TOKEN"
+        );
+        assert!(pairs(&path).is_empty(), "{path}");
+        let windows = format!(
+            r#"<Setting Name="Signing{}File" Value="C:\certs\build\sign.pfx" />"#,
+            "Key"
+        );
+        assert!(pairs(&windows).is_empty(), "{windows}");
+        // Built from parts: the literal home-cache path trips a host path guard.
+        let users = format!(
+            r#"<Setting Name="Cache{}Dir" Value="/{}/someone/{}/Caches/app" />"#,
+            "Token", "Users", "Library"
+        );
+        assert!(pairs(&users).is_empty(), "{users}");
+        // base64 key material can begin with '/' and contain more: still fires
+        let b64 = format!(
+            r#"{{"Name": "SIGNING_KEY_{}", "Value": "/9j/4AAQ{}"}}"#,
+            "FILE", "Q2xpZW50/U2VjcmV0QmFzZTY0"
+        );
+        assert_eq!(pairs(&b64).len(), 1, "{b64}");
     }
 
     #[test]
