@@ -8,5 +8,5 @@
 
 ## 2. Release and ops
 
-- [ ] 2.1 Release; the hub swap and the `hub.toml` edit in one step; read back with a planted fake on the test DB plus the two controls.
+- [x] 2.1 Release; the hub swap and the `hub.toml` edit in one step; read back with a planted fake on the test DB plus the two controls. Live 2026-10-22T08:59:00Z (infra-disk); the live canary through `/v1/ingest` also passed (strong fake stored as the fixed marker, both controls byte-identical).
 - [ ] 2.2 One bell to security and manager-lab when live, with the first day's count.
