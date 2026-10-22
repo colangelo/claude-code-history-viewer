@@ -31,12 +31,65 @@ struct TestHub {
     hostname: String,
 }
 
-async fn spawn() -> TestHub {
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
+/// This run's own schema. `/v1/journal/pending` lists every project, so in a
+/// reused database the leftovers of earlier runs (and of other test files) fill
+/// its page and the full-page guard in `pending_for` refuses to assert. A fresh
+/// schema per run gives the guard the empty database CI has. Schemas from runs
+/// over a day old are dropped; a concurrent run's is left alone.
+async fn run_schema() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let name = NAME.get_or_init(|| {
+        let secs = Utc::now().timestamp();
+        format!("jd_run_{secs}_{}", std::process::id())
+    });
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
         .connect(&test_db_url())
         .await
         .expect("connect");
+    let cutoff = Utc::now().timestamp() - 86_400;
+    let stale: Vec<String> = sqlx::query_scalar(
+        "SELECT nspname FROM pg_namespace WHERE nspname ~ '^jd_run_[0-9]+_[0-9]+$' \
+         AND split_part(nspname, '_', 3)::bigint < $1",
+    )
+    .bind(cutoff)
+    .fetch_all(&admin)
+    .await
+    .expect("list stale run schemas");
+    for old in stale {
+        sqlx::query(&format!("DROP SCHEMA IF EXISTS \"{old}\" CASCADE"))
+            .execute(&admin)
+            .await
+            .expect("drop stale run schema");
+    }
+    sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{name}\""))
+        .execute(&admin)
+        .await
+        .expect("create run schema");
+    name
+}
+
+/// A pool on this run's schema. Every connection in this file goes through it.
+async fn test_pool(max_connections: u32) -> sqlx::PgPool {
+    let schema = run_schema().await;
+    // Extensions (pgvector) stay in `public`, so it follows on the path.
+    let search_path = format!("SET search_path TO \"{schema}\", public");
+    PgPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(move |conn, _meta| {
+            let sql = search_path.clone();
+            Box::pin(async move {
+                sqlx::query(&sql).execute(conn).await?;
+                Ok(())
+            })
+        })
+        .connect(&test_db_url())
+        .await
+        .expect("connect")
+}
+
+async fn spawn() -> TestHub {
+    let pool = test_pool(5).await;
     hub::MIGRATOR.run(&pool).await.expect("migrate");
 
     let machine_id = Uuid::new_v4();
@@ -481,11 +534,7 @@ async fn provenance_drift_makes_a_group_pending_again() {
     // Rewrite the stored provenance to a stale subset — exactly the shape every
     // entry written under the session-start fold is in. Snapshot-based dirtiness
     // cannot see this: no ingest happened.
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&test_db_url())
-        .await
-        .unwrap();
+    let pool = test_pool(1).await;
     sqlx::query("UPDATE journal_entries SET session_ids = $1 WHERE project_path = $2")
         .bind(&ids[..1])
         .bind(&project)
@@ -617,11 +666,7 @@ async fn each_day_reports_its_own_arrival_not_the_session_s() {
     )
     .await;
 
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&test_db_url())
-        .await
-        .unwrap();
+    let pool = test_pool(1).await;
     // The earlier day's message arrived long ago; the later day's just now. One
     // session, so a session-level max() would report "just now" for both.
     sqlx::query(
@@ -750,11 +795,7 @@ async fn a_live_session_does_not_dirty_its_own_frozen_day() {
 /// backend and pass without ever testing the thing it names.
 #[tokio::test]
 async fn fold_work_mem_applies_to_the_transaction_and_does_not_leak() {
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&test_db_url())
-        .await
-        .expect("connect");
+    let pool = test_pool(1).await;
 
     let before: String = sqlx::query_scalar("SHOW work_mem")
         .fetch_one(&pool)
