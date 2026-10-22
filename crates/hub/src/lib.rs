@@ -23,6 +23,7 @@ pub mod journal;
 pub mod journal_threads;
 pub mod mirror;
 pub mod pagination;
+pub mod pair;
 pub mod redact;
 pub mod search;
 pub mod state;

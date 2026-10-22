@@ -7,6 +7,8 @@ use regex::{Regex, RegexSet};
 use serde_json::Value;
 use std::sync::LazyLock;
 
+use crate::pair;
+
 pub const DETECTOR_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -18,15 +20,19 @@ pub enum Rule {
     /// An `assign` hit with a strong value shape (ac/security G3, 2026-10-22):
     /// derived, not a pattern of its own.
     AssignStrong,
+    /// A value field paired with a secret-named name field or a sensitivity
+    /// flag in the same object (ac/security F7, 2026-10-22): `crate::pair`.
+    Pair,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 5] = [
+    pub const ALL: [Rule; 6] = [
         Rule::Pem,
         Rule::Prefix,
         Rule::Bearer,
         Rule::Assign,
         Rule::AssignStrong,
+        Rule::Pair,
     ];
 
     pub fn from_id(id: &str) -> Option<Rule> {
@@ -46,6 +52,7 @@ impl Rule {
             Self::Bearer => "bearer",
             Self::Assign => "assign",
             Self::AssignStrong => "assign-strong",
+            Self::Pair => "pair",
         }
     }
 }
@@ -66,6 +73,8 @@ pub struct Finding {
     /// `assign` family only: the value holds a placeholder ([`is_placeholder`]).
     /// Reported apart, never exempted.
     pub placeholder: bool,
+    /// `pair` only: `name`, `flag` or `name+flag` ([`crate::pair::Basis`]).
+    pub pair_basis: Option<&'static str>,
 }
 
 const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
@@ -120,7 +129,7 @@ fn secret_key(key: &str) -> bool {
     SECRET_NAMES.iter().any(|name| upper.contains(name))
 }
 
-fn placeholder(value: &str) -> bool {
+pub(crate) fn placeholder(value: &str) -> bool {
     let value = value.trim();
     if value.starts_with("[REDACTED:")
         || value.starts_with("${{") // CI template: `${{ secrets.GITHUB_TOKEN }}`
@@ -165,6 +174,7 @@ fn finding(rule: Rule, key: Option<&str>, value: &str) -> Finding {
         rule,
         reference: assign && is_reference(value),
         placeholder: assign && is_placeholder(value),
+        pair_basis: None,
         key: key.map(str::to_owned),
         value_len_bucket: match len {
             0..=15 => "8-15",
@@ -228,6 +238,9 @@ struct Span {
     start: usize,
     end: usize,
     finding: Finding,
+    /// False for a repeat of a `pair` value already counted in this text: it is
+    /// still replaced, but reported once (security policy § 5).
+    counted: bool,
 }
 
 /// A file name that merely starts with a GitLab prefix, not a token: lowercase
@@ -309,6 +322,7 @@ fn spans(text: &str) -> Vec<Span> {
                 }
                 // Derived from an `assign` hit below; never a pattern of its own.
                 Rule::AssignStrong => unreachable!("assign-strong has no pattern"),
+                Rule::Pair => unreachable!("pair spans come from crate::pair"),
                 Rule::Assign => {
                     let value = captures
                         .name("double")
@@ -327,12 +341,43 @@ fn spans(text: &str) -> Vec<Span> {
                 start: value.start(),
                 end: value.end(),
                 finding: hit,
+                counted: true,
             });
         }
     }
+    pair_spans(text, &mut spans);
     // Enclosing spans first; ties retain pem/prefix/bearer/assign precedence.
     spans.sort_by_key(|span| (span.start, std::cmp::Reverse(span.end)));
     spans
+}
+
+/// `pair` spans: each detected value, plus every other occurrence of it in the
+/// text (replaced, not counted again).
+fn pair_spans(text: &str, spans: &mut Vec<Span>) {
+    let hits = pair::text_pairs(text);
+    let mut counted: Vec<&str> = Vec::new();
+    for hit in &hits {
+        let value = &text[hit.start..hit.end];
+        if counted.contains(&value) {
+            continue;
+        }
+        counted.push(value);
+        for (at, _) in text.match_indices(value) {
+            spans.push(Span {
+                start: at,
+                end: at + value.len(),
+                finding: pair_finding(&hit.name, value, hit.basis),
+                counted: at == hit.start,
+            });
+        }
+    }
+}
+
+fn pair_finding(name: &str, value: &str, basis: pair::Basis) -> Finding {
+    Finding {
+        pair_basis: Some(basis.id()),
+        ..finding(Rule::Pair, Some(name), value)
+    }
 }
 
 /// Scan every rule; return metadata only, including overlapping detections.
@@ -342,6 +387,7 @@ fn spans(text: &str) -> Vec<Span> {
 pub(crate) fn scan_values(text: &str) -> Vec<(Finding, &str)> {
     spans(text)
         .into_iter()
+        .filter(|span| span.counted)
         .map(|span| {
             let value = &text[span.start..span.end];
             (span.finding, value)
@@ -388,6 +434,17 @@ pub(crate) fn json_values(v: &Value) -> Vec<(Finding, String, Origin)> {
             }
             Value::Object(values) => {
                 let here = block_origin(values).unwrap_or_else(|| at.clone());
+                if let Some(p) = pair::object_pair(values) {
+                    for key in &p.value_keys {
+                        if let Some(text) = values.get(key).and_then(Value::as_str) {
+                            out.push((
+                                pair_finding(&p.name, text, p.basis),
+                                text.to_owned(),
+                                here.clone(),
+                            ));
+                        }
+                    }
+                }
                 for (key, value) in values {
                     // A Claude transcript line keeps the structured tool result
                     // beside the message, not inside its tool_result block.
@@ -479,7 +536,11 @@ pub fn is_placeholder(value: &str) -> bool {
 }
 
 pub fn scan(text: &str) -> Vec<Finding> {
-    spans(text).into_iter().map(|span| span.finding).collect()
+    spans(text)
+        .into_iter()
+        .filter(|span| span.counted)
+        .map(|span| span.finding)
+        .collect()
 }
 
 /// Replace values for the selected rules and return findings for ALL rules.
@@ -509,7 +570,12 @@ pub fn redact(text: &str, rules: &[Rule]) -> (String, Vec<Finding>) {
         cursor = end;
     }
     output.push_str(&text[cursor..]);
-    (output, spans.into_iter().map(|span| span.finding).collect())
+    let findings = spans
+        .into_iter()
+        .filter(|span| span.counted)
+        .map(|span| span.finding)
+        .collect();
+    (output, findings)
 }
 
 /// Walk string leaves and secret-named object keys paired with string values.
@@ -544,7 +610,18 @@ pub fn redact_json(v: &mut Value, rules: &[Rule]) -> Vec<Finding> {
                 }
             }
             Value::Object(values) => {
-                for (key, value) in values {
+                // A structured name/value object: judge its value fields as a pair.
+                let pair = pair::object_pair(values);
+                for (key, value) in values.iter_mut() {
+                    if let (Some(p), Value::String(text)) = (&pair, &mut *value) {
+                        if p.value_keys.contains(key) {
+                            hits.push(pair_finding(&p.name, text, p.basis));
+                            if Rule::Pair.selected(rules) {
+                                "[REDACTED:pair]".clone_into(text);
+                                continue;
+                            }
+                        }
+                    }
                     walk(value, Some(key), rules, hits);
                 }
             }

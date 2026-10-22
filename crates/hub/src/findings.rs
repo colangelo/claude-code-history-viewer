@@ -295,6 +295,8 @@ pub struct Hit {
     pub reference: bool,
     /// From the `Finding`: the value holds a placeholder (`xxx`, `<token>`, …).
     pub placeholder: bool,
+    /// From the `Finding`: why a `pair` hit fired (`name`, `flag`, `name+flag`).
+    pub pair_basis: Option<&'static str>,
     /// `tool_result`, `tool_input`, `text`, `other` or `search_text`.
     pub source: &'static str,
     /// For a tool result: the basename of the file the producing call read
@@ -396,6 +398,17 @@ impl DryRunReport {
         for (k, n) in &by_key {
             let _ = writeln!(o, "  key {k}: {n}");
         }
+        let mut by_basis: BTreeMap<&str, (usize, BTreeSet<i64>)> = BTreeMap::new();
+        for h in &self.hits {
+            if let Some(b) = h.pair_basis {
+                let e = by_basis.entry(b).or_default();
+                e.0 += 1;
+                e.1.insert(h.row_id);
+            }
+        }
+        for (b, (n, rows)) in &by_basis {
+            let _ = writeln!(o, "  pair basis {b}: {n} hits, {} rows", rows.len());
+        }
         if self.hits.iter().any(|h| h.fingerprint.is_some()) {
             let mut flags: BTreeMap<&str, [usize; 3]> = BTreeMap::new();
             for h in &self.hits {
@@ -430,6 +443,9 @@ impl DryRunReport {
                 h.value_len_bucket,
                 classes(h.value_classes),
             );
+            if let Some(basis) = h.pair_basis {
+                let _ = write!(o, " basis={basis}");
+            }
             match &h.fingerprint {
                 Some(fp) => {
                     let _ = writeln!(
@@ -585,6 +601,7 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                         fingerprint: facts.map(|k| k.fingerprint.clone()),
                         reference: f.reference,
                         placeholder: f.placeholder,
+                        pair_basis: f.pair_basis,
                         source: facts.map_or("-", |k| k.origin.kind),
                         file: None,
                         session_ref: row.get("session_ref"),
