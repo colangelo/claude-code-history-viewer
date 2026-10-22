@@ -139,6 +139,20 @@ pub fn secret_named(name: &str) -> bool {
         || toks.len() >= 2 && toks.last().is_some_and(|t| t == "KEY")
 }
 
+/// A name field's content as a plain identifier (`DB_PASSWORD`, `smtp.pwd`,
+/// `"ApiKey"`), or `None` for code and prose (`StoreKey::from(key),`), which
+/// a `key: …` line in source code would otherwise pair.
+fn plain_name(raw: &str) -> Option<String> {
+    let name = raw
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    (!name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '/')))
+    .then(|| name.to_owned())
+}
+
 fn truthy(v: &str) -> bool {
     v.trim().eq_ignore_ascii_case("true")
 }
@@ -184,7 +198,8 @@ pub fn object_pair(map: &Map<String, Value>) -> Option<ObjectPair> {
     let name = map
         .iter()
         .find(|(k, v)| is_field(&NAME_FIELDS, k) && v.is_string())
-        .and_then(|(_, v)| v.as_str())?;
+        .and_then(|(_, v)| v.as_str())
+        .and_then(plain_name)?;
     let flagged = map.iter().any(|(k, v)| {
         is_field(&FLAG_FIELDS, k)
             && match v {
@@ -193,14 +208,14 @@ pub fn object_pair(map: &Map<String, Value>) -> Option<ObjectPair> {
                 _ => false,
             }
     });
-    let basis = Basis::of(secret_named(name), flagged)?;
+    let basis = Basis::of(secret_named(&name), flagged)?;
     let value_keys: Vec<String> = map
         .iter()
         .filter(|(k, v)| is_field(&VALUE_FIELDS, k) && v.as_str().is_some_and(passes_floor))
         .map(|(k, _)| k.clone())
         .collect();
-    (!value_keys.is_empty()).then(|| ObjectPair {
-        name: name.to_owned(),
+    (!value_keys.is_empty()).then_some(ObjectPair {
+        name,
         basis,
         value_keys,
     })
@@ -218,7 +233,9 @@ fn judge(text: &str, fields: &[Field], out: &mut Vec<TextPair>) {
     let Some(name) = fields.iter().find(|f| is_field(&NAME_FIELDS, &f.key)) else {
         return;
     };
-    let name = text[name.start..name.end].trim().to_owned();
+    let Some(name) = plain_name(&text[name.start..name.end]) else {
+        return;
+    };
     let flagged = fields
         .iter()
         .any(|f| is_field(&FLAG_FIELDS, &f.key) && truthy(&text[f.start..f.end]));
@@ -227,7 +244,9 @@ fn judge(text: &str, fields: &[Field], out: &mut Vec<TextPair>) {
     };
     for f in fields.iter().filter(|f| is_field(&VALUE_FIELDS, &f.key)) {
         let (start, end) = trim_range(text, f.start, f.end);
-        if passes_floor(&text[start..end]) {
+        let value = &text[start..end];
+        // A trailing `,` or `;` is a line of code (`value: compute(x),`).
+        if !value.ends_with([',', ';']) && passes_floor(value) {
             out.push(TextPair {
                 start,
                 end,
@@ -494,6 +513,15 @@ mod tests {
         for text in controls {
             assert_eq!(redacted(&text), text, "changed: {text}");
             assert!(pairs(&text).is_empty(), "flagged: {text}");
+        }
+    }
+
+    #[test]
+    fn source_code_is_not_a_pair() {
+        let rust = "        Task {\n            key: StoreKey::from(&task.key()),\n            value: serde_json::to_value(&task)?,\n        }";
+        let go = format!("\tname: \"API_{}\",\n\tvalue: os.Getenv(\"X\"),", "TOKEN");
+        for code in [rust.to_owned(), go] {
+            assert!(pairs(&code).is_empty(), "flagged code: {code}");
         }
     }
 
