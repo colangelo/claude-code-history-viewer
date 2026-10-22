@@ -8,6 +8,6 @@
 
 ## 2. Release and ops
 
-- [ ] 2.1 Merge the branch by PR; release cchv-v0.28.1; hub swap via infra-disk (binary only, `hub.toml` unchanged).
-- [ ] 2.2 Live canary: strong fake redacted, a strong value with a reference inside left byte-identical (rule `assign`, reference 1), a placeholder-bearing strong value redacted; read `flagged_messages_by_rule`.
-- [ ] 2.3 Bell manager-lab and security; the sweep (a1022-07) then waits on ac's yes.
+- [x] 2.1 Merge the branch by PR; release cchv-v0.28.1; hub swap via infra-disk (binary only, `hub.toml` unchanged). PR #78 fast-forwarded (main 4e4456cf); tag 93016ce5; live 2026-10-22T10:17:59Z, migration 13 applied 10:18:03Z.
+- [x] 2.2 Live canary: strong fake redacted, a strong value with a reference inside left byte-identical (rule `assign`, reference 1), a placeholder-bearing strong value redacted; read `flagged_messages_by_rule`. PASS (5 controls); `flagged_messages_by_rule` showed exactly the canary.
+- [x] 2.3 Bell manager-lab and security; the sweep (a1022-07) then waits on ac's yes.

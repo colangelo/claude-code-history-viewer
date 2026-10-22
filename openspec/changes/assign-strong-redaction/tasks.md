@@ -16,4 +16,4 @@
 - [x] 3.1 `redact::is_reference` (`${`, `$(`, `%VAR%`, `{{`, `#{`) and `redact::is_placeholder` (`xxx`, `changeme`, `example`, `dummy`, `redacted`, `<…>`, `***`, case-insensitive), shared with the v0.28.1 exemption. A whole-value `${VAR}` never reaches a rule (the existing placeholder guard); the flag covers a reference inside a longer value.
 - [x] 3.2 `--fingerprint-key-file` hits also carry `ref`, `ph`, the source kind (`tool_result`, `tool_input`, `text`, `other`, `search_text`) from the JSON walk, and for a tool result the basename of the file the producing call read (a `Read`, or `cat`/`grep`/`sed` in `Bash`), resolved per session by `tool_use_id`. Never a path; Claude transcripts only.
 - [x] 3.3 Tests: flag fixtures built from parts, the origin walk, basename extraction, and an integration test linking a tool result to its `Read`.
-- [ ] 3.4 Read-only run from a branch build; per-fingerprint detail to the client-data owner only, counts to manager-lab and security.
+- [x] 3.4 Read-only run from a branch build (2026-10-22, 09:32-09:43Z); per-fingerprint detail to the client-data owner only, counts to manager-lab and security.
