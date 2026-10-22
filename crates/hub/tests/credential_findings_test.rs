@@ -593,7 +593,8 @@ async fn dry_run_flags_values_and_links_tool_results_to_the_file() {
         &pool,
         &DryRunOptions {
             since: Some(base),
-            rules: vec![Rule::AssignStrong],
+            // `assign` also selects `assign-strong`; a reference is plain `assign`.
+            rules: vec![Rule::Assign],
             expect: Vec::new(),
             batch: 100,
             fingerprint_key: Some([9_u8; 32].to_vec()),
@@ -611,13 +612,25 @@ async fn dry_run_flags_values_and_links_tool_results_to_the_file() {
     };
     let r = raw_hit(result_row);
     assert_eq!(
-        (r.source, r.file.as_deref(), r.reference, r.placeholder),
-        ("tool_result", Some("service.env"), false, false)
+        (
+            r.rule,
+            r.source,
+            r.file.as_deref(),
+            r.reference,
+            r.placeholder
+        ),
+        (
+            Rule::AssignStrong,
+            "tool_result",
+            Some("service.env"),
+            false,
+            false
+        )
     );
     let t = raw_hit(ref_row);
     assert_eq!(
-        (t.source, t.file.as_deref(), t.reference),
-        ("text", None, true)
+        (t.rule, t.source, t.file.as_deref(), t.reference),
+        (Rule::Assign, "text", None, true)
     );
 
     let rendered = report.render();
@@ -630,10 +643,77 @@ async fn dry_run_flags_values_and_links_tool_results_to_the_file() {
         !rendered.contains(&strong),
         "the report must never carry a value"
     );
+    assert!(rendered.contains("rule assign: reference "), "{rendered}");
+}
+
+/// ac/security policy 2026-10-22 (cchv-v0.28.1): a reference inside a strong
+/// value is exempt from `assign-strong`; a placeholder is not; both are counted.
+#[tokio::test]
+async fn references_are_exempt_and_flags_are_counted() {
+    let hub = spawn(vec![Rule::Pem, Rule::Prefix, Rule::AssignStrong]).await;
+    let run = Uuid::new_v4().simple().to_string();
+    let session = format!("s-policy-{run}");
+    let ts = "2026-01-01T00:00:00Z";
+    let tail = format!("Z9q8W7e6R5t4Y3u2-{}", &run[..12]);
+    let assign = |value: &str| format!("API_{}=\"{value}\" next", "TOKEN");
+    let reference = assign(&format!("svc-{}{}-{tail}", "${", "DB_PASS}"));
+    let placeholder = assign(&format!("{}-{tail}", "Example"));
+    let mut posted = Vec::new();
+    for (seq, (name, text)) in [("ref", &reference), ("ph", &placeholder)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut m = msg(&session, &format!("{run}-{name}"), ts, text);
+        m.seq = i32::try_from(seq).unwrap();
+        posted.push(m);
+    }
+    post(&hub, &batch(hub.machine_id, &session, posted)).await;
+
+    let (ref_row, raw, content, search) = stored(&hub, &format!("{run}-ref")).await;
     assert!(
-        rendered.contains("rule assign-strong: reference "),
-        "{rendered}"
+        raw.contains(&tail) && content.contains(&tail) && search.contains(&tail),
+        "a reference is not redacted under assign-strong"
     );
+    let (ph_row, raw, _, search) = stored(&hub, &format!("{run}-ph")).await;
+    assert!(!raw.contains(&tail) && !search.contains(&tail));
+    assert!(search.contains("[REDACTED:assign-strong]"));
+
+    let flags = |row: i64| {
+        sqlx::query_as::<_, (String, i32, i32)>(
+            "SELECT rule, sum(reference_hits)::int, sum(placeholder_hits)::int \
+             FROM credential_findings WHERE message_ref = $1 GROUP BY rule ORDER BY rule",
+        )
+        .bind(row)
+        .fetch_all(&hub.pool)
+    };
+    assert_eq!(
+        flags(ref_row).await.unwrap(),
+        vec![("assign".to_owned(), 3, 0)]
+    );
+    assert_eq!(
+        flags(ph_row).await.unwrap(),
+        vec![("assign-strong".to_owned(), 0, 3)]
+    );
+
+    let s: findings::FindingsSummary = reqwest::Client::new()
+        .get(format!("{}/v1/findings/summary?since=24h", hub.base))
+        .bearer_auth(&hub.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let flagged = |rule: &str, flag: &str| {
+        s.flagged_messages_by_rule
+            .get(rule)
+            .and_then(|m| m.get(flag))
+            .copied()
+            .unwrap_or(0)
+    };
+    assert!(flagged("assign", "reference") >= 1);
+    assert!(flagged("assign-strong", "placeholder") >= 1);
+    assert!(flagged("assign-strong", "placeholder") <= s.messages_by_rule["assign-strong"]);
 }
 
 /// A pool whose sessions refuse writes, as the CLI builds it.

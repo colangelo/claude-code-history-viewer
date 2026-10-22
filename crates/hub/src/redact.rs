@@ -59,6 +59,13 @@ pub struct Finding {
     /// Bits 0..3 indicate lowercase, uppercase, ASCII digit and symbol,
     /// respectively. Whitespace and non-letter/non-digit characters are symbols.
     pub value_classes: u8,
+    /// `assign` family only: the value holds an unexpanded reference
+    /// ([`is_reference`]), so it is never `assign-strong` (ac/security policy
+    /// 2026-10-22).
+    pub reference: bool,
+    /// `assign` family only: the value holds a placeholder ([`is_placeholder`]).
+    /// Reported apart, never exempted.
+    pub placeholder: bool,
 }
 
 const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
@@ -153,8 +160,11 @@ fn finding(rule: Rule, key: Option<&str>, value: &str) -> Finding {
             8
         };
     }
+    let assign = rule == Rule::Assign;
     Finding {
         rule,
+        reference: assign && is_reference(value),
+        placeholder: assign && is_placeholder(value),
         key: key.map(str::to_owned),
         value_len_bucket: match len {
             0..=15 => "8-15",
@@ -191,7 +201,7 @@ fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
         && !(bare && code_expression(value)))
     .then(|| {
         let hit = finding(Rule::Assign, Some(key), value);
-        if strong(&hit) {
+        if strong(&hit) && !hit.reference {
             Finding {
                 rule: Rule::AssignStrong,
                 ..hit
@@ -554,6 +564,9 @@ pub struct FieldHits {
     pub field: &'static str,
     pub rule: Rule,
     pub hits: u32,
+    /// Of `hits`, those whose value holds a reference or a placeholder.
+    pub reference_hits: u32,
+    pub placeholder_hits: u32,
     /// Secret-NAMED keys (`assign` only), deduplicated, at most `MAX_KEY_NAMES`.
     pub key_names: Vec<String>,
     /// Whether this rule replaced the value(s) before storage.
@@ -572,12 +585,16 @@ fn group(field: &'static str, findings: Vec<Finding>, redact_rules: &[Rule]) -> 
                 field,
                 rule: f.rule,
                 hits: 0,
+                reference_hits: 0,
+                placeholder_hits: 0,
                 key_names: Vec::new(),
                 redacted: f.rule.selected(redact_rules),
             });
             out.last_mut().expect("just pushed")
         };
         entry.hits += 1;
+        entry.reference_hits += u32::from(f.reference);
+        entry.placeholder_hits += u32::from(f.placeholder);
         if let Some(k) = f.key {
             if entry.key_names.len() < MAX_KEY_NAMES && !entry.key_names.contains(&k) {
                 entry.key_names.push(k);
@@ -1428,5 +1445,41 @@ mod tests {
             kinds,
             vec![("text", None), ("tool_input", Some("call-2".to_owned()))]
         );
+    }
+
+    #[test]
+    fn a_reference_is_never_assign_strong() {
+        let tail = "Z9q8W7e6R5t4Y3u2I1o0P9";
+        let reference = format!("API_{}=\"svc-{}{}-{tail}\"", "TOKEN", "${", "DB_PASS}");
+        let hits = scan(&reference);
+        assert_eq!(hits.len(), 1);
+        assert_eq!((hits[0].rule, hits[0].reference), (Rule::Assign, true));
+        let (out, _) = redact(&reference, &[Rule::AssignStrong]);
+        assert_eq!(out, reference, "assign-strong leaves a reference alone");
+
+        let placeholder = format!("API_{}=\"{}-{tail}-qq\"", "TOKEN", "Example");
+        let hits = scan(&placeholder);
+        assert_eq!(
+            (hits[0].rule, hits[0].placeholder),
+            (Rule::AssignStrong, true)
+        );
+        let (out, _) = redact(&placeholder, &[Rule::AssignStrong]);
+        assert!(out.contains("[REDACTED:assign-strong]") && !out.contains(tail));
+    }
+
+    #[test]
+    fn field_hits_count_the_flags() {
+        let tail = "Z9q8W7e6R5t4Y3u2I1o0P9";
+        let mut raw = serde_json::json!({
+            "a": format!("API_{}=\"svc-{}{}-{tail}\"", "TOKEN", "${", "DB_PASS}"),
+            "b": format!("API_{}=\"{}-{tail}-qq\"", "TOKEN", "Example"),
+        });
+        let hits = apply_to_message(&mut raw, None, None, &[]);
+        let count = |rule: Rule| {
+            let h = hits.iter().find(|h| h.rule == rule).expect("rule present");
+            (h.hits, h.reference_hits, h.placeholder_hits)
+        };
+        assert_eq!(count(Rule::Assign), (1, 1, 0));
+        assert_eq!(count(Rule::AssignStrong), (1, 0, 1));
     }
 }

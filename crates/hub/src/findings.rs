@@ -55,6 +55,12 @@ pub struct FindingsSummary {
     /// `api-request-blob` copies: the per-day count monitoring alerts on.
     #[serde(default)]
     pub messages_by_rule: BTreeMap<String, i64>,
+    /// Of `messages_by_rule`, per rule, the messages with at least one
+    /// `reference` and at least one `placeholder` hit, so a step-change alert
+    /// can leave them out (ac/security policy 2026-10-22). Rules with neither
+    /// are omitted.
+    #[serde(default)]
+    pub flagged_messages_by_rule: BTreeMap<String, BTreeMap<String, i64>>,
     /// How many of those were stored redacted.
     pub redacted: i64,
     pub latest_detected_at: Option<DateTime<Utc>>,
@@ -89,6 +95,7 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
         total: 0,
         by_rule: BTreeMap::new(),
         messages_by_rule: BTreeMap::new(),
+        flagged_messages_by_rule: BTreeMap::new(),
         redacted: 0,
         latest_detected_at: None,
         detector_version: redact::DETECTOR_VERSION,
@@ -103,7 +110,9 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
     }
     let messages = sqlx::query(
         r"
-        SELECT f.rule, count(DISTINCT f.message_ref) AS n
+        SELECT f.rule, count(DISTINCT f.message_ref) AS n,
+               count(DISTINCT f.message_ref) FILTER (WHERE f.reference_hits > 0) AS refs,
+               count(DISTINCT f.message_ref) FILTER (WHERE f.placeholder_hits > 0) AS phs
         FROM credential_findings f
         JOIN messages m ON m.id = f.message_ref
         WHERE f.detected_at > now() - make_interval(secs => $1)
@@ -115,7 +124,18 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
     .fetch_all(pool)
     .await?;
     for row in messages {
-        out.messages_by_rule.insert(row.get("rule"), row.get("n"));
+        let rule: String = row.get("rule");
+        let (refs, phs): (i64, i64) = (row.get("refs"), row.get("phs"));
+        if refs > 0 || phs > 0 {
+            out.flagged_messages_by_rule.insert(
+                rule.clone(),
+                BTreeMap::from([
+                    ("placeholder".to_owned(), phs),
+                    ("reference".to_owned(), refs),
+                ]),
+            );
+        }
+        out.messages_by_rule.insert(rule, row.get("n"));
     }
     Ok(out)
 }
@@ -249,8 +269,6 @@ pub fn fingerprint(key: &[u8], value: &str) -> String {
 #[derive(Debug, Clone)]
 struct Keyed {
     fingerprint: String,
-    reference: bool,
-    placeholder: bool,
     origin: Origin,
 }
 
@@ -271,11 +289,11 @@ pub struct Hit {
     pub value_len_bucket: &'static str,
     pub value_classes: u8,
     /// Keyed fingerprint, only with `DryRunOptions::fingerprint_key`; so are
-    /// the fields below it.
+    /// `source` and `file`.
     pub fingerprint: Option<String>,
-    /// The value is an unexpanded reference (`${VAR}`, `$(cmd)`, …).
+    /// From the `Finding`: the value is an unexpanded reference (`${VAR}`, …).
     pub reference: bool,
-    /// The value contains a placeholder word or shape (`xxx`, `<token>`, …).
+    /// From the `Finding`: the value holds a placeholder (`xxx`, `<token>`, …).
     pub placeholder: bool,
     /// `tool_result`, `tool_input`, `text`, `other` or `search_text`.
     pub source: &'static str,
@@ -511,8 +529,6 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                     .map(|(f, value, origin)| {
                         let facts = key.map(|k| Keyed {
                             fingerprint: fingerprint(k, &value),
-                            reference: redact::is_reference(&value),
-                            placeholder: redact::is_placeholder(&value),
                             origin,
                         });
                         (f, facts)
@@ -567,8 +583,8 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                         value_len_bucket: f.value_len_bucket,
                         value_classes: f.value_classes,
                         fingerprint: facts.map(|k| k.fingerprint.clone()),
-                        reference: facts.is_some_and(|k| k.reference),
-                        placeholder: facts.is_some_and(|k| k.placeholder),
+                        reference: f.reference,
+                        placeholder: f.placeholder,
                         source: facts.map_or("-", |k| k.origin.kind),
                         file: None,
                         session_ref: row.get("session_ref"),
@@ -873,8 +889,9 @@ async fn rewrite_row(
         sqlx::query(
             r"
             INSERT INTO credential_findings
-                (message_ref, field, rule, hits, key_names, redacted, detector_version)
-            VALUES ($1, $2, $3, $4, $5, true, $6)
+                (message_ref, field, rule, hits, key_names, redacted, detector_version,
+                 reference_hits, placeholder_hits)
+            VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8)
             ON CONFLICT (message_ref, field, rule, detector_version)
                 DO UPDATE SET redacted = true
             ",
@@ -885,6 +902,8 @@ async fn rewrite_row(
         .bind(i32::try_from(h.hits).unwrap_or(i32::MAX))
         .bind(&h.key_names)
         .bind(i32::try_from(redact::DETECTOR_VERSION).unwrap_or(i32::MAX))
+        .bind(i32::try_from(h.reference_hits).unwrap_or(i32::MAX))
+        .bind(i32::try_from(h.placeholder_hits).unwrap_or(i32::MAX))
         .execute(&mut *tx)
         .await?;
     }
