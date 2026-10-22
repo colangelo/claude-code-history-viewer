@@ -18,7 +18,7 @@ use sqlx::{PgPool, Row};
 
 use crate::auth::Authenticated;
 use crate::error::HubError;
-use crate::redact::{self, Finding, Rule};
+use crate::redact::{self, Finding, Origin, Rule};
 use crate::state::AppState;
 
 /// `24h`, `7d`, `90m`, `30s` or bare seconds.
@@ -245,8 +245,17 @@ pub fn fingerprint(key: &[u8], value: &str) -> String {
     hex
 }
 
-/// One field's detections, each with its keyed fingerprint when asked for.
-type FieldHits = (&'static str, Vec<(Finding, Option<String>)>);
+/// What the fingerprint path learns about a value before dropping it.
+#[derive(Debug, Clone)]
+struct Keyed {
+    fingerprint: String,
+    reference: bool,
+    placeholder: bool,
+    origin: Origin,
+}
+
+/// One field's detections, each with its [`Keyed`] facts when asked for.
+type FieldHits = (&'static str, Vec<(Finding, Option<Keyed>)>);
 
 /// One detection, with everything a rotation needs and no value.
 #[derive(Debug, Clone)]
@@ -261,8 +270,21 @@ pub struct Hit {
     pub key: Option<String>,
     pub value_len_bucket: &'static str,
     pub value_classes: u8,
-    /// Keyed fingerprint, only with `DryRunOptions::fingerprint_key`.
+    /// Keyed fingerprint, only with `DryRunOptions::fingerprint_key`; so are
+    /// the fields below it.
     pub fingerprint: Option<String>,
+    /// The value is an unexpanded reference (`${VAR}`, `$(cmd)`, …).
+    pub reference: bool,
+    /// The value contains a placeholder word or shape (`xxx`, `<token>`, …).
+    pub placeholder: bool,
+    /// `tool_result`, `tool_input`, `text`, `other` or `search_text`.
+    pub source: &'static str,
+    /// For a tool result: the basename of the file the producing call read
+    /// (a `Read`, or `cat`/`grep`/`sed` in a `Bash` command). Never a path.
+    pub file: Option<String>,
+    /// `sessions.id` and the tool call id, to resolve `file` after the scan.
+    session_ref: i64,
+    tool_use_id: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -356,6 +378,21 @@ impl DryRunReport {
         for (k, n) in &by_key {
             let _ = writeln!(o, "  key {k}: {n}");
         }
+        if self.hits.iter().any(|h| h.fingerprint.is_some()) {
+            let mut flags: BTreeMap<&str, [usize; 3]> = BTreeMap::new();
+            for h in &self.hits {
+                let row = flags.entry(h.rule.id()).or_default();
+                row[0] += usize::from(h.reference);
+                row[1] += usize::from(h.placeholder);
+                row[2] += usize::from(!h.reference && !h.placeholder);
+            }
+            for (r, [refs, phs, real]) in &flags {
+                let _ = writeln!(
+                    o,
+                    "  rule {r}: reference {refs}, placeholder {phs}, neither {real}"
+                );
+            }
+        }
         let _ = writeln!(
             o,
             "\nHITS (location, rule, key, value shape — never the value)"
@@ -377,7 +414,14 @@ impl DryRunReport {
             );
             match &h.fingerprint {
                 Some(fp) => {
-                    let _ = writeln!(o, " fp={fp}");
+                    let _ = writeln!(
+                        o,
+                        " fp={fp} ref={} ph={} src={} file={}",
+                        yn(h.reference),
+                        yn(h.placeholder),
+                        h.source,
+                        h.file.as_deref().unwrap_or("-"),
+                    );
                 }
                 None => {
                     let _ = writeln!(o);
@@ -385,6 +429,14 @@ impl DryRunReport {
             }
         }
         o
+    }
+}
+
+fn yn(b: bool) -> &'static str {
+    if b {
+        "y"
+    } else {
+        "n"
     }
 }
 
@@ -416,7 +468,7 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
     loop {
         let rows = sqlx::query(
             r#"
-            SELECT m.id, s.session_id, m.uuid, mc.hostname, m."timestamp",
+            SELECT m.id, m.session_id AS session_ref, s.session_id, m.uuid, mc.hostname, m."timestamp",
                    m.raw, m.content, m.search_text
             FROM messages m
             JOIN sessions s ON s.id = m.session_id
@@ -454,12 +506,20 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
             let content: Option<serde_json::Value> = row.get("content");
             let search_text: Option<String> = row.get("search_text");
             let key = opts.fingerprint_key.as_deref();
-            let keyed = |hits: Vec<(Finding, String)>| -> Vec<(Finding, Option<String>)> {
+            let keyed = |hits: Vec<(Finding, String, Origin)>| -> Vec<(Finding, Option<Keyed>)> {
                 hits.into_iter()
-                    .map(|(f, value)| (f, key.map(|k| fingerprint(k, &value))))
+                    .map(|(f, value, origin)| {
+                        let facts = key.map(|k| Keyed {
+                            fingerprint: fingerprint(k, &value),
+                            reference: redact::is_reference(&value),
+                            placeholder: redact::is_placeholder(&value),
+                            origin,
+                        });
+                        (f, facts)
+                    })
                     .collect()
             };
-            let plain = |hits: Vec<Finding>| -> Vec<(Finding, Option<String>)> {
+            let plain = |hits: Vec<Finding>| -> Vec<(Finding, Option<Keyed>)> {
                 hits.into_iter().map(|f| (f, None)).collect()
             };
             // `&[]`: detect only, never replace.
@@ -470,9 +530,13 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                     per_field.push(("content", keyed(redact::json_values(c))));
                 }
                 if let Some(t) = &search_text {
+                    let at = Origin {
+                        kind: "search_text",
+                        tool_use_id: None,
+                    };
                     let hits = redact::scan_values(t)
                         .into_iter()
-                        .map(|(f, v)| (f, v.to_owned()))
+                        .map(|(f, v)| (f, v.to_owned(), at.clone()))
                         .collect();
                     per_field.push(("search_text", keyed(hits)));
                 }
@@ -486,10 +550,11 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                 }
             }
             for (field, findings) in per_field {
-                for (f, fp) in findings
+                for (f, facts) in findings
                     .into_iter()
                     .filter(|(f, _)| f.rule.selected(&rules))
                 {
+                    let facts = facts.as_ref();
                     report.hits.push(Hit {
                         row_id: id,
                         session_id: row.get("session_id"),
@@ -501,7 +566,13 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                         key: f.key,
                         value_len_bucket: f.value_len_bucket,
                         value_classes: f.value_classes,
-                        fingerprint: fp,
+                        fingerprint: facts.map(|k| k.fingerprint.clone()),
+                        reference: facts.is_some_and(|k| k.reference),
+                        placeholder: facts.is_some_and(|k| k.placeholder),
+                        source: facts.map_or("-", |k| k.origin.kind),
+                        file: None,
+                        session_ref: row.get("session_ref"),
+                        tool_use_id: facts.and_then(|k| k.origin.tool_use_id.clone()),
                     });
                 }
             }
@@ -513,12 +584,94 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
             "dry run progress"
         );
     }
+    if opts.fingerprint_key.is_some() {
+        resolve_files(pool, &mut report.hits).await?;
+    }
     report.expected = opts
         .expect
         .iter()
         .map(|e| (e.clone(), report.hits.iter().any(|h| e.matches(h))))
         .collect();
     Ok(report)
+}
+
+/// Fill `Hit::file` for tool results: find each producing `tool_use` in the
+/// same session (one query per session) and keep only a file basename.
+async fn resolve_files(pool: &PgPool, hits: &mut [Hit]) -> anyhow::Result<()> {
+    let mut wanted: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
+    for h in hits.iter().filter(|h| h.source == "tool_result") {
+        if let Some(id) = &h.tool_use_id {
+            wanted.entry(h.session_ref).or_default().insert(id.clone());
+        }
+    }
+    let mut files: BTreeMap<(i64, String), String> = BTreeMap::new();
+    for (session_ref, ids) in wanted {
+        let ids: Vec<String> = ids.into_iter().collect();
+        let rows = sqlx::query(
+            r"
+            SELECT b->>'id' AS id, b->>'name' AS name, b->'input' AS input
+            FROM messages m,
+                 jsonb_array_elements(CASE WHEN jsonb_typeof(m.raw->'message'->'content') = 'array'
+                                           THEN m.raw->'message'->'content' ELSE '[]'::jsonb END) b
+            WHERE m.session_id = $1 AND b->>'type' = 'tool_use' AND b->>'id' = ANY($2)
+            ",
+        )
+        .bind(session_ref)
+        .bind(&ids)
+        .fetch_all(pool)
+        .await?;
+        for row in rows {
+            let id: Option<String> = row.get("id");
+            let name: Option<String> = row.get("name");
+            let input: Option<serde_json::Value> = row.get("input");
+            if let (Some(id), Some(name), Some(input)) = (id, name, input) {
+                if let Some(file) = read_basename(&name, &input) {
+                    files.insert((session_ref, id), file);
+                }
+            }
+        }
+    }
+    for h in hits.iter_mut() {
+        if let Some(id) = &h.tool_use_id {
+            h.file = files.get(&(h.session_ref, id.clone())).cloned();
+        }
+    }
+    Ok(())
+}
+
+/// The basename of the file a tool call read: a `Read`'s `file_path`, or the
+/// last operand of the first `cat`/`grep`/`sed` in a `Bash` command.
+pub fn read_basename(tool: &str, input: &serde_json::Value) -> Option<String> {
+    let path = match tool {
+        "Read" => input.get("file_path")?.as_str()?.to_owned(),
+        "Bash" => command_file(input.get("command")?.as_str()?)?,
+        _ => return None,
+    };
+    let base = path.rsplit(['/', '\\']).next()?.trim();
+    (!base.is_empty()).then(|| base.to_owned())
+}
+
+fn command_file(command: &str) -> Option<String> {
+    for segment in command.split(['|', ';', '&', '\n']) {
+        let mut words = segment.split_whitespace();
+        let Some(program) = words.next() else {
+            continue;
+        };
+        if !matches!(program.rsplit('/').next(), Some("cat" | "grep" | "sed")) {
+            continue;
+        }
+        let operands: Vec<&str> = words
+            .take_while(|w| !w.starts_with('>') && !w.starts_with('<') && !w.starts_with("2>"))
+            .filter(|w| !w.starts_with('-'))
+            .collect();
+        // grep and sed take a pattern or script before the files.
+        let min = if program.ends_with("cat") { 1 } else { 2 };
+        if operands.len() >= min {
+            let last = operands.last()?;
+            return Some(last.trim_matches(|c| c == '"' || c == '\'').to_owned());
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +964,25 @@ mod tests {
         );
         assert_eq!(Expect::parse("sess-1:"), None);
         assert_eq!(Expect::parse("abc"), None);
+    }
+
+    #[test]
+    fn read_basename_keeps_only_the_file_name() {
+        let read = serde_json::json!({"file_path": "/srv/app/config/app.env"});
+        assert_eq!(read_basename("Read", &read).as_deref(), Some("app.env"));
+        let cases = [
+            ("cat /etc/svc/secrets.yaml | head", Some("secrets.yaml")),
+            ("cd /x && grep -n PASSWORD conf/db.ini", Some("db.ini")),
+            ("sed -n '1,20p' ./deploy/.env", Some(".env")),
+            ("cat -A notes.txt > /tmp/out", Some("notes.txt")),
+            ("grep -rn TOKEN", None),
+            ("ls -la /etc", None),
+        ];
+        for (command, want) in cases {
+            let input = serde_json::json!({ "command": command });
+            assert_eq!(read_basename("Bash", &input).as_deref(), want, "{command}");
+        }
+        assert_eq!(read_basename("Write", &read), None);
     }
 
     #[test]

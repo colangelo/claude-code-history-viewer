@@ -339,36 +339,129 @@ pub(crate) fn scan_values(text: &str) -> Vec<(Finding, &str)> {
         .collect()
 }
 
-/// [`scan_values`] over a JSON value, walked as [`redact_json`] walks it.
-pub(crate) fn json_values(v: &Value) -> Vec<(Finding, String)> {
-    fn walk(v: &Value, key: Option<&str>, out: &mut Vec<(Finding, String)>) {
+/// Where in a message a value sat, for the dry run's inventory: the kind of the
+/// nearest typed content block, and the `tool_use_id` that links a tool result
+/// back to the call that produced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    /// `tool_result`, `tool_input`, `text` or `other`.
+    pub kind: &'static str,
+    pub tool_use_id: Option<String>,
+}
+
+impl Origin {
+    const OTHER: Origin = Origin {
+        kind: "other",
+        tool_use_id: None,
+    };
+}
+
+/// [`scan_values`] over a JSON value, walked as [`redact_json`] walks it, with
+/// the [`Origin`] of each hit.
+pub(crate) fn json_values(v: &Value) -> Vec<(Finding, String, Origin)> {
+    fn walk(v: &Value, key: Option<&str>, at: &Origin, out: &mut Vec<(Finding, String, Origin)>) {
         match v {
             Value::String(text) => {
                 if let Some(hit) = key.and_then(|key| assignment_finding(key, text, false)) {
-                    out.push((hit, text.clone()));
+                    out.push((hit, text.clone(), at.clone()));
                 }
                 out.extend(
                     scan_values(text)
                         .into_iter()
-                        .map(|(f, value)| (f, value.to_owned())),
+                        .map(|(f, value)| (f, value.to_owned(), at.clone())),
                 );
             }
             Value::Array(values) => {
                 for value in values {
-                    walk(value, None, out);
+                    walk(value, None, at, out);
                 }
             }
             Value::Object(values) => {
+                let here = block_origin(values).unwrap_or_else(|| at.clone());
                 for (key, value) in values {
-                    walk(value, Some(key), out);
+                    // A Claude transcript line keeps the structured tool result
+                    // beside the message, not inside its tool_result block.
+                    let child = if key == "toolUseResult" {
+                        Origin {
+                            kind: "tool_result",
+                            tool_use_id: only_tool_use_id(values),
+                        }
+                    } else if here.kind == "tool_use" {
+                        Origin {
+                            kind: if key == "input" {
+                                "tool_input"
+                            } else {
+                                "other"
+                            },
+                            tool_use_id: here.tool_use_id.clone(),
+                        }
+                    } else {
+                        here.clone()
+                    };
+                    walk(value, Some(key), &child, out);
                 }
             }
             _ => {}
         }
     }
     let mut out = Vec::new();
-    walk(v, None, &mut out);
+    walk(v, None, &Origin::OTHER, &mut out);
     out
+}
+
+/// The origin a typed content block sets for everything inside it.
+fn block_origin(block: &serde_json::Map<String, Value>) -> Option<Origin> {
+    let id = |field: &str| block.get(field).and_then(Value::as_str).map(str::to_owned);
+    match block.get("type").and_then(Value::as_str)? {
+        "tool_result" => Some(Origin {
+            kind: "tool_result",
+            tool_use_id: id("tool_use_id"),
+        }),
+        "tool_use" => Some(Origin {
+            kind: "tool_use",
+            tool_use_id: id("id"),
+        }),
+        "text" | "thinking" => Some(Origin {
+            kind: "text",
+            tool_use_id: None,
+        }),
+        _ => None,
+    }
+}
+
+/// The single `tool_use_id` among a transcript line's `tool_result` blocks, if
+/// there is exactly one.
+fn only_tool_use_id(line: &serde_json::Map<String, Value>) -> Option<String> {
+    let blocks = line.get("message")?.get("content")?.as_array()?;
+    let mut ids = blocks.iter().filter_map(|b| {
+        (b.get("type")? == "tool_result")
+            .then(|| b.get("tool_use_id")?.as_str())
+            .flatten()
+    });
+    let first = ids.next()?;
+    ids.next().is_none().then(|| first.to_owned())
+}
+
+/// An unexpanded reference to a value held elsewhere: `${VAR}`, `$(cmd)`,
+/// `%VAR%`, `{{ var }}` or `#{var}`. ac/security policy 2026-10-22: such a value
+/// is not itself the secret.
+pub fn is_reference(value: &str) -> bool {
+    static PERCENT_VAR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"%[A-Za-z_][A-Za-z0-9_]*%").expect("percent var pattern"));
+    ["${", "$(", "{{", "#{"].iter().any(|m| value.contains(m)) || PERCENT_VAR.is_match(value)
+}
+
+/// A stand-in for a value: `xxx`, `changeme`, `example`, `dummy`, `redacted`,
+/// `<...>` or `***`, case-insensitive. Reported, never exempted (ac/security
+/// policy 2026-10-22): a real secret can sit next to the word.
+pub fn is_placeholder(value: &str) -> bool {
+    static ANGLE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"<[A-Za-z][^<>\n]*>").expect("angle placeholder pattern"));
+    let lower = value.to_ascii_lowercase();
+    ["xxx", "changeme", "example", "dummy", "redacted", "***"]
+        .iter()
+        .any(|m| lower.contains(m))
+        || ANGLE.is_match(value)
 }
 
 pub fn scan(text: &str) -> Vec<Finding> {
@@ -1261,6 +1354,75 @@ mod tests {
             scan(&text).len() == 1,
             Rule::Assign,
             "bench-positive-control",
+        );
+    }
+
+    #[test]
+    fn references_are_flagged() {
+        let refs = [
+            format!("{}{}", "${", "DEPLOY_KEY}"),
+            format!("{}{}", "$(", "bao kv get x)"),
+            format!("{}{}", "%", "SVC_PASS%"),
+            format!("{}{}", "{{", " vault_pass }}"),
+            format!("{}{}", "#{", "secret}"),
+        ];
+        for r in &refs {
+            assert!(is_reference(r), "{r} should be a reference");
+        }
+        for plain in ["aB3-qwertyuiop", "100%", "50% off 20%x", "$HOME"] {
+            assert!(!is_reference(plain), "{plain} is not a reference");
+        }
+    }
+
+    #[test]
+    fn placeholders_are_flagged_case_insensitively() {
+        let words = [
+            "x".repeat(3),
+            format!("{}{}", "CHANGE", "ME"),
+            format!("my-{}", "Example-1"),
+            format!("{}{}", "dum", "my"),
+            format!("[{}]", "REDACTED"),
+            format!("<{}>", "your token"),
+            "*".repeat(3),
+        ];
+        for w in &words {
+            assert!(is_placeholder(w), "{w} should be a placeholder");
+        }
+        for plain in ["aB3-qwertyuiop", "a<b", "**", "xx-yy"] {
+            assert!(!is_placeholder(plain), "{plain} is not a placeholder");
+        }
+    }
+
+    #[test]
+    fn json_values_carry_the_origin() {
+        let strong = format!("aB3-{}", "Zq9".repeat(12));
+        let line = serde_json::json!({
+            "type": "user",
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "call-1",
+                 "content": format!("API_{}={strong}", "TOKEN")},
+            ]},
+            "toolUseResult": {"stdout": format!("DB_{}={strong}", "PASSWORD")},
+        });
+        let hits = json_values(&line);
+        assert_eq!(hits.len(), 2);
+        for (_, _, origin) in &hits {
+            assert_eq!(origin.kind, "tool_result");
+            assert_eq!(origin.tool_use_id.as_deref(), Some("call-1"));
+        }
+
+        let call = serde_json::json!({"message": {"content": [
+            {"type": "text", "text": format!("API_{}={strong}", "TOKEN")},
+            {"type": "tool_use", "id": "call-2", "name": "Bash",
+             "input": {"command": format!("export API_{}={strong}", "TOKEN")}},
+        ]}});
+        let kinds: Vec<_> = json_values(&call)
+            .into_iter()
+            .map(|(_, _, o)| (o.kind, o.tool_use_id))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![("text", None), ("tool_input", Some("call-2".to_owned()))]
         );
     }
 }

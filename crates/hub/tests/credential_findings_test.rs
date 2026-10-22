@@ -542,6 +542,99 @@ async fn dry_run_fingerprints_are_keyed_and_stable() {
     assert_ne!(findings::fingerprint(&[8_u8; 32], &secret), want);
 }
 
+#[tokio::test]
+async fn dry_run_flags_values_and_links_tool_results_to_the_file() {
+    let hub = spawn(Vec::new()).await;
+    // 2092: clear of the redact test's open-ended window from 2094-05, and no
+    // known prefix in the values, so nothing here is that test's business.
+    let base: DateTime<Utc> = "2092-06-01T00:00:00Z".parse().unwrap();
+    let run = Uuid::new_v4().simple().to_string();
+    let ts = (base
+        + chrono::Duration::seconds(i64::from(u16::from_str_radix(&run[..4], 16).unwrap())))
+    .to_rfc3339();
+    let session = format!("s-inv-{run}");
+    let strong = format!("aB3-{}", Uuid::new_v4().simple());
+    // A whole-value `${VAR}` never reaches a rule (the placeholder guard); the
+    // flag is for a reference inside a longer value.
+    let reference = format!("{}{}{}", "svc-${", "DB_PASS}", "-Z9q8W7e6R5t4Y3u2I1o0");
+    let call = format!("toolu_{run}");
+    let assign = |value: &str| format!("API_{}=\"{value}\"", "TOKEN");
+
+    let mut read_call = msg(&session, &format!("{run}-call"), &ts, "reading");
+    read_call.raw = json!({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": call, "name": "Read",
+         "input": {"file_path": "/home/someone/svc/conf/service.env"}},
+    ]}});
+    let mut result = msg(&session, &format!("{run}-result"), &ts, "result");
+    result.seq = 1;
+    result.raw = json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": call, "content": assign(&strong)},
+    ]}});
+    let mut referenced = msg(&session, &format!("{run}-ref"), &ts, "ref");
+    referenced.seq = 2;
+    referenced.raw = json!({"type": "user", "message": {"content": [
+        {"type": "text", "text": assign(&reference)},
+    ]}});
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            &session,
+            vec![read_call, result, referenced],
+        ),
+    )
+    .await;
+    let (result_row, ..) = stored(&hub, &format!("{run}-result")).await;
+    let (ref_row, ..) = stored(&hub, &format!("{run}-ref")).await;
+
+    let pool = read_only_pool().await;
+    let report = findings::dry_run(
+        &pool,
+        &DryRunOptions {
+            since: Some(base),
+            rules: vec![Rule::AssignStrong],
+            expect: Vec::new(),
+            batch: 100,
+            fingerprint_key: Some([9_u8; 32].to_vec()),
+        },
+    )
+    .await
+    .expect("dry run on a read-only pool");
+
+    let raw_hit = |row: i64| {
+        report
+            .hits
+            .iter()
+            .find(|h| h.row_id == row && h.field == "raw")
+            .unwrap_or_else(|| panic!("row {row} not reported in raw"))
+    };
+    let r = raw_hit(result_row);
+    assert_eq!(
+        (r.source, r.file.as_deref(), r.reference, r.placeholder),
+        ("tool_result", Some("service.env"), false, false)
+    );
+    let t = raw_hit(ref_row);
+    assert_eq!(
+        (t.source, t.file.as_deref(), t.reference),
+        ("text", None, true)
+    );
+
+    let rendered = report.render();
+    assert!(rendered.contains("src=tool_result file=service.env"));
+    assert!(
+        !rendered.contains("/home/someone"),
+        "only the basename is reported"
+    );
+    assert!(
+        !rendered.contains(&strong),
+        "the report must never carry a value"
+    );
+    assert!(
+        rendered.contains("rule assign-strong: reference "),
+        "{rendered}"
+    );
+}
+
 /// A pool whose sessions refuse writes, as the CLI builds it.
 async fn read_only_pool() -> PgPool {
     PgPoolOptions::new()
