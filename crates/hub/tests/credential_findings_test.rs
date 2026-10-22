@@ -716,6 +716,172 @@ async fn references_are_exempt_and_flags_are_counted() {
     assert!(flagged("assign-strong", "placeholder") <= s.messages_by_rule["assign-strong"]);
 }
 
+/// `--no-redirty` (manager-lab 2026-10-22, the sweep under f118): the real run
+/// redacts but leaves `ingest_xid` alone, so a day whose journal entry was
+/// generated before the run is NOT dirty afterwards. The control run without
+/// the flag does mark it dirty, which proves the check can fail.
+#[tokio::test]
+async fn no_redirty_redacts_without_marking_the_day_dirty() {
+    let hub = spawn(Vec::new()).await;
+    // 2099: `since` has no upper bound, so this test takes the LAST year any
+    // test writes, and clears it first.
+    let base: DateTime<Utc> = "2099-03-01T00:00:00Z".parse().unwrap();
+    sqlx::query(r#"DELETE FROM messages WHERE "timestamp" >= '2099-01-01'"#)
+        .execute(&hub.pool)
+        .await
+        .unwrap();
+    let run = Uuid::new_v4().simple().to_string();
+    let ts = (base + chrono::Duration::seconds(60)).to_rfc3339();
+    let session = format!("s-noredirty-{run}");
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            &session,
+            vec![
+                msg(
+                    &session,
+                    &format!("{run}-a"),
+                    &ts,
+                    &format!("export GH_TOKEN {} now", synthetic_token()),
+                ),
+                msg(
+                    &session,
+                    &format!("{run}-b"),
+                    &ts,
+                    &format!("export GH_TOKEN {} now", synthetic_token()),
+                ),
+            ],
+        ),
+    )
+    .await;
+    let (a, ..) = stored(&hub, &format!("{run}-a")).await;
+    let (b, ..) = stored(&hub, &format!("{run}-b")).await;
+    // A snapshot taken after ingest stands for a journal entry generated then.
+    let snap: String = sqlx::query_scalar("SELECT pg_current_snapshot()::text")
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap();
+    let dirty = |id: i64| {
+        let snap = snap.clone();
+        let pool = hub.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT NOT pg_visible_in_snapshot(ingest_xid, $2::pg_snapshot) FROM messages WHERE id = $1",
+            )
+            .bind(id)
+            .bind(snap)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert!(!dirty(a).await && !dirty(b).await, "clean before the run");
+
+    let opts = |row: i64, keep: bool| findings::RedactOptions {
+        scan: DryRunOptions {
+            since: Some(base),
+            rules: vec![Rule::Prefix],
+            expect: vec![Expect::Row(row)],
+            batch: 100,
+            fingerprint_key: None,
+        },
+        max_rows: 2,
+        keep_ingest_xid: keep,
+    };
+    let before_a = row_state(&hub.pool, a).await;
+    let report = findings::redact_existing(&hub.pool, &opts(a, true))
+        .await
+        .expect("real run with --no-redirty");
+    assert!(report.rewritten.contains(&a) && report.rewritten.contains(&b));
+    assert_eq!(report.after_hits, 0);
+    let after_a = row_state(&hub.pool, a).await;
+    assert_ne!(after_a.2, before_a.2, "the value was redacted");
+    assert_eq!(after_a.3, before_a.3, "ingest_xid unchanged");
+    assert!(
+        !dirty(a).await && !dirty(b).await,
+        "--no-redirty marked a day dirty"
+    );
+    assert!(report.render().contains("none (--no-redirty"));
+
+    // Control: the same kind of run without the flag marks the day dirty.
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            &session,
+            vec![msg(
+                &session,
+                &format!("{run}-c"),
+                &ts,
+                &format!("export GH_TOKEN {} now", synthetic_token()),
+            )],
+        ),
+    )
+    .await;
+    let (c, ..) = stored(&hub, &format!("{run}-c")).await;
+    let snap_c: String = sqlx::query_scalar("SELECT pg_current_snapshot()::text")
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap();
+    findings::redact_existing(&hub.pool, &opts(c, false))
+        .await
+        .expect("control real run");
+    let dirty_c: bool = sqlx::query_scalar(
+        "SELECT NOT pg_visible_in_snapshot(ingest_xid, $2::pg_snapshot) FROM messages WHERE id = $1",
+    )
+    .bind(c)
+    .bind(snap_c)
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap();
+    assert!(dirty_c, "without the flag the run must mark the day dirty");
+}
+
+/// The journal scan (manager-lab 2026-10-22, for f118): the detector over the
+/// distilled entries, read-only, rule counts only.
+#[tokio::test]
+async fn journal_scan_reports_counts_without_text() {
+    let hub = spawn(Vec::new()).await;
+    let run = Uuid::new_v4().simple().to_string();
+    let secret = synthetic_token();
+    let project = format!("/w/journal-scan-{run}");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO journal_entries (entry_date, project_path, status, headline, summary, model) \
+         VALUES ('2090-01-02', $1, 'entry', 'a day', $2, 'test-model') RETURNING id",
+    )
+    .bind(&project)
+    .bind(format!("pushed with {secret} by mistake"))
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap();
+    let clean: i64 = sqlx::query_scalar(
+        "INSERT INTO journal_entries (entry_date, project_path, status, headline, summary, model) \
+         VALUES ('2090-01-03', $1, 'entry', 'a day', 'nothing secret here', 'test-model') RETURNING id",
+    )
+    .bind(&project)
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap();
+    let pool = read_only_pool().await;
+    let (scanned, hits) = findings::journal_scan(&pool, &[])
+        .await
+        .expect("read-only scan");
+    assert!(scanned >= 2);
+    let mine = hits
+        .iter()
+        .find(|h| h.entry_id == id)
+        .expect("planted entry found");
+    assert!(mine.hits.contains(&("summary", "prefix", 1)));
+    assert!(hits.iter().all(|h| h.entry_id != clean));
+    let rendered = findings::render_journal_scan(scanned, &hits);
+    assert!(
+        !rendered.contains(&secret),
+        "the report must never carry a value"
+    );
+    assert!(rendered.contains(&format!("entry={id} ")));
+}
+
 /// A pool whose sessions refuse writes, as the CLI builds it.
 async fn read_only_pool() -> PgPool {
     PgPoolOptions::new()
@@ -989,6 +1155,7 @@ async fn redact_existing_rewrites_exactly_what_the_dry_run_lists() {
             fingerprint_key: None,
         },
         max_rows,
+        keep_ingest_xid: false,
     };
 
     // Refusals, each before any write.

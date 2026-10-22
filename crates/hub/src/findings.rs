@@ -712,6 +712,94 @@ fn command_file(command: &str) -> Option<String> {
     None
 }
 
+/// One journal entry with at least one detection: where it is and what fired,
+/// never the text.
+#[derive(Debug, Clone)]
+pub struct JournalHit {
+    pub entry_id: i64,
+    pub entry_date: chrono::NaiveDate,
+    pub project_path: String,
+    pub model: String,
+    /// `(field, rule id, hits)`.
+    pub hits: Vec<(&'static str, &'static str, u32)>,
+}
+
+/// Scan the distilled journal entries (headline, summary, topics, open
+/// questions) with the same detector, changing nothing. Callers should hand it
+/// a read-only pool. `rules` empty = every rule.
+pub async fn journal_scan(pool: &PgPool, rules: &[Rule]) -> anyhow::Result<(u64, Vec<JournalHit>)> {
+    let rules: Vec<Rule> = if rules.is_empty() {
+        Rule::ALL.to_vec()
+    } else {
+        rules.to_vec()
+    };
+    let rows = sqlx::query(
+        r"
+        SELECT id, entry_date, project_path, coalesce(model, '-') AS model,
+               coalesce(headline, '') AS headline, coalesce(summary, '') AS summary,
+               array_to_string(coalesce(topics, '{}'), E'\n') AS topics,
+               array_to_string(coalesce(open_questions, '{}'), E'\n') AS open_questions
+        FROM journal_entries ORDER BY id
+        ",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::new();
+    for row in &rows {
+        let mut hits = Vec::new();
+        for field in ["headline", "summary", "topics", "open_questions"] {
+            let text: String = row.get(field);
+            let mut per_rule: BTreeMap<&'static str, u32> = BTreeMap::new();
+            for f in redact::scan(&text)
+                .into_iter()
+                .filter(|f| f.rule.selected(&rules))
+            {
+                *per_rule.entry(f.rule.id()).or_default() += 1;
+            }
+            hits.extend(per_rule.into_iter().map(|(r, n)| (field, r, n)));
+        }
+        if !hits.is_empty() {
+            out.push(JournalHit {
+                entry_id: row.get("id"),
+                entry_date: row.get("entry_date"),
+                project_path: row.get("project_path"),
+                model: row.get("model"),
+                hits,
+            });
+        }
+    }
+    Ok((rows.len() as u64, out))
+}
+
+/// Plain-text report of a journal scan: one line per entry, never a value.
+pub fn render_journal_scan(scanned: u64, hits: &[JournalHit]) -> String {
+    let mut o = String::new();
+    let _ = writeln!(
+        o,
+        "journal scan — detector v{}: {} entries scanned, {} with a detection",
+        redact::DETECTOR_VERSION,
+        scanned,
+        hits.len()
+    );
+    for h in hits {
+        let fired: Vec<String> = h
+            .hits
+            .iter()
+            .map(|(f, r, n)| format!("{f}:{r}={n}"))
+            .collect();
+        let _ = writeln!(
+            o,
+            "  entry={} date={} model={} project={} hits={}",
+            h.entry_id,
+            h.entry_date,
+            h.model,
+            h.project_path,
+            fired.join(",")
+        );
+    }
+    o
+}
+
 // ---------------------------------------------------------------------------
 // Real run (task 3.3)
 // ---------------------------------------------------------------------------
@@ -725,12 +813,18 @@ pub struct RedactOptions {
     /// the count they read from their own dry run, so a run that has grown
     /// since (a new rule, a wider `--since`) stops before writing.
     pub max_rows: i64,
+    /// Leave each rewritten row's `ingest_xid` alone, so no journal day is
+    /// marked dirty and nothing is re-distilled (`--no-redirty`). For a sweep
+    /// whose journal consequences are someone else's decision.
+    pub keep_ingest_xid: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct RedactReport {
     /// The dry run the rewrite executed, as it would print on its own.
     pub dry_run: DryRunReport,
+    /// Whether the run left `ingest_xid` alone (`--no-redirty`).
+    pub keep_ingest_xid: bool,
     /// Row ids rewritten, ascending.
     pub rewritten: Vec<i64>,
     /// Rewritten rows whose tool rows changed and were re-derived.
@@ -754,7 +848,12 @@ impl RedactReport {
         );
         let _ = writeln!(
             o,
-            "  journal days re-dirtied: each rewritten row's session-day (ingest_xid restamped)"
+            "  journal days re-dirtied: {}",
+            if self.keep_ingest_xid {
+                "none (--no-redirty: ingest_xid left alone)"
+            } else {
+                "each rewritten row's session-day (ingest_xid restamped)"
+            }
         );
         let _ = writeln!(
             o,
@@ -809,10 +908,11 @@ pub async fn redact_existing(pool: &PgPool, opts: &RedactOptions) -> anyhow::Res
 
     let mut out = RedactReport {
         dry_run: report,
+        keep_ingest_xid: opts.keep_ingest_xid,
         ..RedactReport::default()
     };
     for &id in &targets {
-        if rewrite_row(pool, id, &rules, &expected).await? {
+        if rewrite_row(pool, id, &rules, &expected, opts.keep_ingest_xid).await? {
             out.tool_rows_rederived.push(id);
         }
         out.rewritten.push(id);
@@ -852,6 +952,7 @@ async fn rewrite_row(
     id: i64,
     rules: &[Rule],
     expected: &HitCounts,
+    keep_ingest_xid: bool,
 ) -> anyhow::Result<bool> {
     use crate::extract;
 
@@ -890,7 +991,7 @@ async fn rewrite_row(
         r"
         UPDATE messages
         SET raw = $2, content = $3, search_text = $4, message_id = $5,
-            ingest_xid = pg_current_xact_id()
+            ingest_xid = CASE WHEN $6 THEN ingest_xid ELSE pg_current_xact_id() END
         WHERE id = $1
         ",
     )
@@ -899,6 +1000,7 @@ async fn rewrite_row(
     .bind(&content)
     .bind(&search_text)
     .bind(extract::message_id(&raw))
+    .bind(keep_ingest_xid)
     .execute(&mut *tx)
     .await?;
 

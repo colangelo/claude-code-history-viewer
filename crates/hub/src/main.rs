@@ -14,10 +14,14 @@ USAGE:
     hub findings dry-run [--since 7d|<RFC3339>] [--rule ID]... [--expect ROW|SESSION:UUID]... [--batch N] [--fingerprint-key-file PATH]
                                          scan stored messages for credential shapes,
                                          read-only; prints locations and shapes, never values
-    hub findings redact --rule ID... --max-rows N [--since ...] [--expect ...]... [--batch N]
+    hub findings journal-scan [--rule ID]...
+                                         the same detector over the journal entries, read-only;
+                                         prints entry, date, model and rule counts, never text
+    hub findings redact --rule ID... --max-rows N [--since ...] [--expect ...]... [--batch N] [--no-redirty]
                                          the REAL run: rewrites exactly the rows the same dry
                                          run lists for the named rules; refuses before writing
-                                         on a missed --expect or more than N rows
+                                         on a missed --expect or more than N rows; --no-redirty
+                                         leaves ingest_xid alone, so no journal day re-distills
 ";
 
 /// Every value of a repeatable `--flag V` / `--flag=V`.
@@ -141,6 +145,9 @@ async fn main() -> anyhow::Result<()> {
         },
         Some("findings") => match args.get(1).map(String::as_str) {
             Some("dry-run") => hub::run_findings_dry_run(dry_run_options(&args[2..])).await,
+            Some("journal-scan") => {
+                hub::run_findings_journal_scan(dry_run_options(&args[2..]).rules).await
+            }
             Some("redact") => {
                 let scan = dry_run_options(&args[2..]);
                 if scan.rules.is_empty() {
@@ -151,7 +158,13 @@ async fn main() -> anyhow::Result<()> {
                         "findings redact needs --max-rows N (the row count of your dry run)",
                     )
                 });
-                hub::run_findings_redact(hub::findings::RedactOptions { scan, max_rows }).await
+                let keep_ingest_xid = args[2..].iter().any(|a| a == "--no-redirty");
+                hub::run_findings_redact(hub::findings::RedactOptions {
+                    scan,
+                    max_rows,
+                    keep_ingest_xid,
+                })
+                .await
             }
             other => usage_error(&format!(
                 "unknown findings subcommand: {}",
