@@ -561,15 +561,16 @@ async fn dry_run_flags_values_and_links_tool_results_to_the_file() {
     let assign = |value: &str| format!("API_{}=\"{value}\"", "TOKEN");
 
     let mut read_call = msg(&session, &format!("{run}-call"), &ts, "reading");
-    read_call.raw = json!({"type": "assistant", "message": {"content": [
+    // Stored `raw` is the normalized message: blocks at `content`.
+    read_call.raw = json!({"type": "assistant", "content": [
         {"type": "tool_use", "id": call, "name": "Read",
          "input": {"file_path": "/home/someone/svc/conf/service.env"}},
-    ]}});
+    ]});
     let mut result = msg(&session, &format!("{run}-result"), &ts, "result");
     result.seq = 1;
-    result.raw = json!({"type": "user", "message": {"content": [
-        {"type": "tool_result", "tool_use_id": call, "content": assign(&strong)},
-    ]}});
+    result.raw = json!({"type": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call, "content": "ok"},
+    ], "toolUseResult": {"stdout": assign(&strong)}});
     let mut referenced = msg(&session, &format!("{run}-ref"), &ts, "ref");
     referenced.seq = 2;
     referenced.raw = json!({"type": "user", "message": {"content": [

@@ -596,7 +596,9 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
 }
 
 /// Fill `Hit::file` for tool results: find each producing `tool_use` in the
-/// same session (one query per session) and keep only a file basename.
+/// same session (one query per session) and keep only a file basename. Stored
+/// `raw` keeps content blocks at `content`; older rows may hold the transcript
+/// line, with them at `message.content`.
 async fn resolve_files(pool: &PgPool, hits: &mut [Hit]) -> anyhow::Result<()> {
     let mut wanted: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
     for h in hits.iter().filter(|h| h.source == "tool_result") {
@@ -611,8 +613,11 @@ async fn resolve_files(pool: &PgPool, hits: &mut [Hit]) -> anyhow::Result<()> {
             r"
             SELECT b->>'id' AS id, b->>'name' AS name, b->'input' AS input
             FROM messages m,
-                 jsonb_array_elements(CASE WHEN jsonb_typeof(m.raw->'message'->'content') = 'array'
-                                           THEN m.raw->'message'->'content' ELSE '[]'::jsonb END) b
+                 jsonb_array_elements(CASE
+                     WHEN jsonb_typeof(m.raw->'content') = 'array' THEN m.raw->'content'
+                     WHEN jsonb_typeof(m.raw->'message'->'content') = 'array'
+                         THEN m.raw->'message'->'content'
+                     ELSE '[]'::jsonb END) b
             WHERE m.session_id = $1 AND b->>'type' = 'tool_use' AND b->>'id' = ANY($2)
             ",
         )

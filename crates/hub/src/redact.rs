@@ -429,10 +429,14 @@ fn block_origin(block: &serde_json::Map<String, Value>) -> Option<Origin> {
     }
 }
 
-/// The single `tool_use_id` among a transcript line's `tool_result` blocks, if
-/// there is exactly one.
+/// The single `tool_use_id` among a message's `tool_result` blocks, if there is
+/// exactly one. Stored `raw` keeps the blocks at `content`; a transcript line
+/// keeps them at `message.content`.
 fn only_tool_use_id(line: &serde_json::Map<String, Value>) -> Option<String> {
-    let blocks = line.get("message")?.get("content")?.as_array()?;
+    let blocks = line
+        .get("content")
+        .or_else(|| line.get("message")?.get("content"))?
+        .as_array()?;
     let mut ids = blocks.iter().filter_map(|b| {
         (b.get("type")? == "tool_result")
             .then(|| b.get("tool_use_id")?.as_str())
@@ -1398,10 +1402,10 @@ mod tests {
         let strong = format!("aB3-{}", "Zq9".repeat(12));
         let line = serde_json::json!({
             "type": "user",
-            "message": {"content": [
+            "content": [
                 {"type": "tool_result", "tool_use_id": "call-1",
                  "content": format!("API_{}={strong}", "TOKEN")},
-            ]},
+            ],
             "toolUseResult": {"stdout": format!("DB_{}={strong}", "PASSWORD")},
         });
         let hits = json_values(&line);
