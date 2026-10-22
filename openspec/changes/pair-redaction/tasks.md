@@ -8,5 +8,5 @@
 
 ## 2. Sizing (before any enable)
 
-- [ ] 2.1 Read-only archive dry run with `--rule pair` from a branch build: messages per basis, client-data paths by count only, to manager-lab and security.
+- [x] 2.1 Read-only archive dry run with `--rule pair` from a branch build: messages per basis, client-data paths by count only, to manager-lab and security.
 - [ ] 2.2 manager-lab decides what ships ((b) first if (a) is far noisier); release and swap are a separate step.
