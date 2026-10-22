@@ -15,13 +15,28 @@ pub enum Rule {
     Prefix,
     Bearer,
     Assign,
+    /// An `assign` hit with a strong value shape (ac/security G3, 2026-10-22):
+    /// derived, not a pattern of its own.
+    AssignStrong,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 4] = RULES;
+    pub const ALL: [Rule; 5] = [
+        Rule::Pem,
+        Rule::Prefix,
+        Rule::Bearer,
+        Rule::Assign,
+        Rule::AssignStrong,
+    ];
 
     pub fn from_id(id: &str) -> Option<Rule> {
-        RULES.into_iter().find(|r| r.id() == id)
+        Self::ALL.into_iter().find(|r| r.id() == id)
+    }
+
+    /// Whether `rules` selects this rule. Selecting `assign` also selects
+    /// `assign-strong`, which is a subset of it.
+    pub fn selected(self, rules: &[Rule]) -> bool {
+        rules.contains(&self) || (self == Rule::AssignStrong && rules.contains(&Rule::Assign))
     }
 
     pub fn id(&self) -> &'static str {
@@ -30,6 +45,7 @@ impl Rule {
             Self::Prefix => "prefix",
             Self::Bearer => "bearer",
             Self::Assign => "assign",
+            Self::AssignStrong => "assign-strong",
         }
     }
 }
@@ -173,7 +189,28 @@ fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
         && !value.chars().all(|c| c.is_ascii_digit())
         && !placeholder(value)
         && !(bare && code_expression(value)))
-    .then(|| finding(Rule::Assign, Some(key), value))
+    .then(|| {
+        let hit = finding(Rule::Assign, Some(key), value);
+        if strong(&hit) {
+            Finding {
+                rule: Rule::AssignStrong,
+                ..hit
+            }
+        } else {
+            hit
+        }
+    })
+}
+
+/// 32+ characters from all four classes, or 64+ from at least three: the shape
+/// a random secret takes and code, paths and digests rarely do.
+fn strong(hit: &Finding) -> bool {
+    let classes = hit.value_classes.count_ones();
+    match hit.value_len_bucket {
+        "32-63" => classes == 4,
+        "64+" => classes >= 3,
+        _ => false,
+    }
 }
 
 // Byte offsets never escape the detector. No secret is copied into a span.
@@ -260,6 +297,8 @@ fn spans(text: &str) -> Vec<Span> {
                     let value = captures.name("value").expect("bearer value capture");
                     (value, finding(rule, None, value.as_str()))
                 }
+                // Derived from an `assign` hit below; never a pattern of its own.
+                Rule::AssignStrong => unreachable!("assign-strong has no pattern"),
                 Rule::Assign => {
                     let value = captures
                         .name("double")
@@ -297,7 +336,7 @@ pub fn redact(text: &str, rules: &[Rule]) -> (String, Vec<Finding>) {
     let spans = spans(text);
     let mut replacements: Vec<(usize, usize, Rule)> = Vec::new();
     for span in &spans {
-        if !rules.contains(&span.finding.rule) {
+        if !span.finding.rule.selected(rules) {
             continue;
         }
         if let Some(last) = replacements.last_mut() {
@@ -328,18 +367,21 @@ pub fn redact_json(v: &mut Value, rules: &[Rule]) -> Vec<Finding> {
         match v {
             Value::String(text) => {
                 let assignment = key.and_then(|key| assignment_finding(key, text, false));
-                let replace_whole = assignment.is_some() && rules.contains(&Rule::Assign);
+                let replace_whole = assignment
+                    .as_ref()
+                    .filter(|a| a.rule.selected(rules))
+                    .map(|a| a.rule);
                 // Flag-only (the ingest default) must not rebuild every string
                 // leaf of every message: scan without allocating a copy.
-                let leaf_hits = if replace_whole || rules.is_empty() {
+                let leaf_hits = if replace_whole.is_some() || rules.is_empty() {
                     scan(text)
                 } else {
                     let (redacted, leaf_hits) = redact(text, rules);
                     *text = redacted;
                     leaf_hits
                 };
-                if replace_whole {
-                    "[REDACTED:assign]".clone_into(text);
+                if let Some(rule) = replace_whole {
+                    *text = format!("[REDACTED:{}]", rule.id());
                 }
                 hits.extend(assignment);
                 hits.extend(leaf_hits);
@@ -389,7 +431,7 @@ fn group(field: &'static str, findings: Vec<Finding>, redact_rules: &[Rule]) -> 
                 rule: f.rule,
                 hits: 0,
                 key_names: Vec::new(),
-                redacted: redact_rules.contains(&f.rule),
+                redacted: f.rule.selected(redact_rules),
             });
             out.last_mut().expect("just pushed")
         };
@@ -703,6 +745,79 @@ mod tests {
         }
     }
 
+    // G3, ac/security 2026-10-22: an `assign` value of 32+ chars with all four
+    // character classes, or 64+ with three, is `assign-strong`, redacted with a
+    // fixed marker (never a same-length mask, which stays secret-shaped).
+    fn strong_value() -> String {
+        format!("aB3-{}", synthetic(36, ALPHABET))
+    }
+
+    fn long_three_class_value() -> String {
+        format!(
+            "a1-{}",
+            synthetic(61, b"abcdefghijklmnopqrstuvwxyz0123456789")
+        )
+    }
+
+    fn hex_sha() -> String {
+        synthetic(40, b"0123456789abcdef")
+    }
+
+    #[test]
+    fn assign_strong_is_a_rule_id() {
+        assert_eq!(Rule::from_id("assign-strong"), Some(Rule::AssignStrong));
+        assert!(Rule::ALL.contains(&Rule::AssignStrong));
+    }
+
+    #[test]
+    fn assign_strong_is_redacted_with_a_fixed_marker() {
+        for value in [strong_value(), long_three_class_value()] {
+            let text = format!("API_TOKEN={value} next");
+            let (out, hits) = redact(&text, &[Rule::AssignStrong]);
+            assert_eq!(out, "API_TOKEN=[REDACTED:assign-strong] next");
+            assert_eq!(
+                hits.iter().map(|h| h.rule).collect::<Vec<_>>(),
+                vec![Rule::AssignStrong]
+            );
+        }
+    }
+
+    #[test]
+    fn assign_strong_controls_are_untouched() {
+        let sha = format!("COMMIT_TOKEN={}", hex_sha());
+        let (out, hits) = redact(&sha, &[Rule::AssignStrong]);
+        assert_eq!(out, sha, "a 40-char hex digest has 2 classes");
+        assert_eq!(
+            hits.iter().map(|h| h.rule).collect::<Vec<_>>(),
+            vec![Rule::Assign]
+        );
+        let short = "TOKEN=abc123 here";
+        assert_eq!(redact(short, &[Rule::AssignStrong]).0, short);
+    }
+
+    #[test]
+    fn selecting_assign_covers_assign_strong() {
+        let text = format!("API_TOKEN={} next", strong_value());
+        assert_eq!(
+            redact(&text, &[Rule::Assign]).0,
+            "API_TOKEN=[REDACTED:assign-strong] next"
+        );
+        assert!(Rule::AssignStrong.selected(&[Rule::Assign]));
+        assert!(!Rule::Assign.selected(&[Rule::AssignStrong]));
+    }
+
+    #[test]
+    fn assign_strong_replaces_a_whole_json_value() {
+        let mut strong = serde_json::json!({ "api_key": strong_value() });
+        let hits = redact_json(&mut strong, &[Rule::AssignStrong]);
+        assert_eq!(strong["api_key"], "[REDACTED:assign-strong]");
+        assert!(hits.iter().any(|h| h.rule == Rule::AssignStrong));
+        let mut weak = serde_json::json!({ "api_key": hex_sha() });
+        let before = weak.clone();
+        redact_json(&mut weak, &[Rule::AssignStrong]);
+        assert_eq!(weak, before);
+    }
+
     #[test]
     fn bearer_positive() {
         let value = synthetic(
@@ -996,14 +1111,16 @@ mod tests {
                 "password=\"Bearer [REDACTED:bearer]\"".to_owned(),
                 "bearer-only",
             ),
+            // The assigned value (`Bearer <token>`, 47 chars, four classes) is
+            // strong-shaped, so `assign` selection replaces it as `assign-strong`.
             (
                 &[Rule::Assign][..],
-                "password=\"[REDACTED:assign]\"".to_owned(),
+                "password=\"[REDACTED:assign-strong]\"".to_owned(),
                 "assign-only",
             ),
             (
                 &RULES[..],
-                "password=\"[REDACTED:assign]\"".to_owned(),
+                "password=\"[REDACTED:assign-strong]\"".to_owned(),
                 "all-rules",
             ),
         ] {

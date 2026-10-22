@@ -51,6 +51,10 @@ pub struct FindingsSummary {
     /// Finding rows (message × field × rule) recorded in the window.
     pub total: i64,
     pub by_rule: BTreeMap<String, i64>,
+    /// Distinct messages with a finding, per rule, not counting
+    /// `api-request-blob` copies: the per-day count monitoring alerts on.
+    #[serde(default)]
+    pub messages_by_rule: BTreeMap<String, i64>,
     /// How many of those were stored redacted.
     pub redacted: i64,
     pub latest_detected_at: Option<DateTime<Utc>>,
@@ -84,6 +88,7 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
         since_secs,
         total: 0,
         by_rule: BTreeMap::new(),
+        messages_by_rule: BTreeMap::new(),
         redacted: 0,
         latest_detected_at: None,
         detector_version: redact::DETECTOR_VERSION,
@@ -95,6 +100,22 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
         out.by_rule.insert(row.get("rule"), n);
         let latest: Option<DateTime<Utc>> = row.get("latest");
         out.latest_detected_at = out.latest_detected_at.max(latest);
+    }
+    let messages = sqlx::query(
+        r"
+        SELECT f.rule, count(DISTINCT f.message_ref) AS n
+        FROM credential_findings f
+        JOIN messages m ON m.id = f.message_ref
+        WHERE f.detected_at > now() - make_interval(secs => $1)
+          AND m.type IS DISTINCT FROM 'api-request-blob'
+        GROUP BY f.rule
+        ",
+    )
+    .bind(since_secs as f64)
+    .fetch_all(pool)
+    .await?;
+    for row in messages {
+        out.messages_by_rule.insert(row.get("rule"), row.get("n"));
     }
     Ok(out)
 }
@@ -394,7 +415,7 @@ pub async fn dry_run(pool: &PgPool, opts: &DryRunOptions) -> anyhow::Result<DryR
                 per_field.push(("search_text", redact::scan(t)));
             }
             for (field, findings) in per_field {
-                for f in findings.into_iter().filter(|f| rules.contains(&f.rule)) {
+                for f in findings.into_iter().filter(|f| f.rule.selected(&rules)) {
                     report.hits.push(Hit {
                         row_id: id,
                         session_id: row.get("session_id"),
@@ -550,7 +571,7 @@ pub async fn redact_existing(pool: &PgPool, opts: &RedactOptions) -> anyhow::Res
         let hits = redact::apply_to_message(&mut raw, content.as_mut(), search_text.as_mut(), &[]);
         out.after_hits += hits
             .iter()
-            .filter(|h| rules.contains(&h.rule))
+            .filter(|h| h.rule.selected(&rules))
             .map(|h| h.hits as usize)
             .sum::<usize>();
     }
@@ -586,7 +607,7 @@ async fn rewrite_row(
     let hits = redact::apply_to_message(&mut raw, content.as_mut(), search_text.as_mut(), rules);
     let found: HitCounts = hits
         .iter()
-        .filter(|h| rules.contains(&h.rule))
+        .filter(|h| h.rule.selected(rules))
         .map(|h| ((id, h.field, h.rule.id()), h.hits))
         .collect();
     let listed: HitCounts = expected
@@ -615,7 +636,7 @@ async fn rewrite_row(
     .execute(&mut *tx)
     .await?;
 
-    for h in hits.iter().filter(|h| rules.contains(&h.rule)) {
+    for h in hits.iter().filter(|h| h.rule.selected(rules)) {
         sqlx::query(
             r"
             INSERT INTO credential_findings

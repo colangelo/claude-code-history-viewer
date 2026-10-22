@@ -412,6 +412,50 @@ async fn summary_counts_without_text() {
     assert_eq!(anon.status(), 401);
 }
 
+/// G3 (ac/security 2026-10-22): `messages_by_rule` counts each message once
+/// and an `api-request-blob` copy not at all, so a daily `assign-strong` count
+/// is not inflated by the three stored fields or by request copies.
+#[tokio::test]
+async fn messages_by_rule_counts_a_request_copy_once() {
+    let hub = spawn(Vec::new()).await;
+    let summary = || async {
+        let res = reqwest::Client::new()
+            .get(format!("{}/v1/findings/summary?since=24h", hub.base))
+            .bearer_auth(&hub.token)
+            .send()
+            .await
+            .unwrap();
+        res.json::<findings::FindingsSummary>().await.unwrap()
+    };
+    let rule = "assign-strong";
+    let before = summary().await;
+    let value = format!("aB3-{}", synthetic_token());
+    let text = format!("API_TOKEN={value} next");
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut copy = msg("s-copy", "k-copy", &now, &text);
+    copy.message_type = Some("api-request-blob".into());
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-copy",
+            vec![msg("s-copy", "k-orig", &now, &text), copy],
+        ),
+    )
+    .await;
+    let after = summary().await;
+    let delta = |m: &std::collections::BTreeMap<String, i64>,
+                 n: &std::collections::BTreeMap<String, i64>| {
+        n.get(rule).copied().unwrap_or(0) - m.get(rule).copied().unwrap_or(0)
+    };
+    assert_eq!(
+        delta(&before.by_rule, &after.by_rule),
+        6,
+        "3 fields x 2 messages"
+    );
+    assert_eq!(delta(&before.messages_by_rule, &after.messages_by_rule), 1);
+}
+
 /// A pool whose sessions refuse writes, as the CLI builds it.
 async fn read_only_pool() -> PgPool {
     PgPoolOptions::new()
