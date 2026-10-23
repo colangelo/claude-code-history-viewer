@@ -9,7 +9,7 @@
 ## 2. Release and ops
 
 - [x] 2.1 Release; the hub swap and the `hub.toml` edit in one step; read back with a planted fake on the test DB plus the two controls. Live 2026-10-22T08:59:00Z (infra-disk); the live canary through `/v1/ingest` also passed (strong fake stored as the fixed marker, both controls byte-identical).
-- [ ] 2.2 One bell to security and manager-lab when live, with the first day's count.
+- [x] 2.2 One bell to security and manager-lab when live, with the first day's count. (2026-10-23 09:07Z: real ingest assign 65 msgs, assign-strong 3, pair 0, prefix 1; canaries and the 2026-10-22 sweep excluded.)
 
 ## 3. Inventory flags in the dry run (manager-lab GO, 2026-10-22)
 
