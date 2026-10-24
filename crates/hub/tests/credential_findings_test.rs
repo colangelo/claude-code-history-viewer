@@ -1258,3 +1258,173 @@ async fn redact_existing_rewrites_exactly_what_the_dry_run_lists() {
         .expect("second run");
     assert!(again.rewritten.is_empty());
 }
+
+fn ack_opts(row: i64, max_findings: i64, note: &str) -> findings::AckOptions {
+    findings::AckOptions {
+        messages: vec![Expect::Row(row)],
+        detected: None,
+        rules: Vec::new(),
+        classification: findings::Classification::Handled,
+        by: "test".into(),
+        note: note.into(),
+        max_findings,
+    }
+}
+
+/// Gitea #76: an acknowledged finding leaves every paging count, is reported
+/// as `acked_by_rule`, and a later finding still pages.
+#[tokio::test]
+async fn acked_findings_stop_paging_and_a_new_one_still_pages() {
+    let hub = spawn(Vec::new()).await;
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let start = std::time::Instant::now();
+    let health = || async {
+        let since = start.elapsed().as_secs() + 1;
+        let res = reqwest::Client::new()
+            .get(format!("{}/v1/healthz/findings?since={since}s", hub.base))
+            .send()
+            .await
+            .unwrap();
+        let code = res.status().as_u16();
+        (code, res.json::<serde_json::Value>().await.unwrap())
+    };
+
+    let now = Utc::now().to_rfc3339();
+    let first = format!("pushed with {} just now", synthetic_token());
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-ack",
+            vec![msg("s-ack", "k-ack1", &now, &first)],
+        ),
+    )
+    .await;
+    let (row, ..) = stored(&hub, "k-ack1").await;
+    assert_eq!(health().await.0, 503);
+
+    let report = findings::ack(&hub.pool, &ack_opts(row, 3, "vendor docs example"))
+        .await
+        .unwrap();
+    assert_eq!(report.acked, 3);
+    let (code, body) = health().await;
+    assert_eq!(code, 200, "every finding in the window is acknowledged");
+    assert_eq!(body["total"], 0);
+    assert_eq!(body["acked_by_rule"]["prefix"], 3);
+    assert!(body["messages_by_rule"].get("prefix").is_none());
+
+    let again = findings::ack(&hub.pool, &ack_opts(row, 3, "vendor docs example"))
+        .await
+        .unwrap();
+    assert_eq!(again.acked, 0, "re-running adds nothing");
+    assert_eq!(again.matched_by_rule.get("prefix"), Some(&3));
+
+    let second = format!("and again {} here", synthetic_token());
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-ack",
+            vec![msg("s-ack", "k-ack2", &now, &second)],
+        ),
+    )
+    .await;
+    let (code, body) = health().await;
+    assert_eq!(code, 503, "a new finding pages despite the earlier ack");
+    assert_eq!(body["messages_by_rule"]["prefix"], 1);
+}
+
+#[tokio::test]
+async fn ack_refuses_before_writing() {
+    let hub = spawn(Vec::new()).await;
+    let now = Utc::now().to_rfc3339();
+    let text = format!("token {} here", synthetic_token());
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-ackno",
+            vec![msg("s-ackno", "k-ackno", &now, &text)],
+        ),
+    )
+    .await;
+    let (row, ..) = stored(&hub, "k-ackno").await;
+    let acks = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM finding_acks a JOIN credential_findings f ON f.id = a.finding_id WHERE f.message_ref = $1",
+        )
+        .bind(row)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap()
+    };
+
+    let secret = synthetic_token();
+    let noisy = findings::ack(&hub.pool, &ack_opts(row, 3, &format!("it was {secret}")))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(noisy.contains("refused") && !noisy.contains(&secret));
+
+    let too_many = findings::ack(&hub.pool, &ack_opts(row, 2, "fixture"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(too_many.contains("more than --max-findings 2"));
+
+    let mut empty = ack_opts(row, 3, "fixture");
+    empty.messages.clear();
+    assert!(findings::ack(&hub.pool, &empty).await.is_err());
+
+    assert_eq!(acks().await, 0, "no refused run writes an acknowledgement");
+}
+
+/// ac/security#14: `days=N` gives one entry per UTC day, oldest first.
+#[tokio::test]
+async fn daily_counts_cover_every_day_and_today() {
+    let hub = spawn(Vec::new()).await;
+    let now = Utc::now().to_rfc3339();
+    let text = format!("token {} here", synthetic_token());
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-daily",
+            vec![msg("s-daily", "k-daily", &now, &text)],
+        ),
+    )
+    .await;
+    let get = |q: &'static str| {
+        let url = format!("{}/v1/findings/summary?{q}", hub.base);
+        let token = hub.token.clone();
+        async move {
+            reqwest::Client::new()
+                .get(url)
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let s: findings::FindingsSummary = get("days=7").await.json().await.unwrap();
+    assert_eq!(s.daily.len(), 7);
+    let today = Utc::now().date_naive();
+    assert_eq!(s.daily.last().unwrap().day, today);
+    assert_eq!(s.daily[0].day, today - chrono::Days::new(6));
+    assert!(
+        s.daily
+            .last()
+            .unwrap()
+            .messages_by_rule
+            .get("prefix")
+            .copied()
+            .unwrap_or(0)
+            >= 1
+    );
+
+    let plain = get("since=24h").await.text().await.unwrap();
+    assert!(!plain.contains("\"daily\""), "no days, no daily");
+    assert_eq!(get("days=0").await.status(), 400);
+    assert_eq!(get("days=91").await.status(), 400);
+}

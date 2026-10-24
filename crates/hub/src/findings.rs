@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 
@@ -43,6 +43,8 @@ pub fn parse_since(s: &str) -> Option<i64> {
 pub struct SummaryParams {
     /// Window, e.g. `24h` (the default).
     pub since: Option<String>,
+    /// Add `daily`, the last N UTC days (1 to 90).
+    pub days: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,7 +67,24 @@ pub struct FindingsSummary {
     pub redacted: i64,
     pub latest_detected_at: Option<DateTime<Utc>>,
     pub detector_version: u32,
+    /// Finding rows in the window that an operator acknowledged (Gitea #76).
+    /// Every other count leaves them out, so they no longer page.
+    #[serde(default)]
+    pub acked_by_rule: BTreeMap<String, i64>,
+    /// With `days=N`: one entry per UTC day, oldest first, every day present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily: Vec<DayCount>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DayCount {
+    pub day: NaiveDate,
+    /// Counted as the top-level `messages_by_rule` is.
+    pub messages_by_rule: BTreeMap<String, i64>,
+}
+
+/// SQL predicate on `credential_findings f`: not acknowledged.
+const UNACKED: &str = "NOT EXISTS (SELECT 1 FROM finding_acks a WHERE a.finding_id = f.id)";
 
 fn since_secs(params: &SummaryParams) -> Result<i64, HubError> {
     match params.since.as_deref() {
@@ -75,17 +94,31 @@ fn since_secs(params: &SummaryParams) -> Result<i64, HubError> {
     }
 }
 
+fn days(params: &SummaryParams) -> Result<Option<i64>, HubError> {
+    match params.days {
+        Some(n) if !(1..=90).contains(&n) => {
+            Err(HubError::BadRequest(format!("bad days {n}: use 1 to 90")))
+        }
+        d => Ok(d),
+    }
+}
+
 /// Finding counts by rule over the last `since_secs`. Shared by the summary and
 /// the health check so the two can never disagree about a window.
-async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, HubError> {
-    let rows = sqlx::query(
+async fn count_since(
+    pool: &PgPool,
+    since_secs: i64,
+    days: Option<i64>,
+) -> Result<FindingsSummary, HubError> {
+    let rows = sqlx::query(&format!(
         r"
-        SELECT rule, count(*) AS n, count(*) FILTER (WHERE redacted) AS r, max(detected_at) AS latest
-        FROM credential_findings
-        WHERE detected_at > now() - make_interval(secs => $1)
-        GROUP BY rule
-        ",
-    )
+        SELECT f.rule, ({UNACKED}) AS open, count(*) AS n,
+               count(*) FILTER (WHERE f.redacted) AS r, max(f.detected_at) AS latest
+        FROM credential_findings f
+        WHERE f.detected_at > now() - make_interval(secs => $1)
+        GROUP BY 1, 2
+        "
+    ))
     .bind(since_secs as f64)
     .fetch_all(pool)
     .await?;
@@ -99,16 +132,22 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
         redacted: 0,
         latest_detected_at: None,
         detector_version: redact::DETECTOR_VERSION,
+        acked_by_rule: BTreeMap::new(),
+        daily: Vec::new(),
     };
     for row in rows {
         let n: i64 = row.get("n");
+        if !row.get::<bool, _>("open") {
+            out.acked_by_rule.insert(row.get("rule"), n);
+            continue;
+        }
         out.total += n;
         out.redacted += row.get::<i64, _>("r");
         out.by_rule.insert(row.get("rule"), n);
         let latest: Option<DateTime<Utc>> = row.get("latest");
         out.latest_detected_at = out.latest_detected_at.max(latest);
     }
-    let messages = sqlx::query(
+    let messages = sqlx::query(&format!(
         r"
         SELECT f.rule, count(DISTINCT f.message_ref) AS n,
                count(DISTINCT f.message_ref) FILTER (WHERE f.reference_hits > 0) AS refs,
@@ -117,9 +156,10 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
         JOIN messages m ON m.id = f.message_ref
         WHERE f.detected_at > now() - make_interval(secs => $1)
           AND m.type IS DISTINCT FROM 'api-request-blob'
+          AND {UNACKED}
         GROUP BY f.rule
-        ",
-    )
+        "
+    ))
     .bind(since_secs as f64)
     .fetch_all(pool)
     .await?;
@@ -137,6 +177,47 @@ async fn count_since(pool: &PgPool, since_secs: i64) -> Result<FindingsSummary, 
         }
         out.messages_by_rule.insert(rule, row.get("n"));
     }
+    if let Some(days) = days {
+        out.daily = daily(pool, days).await?;
+    }
+    Ok(out)
+}
+
+/// Distinct messages per rule per UTC day, for the last `days` days including
+/// today, zero-filled, oldest first.
+async fn daily(pool: &PgPool, days: i64) -> Result<Vec<DayCount>, HubError> {
+    let rows = sqlx::query(&format!(
+        r"
+        WITH bounds AS (
+            SELECT (now() AT TIME ZONE 'UTC')::date - ($1::int - 1) AS first_day
+        )
+        SELECT (f.detected_at AT TIME ZONE 'UTC')::date AS day, f.rule,
+               count(DISTINCT f.message_ref) AS n
+        FROM credential_findings f
+        JOIN messages m ON m.id = f.message_ref, bounds
+        WHERE f.detected_at >= bounds.first_day::timestamp AT TIME ZONE 'UTC'
+          AND m.type IS DISTINCT FROM 'api-request-blob'
+          AND {UNACKED}
+        GROUP BY 1, 2
+        "
+    ))
+    .bind(i32::try_from(days).unwrap_or(1))
+    .fetch_all(pool)
+    .await?;
+    let today = Utc::now().date_naive();
+    let mut out: Vec<DayCount> = (0..days)
+        .rev()
+        .map(|back| DayCount {
+            day: today - chrono::Days::new(u64::try_from(back).unwrap_or(0)),
+            messages_by_rule: BTreeMap::new(),
+        })
+        .collect();
+    for row in rows {
+        let day: NaiveDate = row.get("day");
+        if let Some(slot) = out.iter_mut().find(|d| d.day == day) {
+            slot.messages_by_rule.insert(row.get("rule"), row.get("n"));
+        }
+    }
     Ok(out)
 }
 
@@ -146,7 +227,9 @@ pub async fn summary(
     State(state): State<AppState>,
     Query(params): Query<SummaryParams>,
 ) -> Result<Json<FindingsSummary>, HubError> {
-    Ok(Json(count_since(&state.pool, since_secs(&params)?).await?))
+    Ok(Json(
+        count_since(&state.pool, since_secs(&params)?, days(&params)?).await?,
+    ))
 }
 
 /// `GET /v1/healthz/findings?since=24h` — unauthenticated, like every
@@ -159,7 +242,7 @@ pub async fn healthz(
     State(state): State<AppState>,
     Query(params): Query<SummaryParams>,
 ) -> Result<(StatusCode, Json<FindingsHealth>), HubError> {
-    let summary = count_since(&state.pool, since_secs(&params)?).await?;
+    let summary = count_since(&state.pool, since_secs(&params)?, days(&params)?).await?;
     let (code, status) = if summary.total == 0 {
         (StatusCode::OK, "ok")
     } else {
@@ -798,6 +881,169 @@ pub fn render_journal_scan(scanned: u64, hits: &[JournalHit]) -> String {
         );
     }
     o
+}
+
+// ---------------------------------------------------------------------------
+// Acknowledge (Gitea #76)
+// ---------------------------------------------------------------------------
+
+/// What an operator decided about a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Classification {
+    /// Not a credential (a documentation example, a test fixture).
+    FalsePositive,
+    /// A real credential that has been rotated or otherwise dealt with.
+    Handled,
+}
+
+impl Classification {
+    pub fn id(self) -> &'static str {
+        match self {
+            Classification::FalsePositive => "false_positive",
+            Classification::Handled => "handled",
+        }
+    }
+
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s {
+            "false_positive" => Some(Classification::FalsePositive),
+            "handled" => Some(Classification::Handled),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AckOptions {
+    /// Messages whose findings are acknowledged: a row id or `SESSION:UUID`.
+    pub messages: Vec<Expect>,
+    /// Findings detected in `[from, to]`, e.g. a sweep's window.
+    pub detected: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Narrow to these rules; empty means every rule.
+    pub rules: Vec<Rule>,
+    pub classification: Classification,
+    pub by: String,
+    pub note: String,
+    /// Refuse when the selection matches more findings than this.
+    pub max_findings: i64,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AckReport {
+    /// Findings the selection matched, per rule.
+    pub matched_by_rule: BTreeMap<String, i64>,
+    /// Of those, newly acknowledged by this run.
+    pub acked: i64,
+}
+
+impl AckReport {
+    pub fn render(&self) -> String {
+        let matched: i64 = self.matched_by_rule.values().sum();
+        let mut out = format!(
+            "matched {matched} finding(s); newly acknowledged {}; already acknowledged {}\n",
+            self.acked,
+            matched - self.acked
+        );
+        for (rule, n) in &self.matched_by_rule {
+            let _ = writeln!(out, "  rule {rule}: {n}");
+        }
+        out
+    }
+}
+
+/// Acknowledge the selected findings in one transaction. Refuses before
+/// writing when nothing selects, when the selection is larger than
+/// `max_findings`, or when the note or name would store a detected value.
+pub async fn ack(pool: &PgPool, opts: &AckOptions) -> anyhow::Result<AckReport> {
+    if opts.messages.is_empty() && opts.detected.is_none() {
+        anyhow::bail!("nothing selected: give --message or --detected-between");
+    }
+    if opts.by.trim().is_empty() {
+        anyhow::bail!("--by must name who acknowledges");
+    }
+    for (what, text) in [("note", &opts.note), ("--by", &opts.by)] {
+        let hits = redact::scan(text);
+        if !hits.is_empty() {
+            let rules: BTreeSet<&str> = hits.iter().map(|h| h.rule.id()).collect();
+            anyhow::bail!(
+                "refused: the {what} trips the detector ({}); describe the finding without quoting it",
+                rules.into_iter().collect::<Vec<_>>().join(", ")
+            );
+        }
+    }
+    let (rows, sessions, uuids) = opts.messages.iter().fold(
+        (Vec::new(), Vec::new(), Vec::new()),
+        |(mut rows, mut sessions, mut uuids), m| {
+            match m {
+                Expect::Row(id) => rows.push(*id),
+                Expect::Uuid { session, uuid } => {
+                    sessions.push(session.clone());
+                    uuids.push(uuid.clone());
+                }
+            }
+            (rows, sessions, uuids)
+        },
+    );
+    let rules: Vec<&str> = opts.rules.iter().map(Rule::id).collect();
+    let (from, to) = opts.detected.unzip();
+
+    let mut tx = pool.begin().await?;
+    let selected: Vec<(i64, String)> = sqlx::query_as(
+        r"
+        SELECT f.id, f.rule
+        FROM credential_findings f
+        JOIN messages m ON m.id = f.message_ref
+        JOIN sessions s ON s.id = m.session_id
+        WHERE ($1::bigint[] = '{}' AND $2::text[] = '{}'
+               OR m.id = ANY($1)
+               OR (s.session_id, m.uuid) IN (SELECT * FROM unnest($2::text[], $3::text[])))
+          AND ($4::timestamptz IS NULL OR f.detected_at BETWEEN $4 AND $5)
+          AND ($6::text[] = '{}' OR f.rule = ANY($6))
+        ",
+    )
+    .bind(&rows)
+    .bind(&sessions)
+    .bind(&uuids)
+    .bind(from)
+    .bind(to)
+    .bind(&rules)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut report = AckReport::default();
+    for (_, rule) in &selected {
+        *report.matched_by_rule.entry(rule.clone()).or_default() += 1;
+    }
+    let matched = i64::try_from(selected.len()).unwrap_or(i64::MAX);
+    if matched == 0 {
+        anyhow::bail!("the selection matches no finding; nothing written");
+    }
+    if matched > opts.max_findings {
+        anyhow::bail!(
+            "the selection matches {matched} findings, more than --max-findings {}; nothing written",
+            opts.max_findings
+        );
+    }
+    let ids: Vec<i64> = selected.iter().map(|(id, _)| *id).collect();
+    report.acked = i64::try_from(
+        sqlx::query(
+            r"
+            INSERT INTO finding_acks (finding_id, classification, acked_by, note)
+            SELECT unnest($1::bigint[]), $2, $3, $4
+            ON CONFLICT (finding_id) DO NOTHING
+            ",
+        )
+        .bind(&ids)
+        .bind(opts.classification.id())
+        .bind(opts.by.trim())
+        .bind(&opts.note)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected(),
+    )
+    .unwrap_or(i64::MAX);
+    tx.commit().await?;
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------

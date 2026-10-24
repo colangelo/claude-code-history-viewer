@@ -305,6 +305,28 @@ pub async fn run_findings_redact(opts: findings::RedactOptions) -> anyhow::Resul
     Ok(())
 }
 
+/// `hub findings ack`: acknowledge triaged findings so they stop paging
+/// (Gitea #76). One transaction; refuses before writing on a bad selection.
+pub async fn run_findings_ack(opts: findings::AckOptions) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout = '60s'")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    let report = findings::ack(&pool, &opts).await?;
+    print!("{}", report.render());
+    Ok(())
+}
+
 pub async fn run_mirror_rebuild() -> anyhow::Result<()> {
     let config = HubConfig::load()?;
     let pool = PgPoolOptions::new()

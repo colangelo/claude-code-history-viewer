@@ -22,6 +22,12 @@ USAGE:
                                          run lists for the named rules; refuses before writing
                                          on a missed --expect or more than N rows; --no-redirty
                                          leaves ingest_xid alone, so no journal day re-distills
+    hub findings ack (--message ROW|SESSION:UUID)... [--detected-between FROM,TO] [--rule ID]...
+                     --as false_positive|handled --by WHO --note TEXT --max-findings N
+                                         acknowledge triaged findings: they stop paging and are
+                                         reported as acked_by_rule; refuses before writing on an
+                                         empty selection, more than N findings, or a note the
+                                         detector flags. FROM and TO are RFC 3339 times
 ";
 
 /// Every value of a repeatable `--flag V` / `--flag=V`.
@@ -101,6 +107,43 @@ fn dry_run_options(args: &[String]) -> hub::findings::DryRunOptions {
     }
 }
 
+fn ack_options(args: &[String]) -> hub::findings::AckOptions {
+    use chrono::{DateTime, Utc};
+    let one = |flag: &str| flag_values(args, flag).pop();
+    let time = |s: &str| {
+        DateTime::parse_from_rfc3339(s.trim())
+            .map(|t| t.with_timezone(&Utc))
+            .unwrap_or_else(|_| usage_error(&format!("bad time {s:?}: use RFC 3339")))
+    };
+    let detected = one("--detected-between").map(|range| {
+        let (from, to) = range
+            .split_once(',')
+            .unwrap_or_else(|| usage_error("--detected-between needs FROM,TO"));
+        (time(from), time(to))
+    });
+    let scan = dry_run_options(args);
+    let messages = flag_values(args, "--message")
+        .iter()
+        .map(|e| {
+            hub::findings::Expect::parse(e).unwrap_or_else(|| {
+                usage_error(&format!("bad --message {e:?}: a row id or SESSION:UUID"))
+            })
+        })
+        .collect();
+    hub::findings::AckOptions {
+        messages,
+        detected,
+        rules: scan.rules,
+        classification: one("--as")
+            .and_then(|c| hub::findings::Classification::from_id(&c))
+            .unwrap_or_else(|| usage_error("findings ack needs --as false_positive|handled")),
+        by: one("--by").unwrap_or_else(|| usage_error("findings ack needs --by WHO")),
+        note: one("--note").unwrap_or_else(|| usage_error("findings ack needs --note TEXT")),
+        max_findings: flag_i64(args, "--max-findings")
+            .unwrap_or_else(|| usage_error("findings ack needs --max-findings N")),
+    }
+}
+
 /// `--flag N` / `--flag=N`, when present and parseable.
 fn flag_i64(args: &[String], flag: &str) -> Option<i64> {
     let mut it = args.iter();
@@ -166,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .await
             }
+            Some("ack") => hub::run_findings_ack(ack_options(&args[2..])).await,
             other => usage_error(&format!(
                 "unknown findings subcommand: {}",
                 other.unwrap_or("(none)")
