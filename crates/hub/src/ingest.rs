@@ -556,6 +556,7 @@ pub async fn ingest(
         let mut cf_redacted: Vec<bool> = Vec::new();
         let mut cf_refs: Vec<i32> = Vec::new();
         let mut cf_placeholders: Vec<i32> = Vec::new();
+        let mut cf_origins: Vec<String> = Vec::new();
 
         for (message_pk, session_pk, message_key, ts) in inserted {
             let d = deltas.entry(session_pk).or_default();
@@ -597,6 +598,7 @@ pub async fn ingest(
                 cf_redacted.push(h.redacted);
                 cf_refs.push(i32::try_from(h.reference_hits).unwrap_or(i32::MAX));
                 cf_placeholders.push(i32::try_from(h.placeholder_hits).unwrap_or(i32::MAX));
+                cf_origins.push(h.origins.join(" "));
             }
         }
 
@@ -612,13 +614,15 @@ pub async fn ingest(
                 r"
                 INSERT INTO credential_findings
                     (message_ref, field, rule, hits, key_names, redacted, detector_version,
-                     reference_hits, placeholder_hits)
+                     reference_hits, placeholder_hits, origins)
                 SELECT t.message_ref, t.field, t.rule, t.hits,
                        COALESCE(string_to_array(NULLIF(t.keys, ''), ' '), '{}'),
-                       t.redacted, $7, t.refs, t.placeholders
+                       t.redacted, $7, t.refs, t.placeholders,
+                       COALESCE(string_to_array(NULLIF(t.origins, ''), ' '), '{}')
                 FROM UNNEST($1::bigint[], $2::text[], $3::text[], $4::int[], $5::text[],
-                            $6::boolean[], $8::int[], $9::int[])
-                     AS t(message_ref, field, rule, hits, keys, redacted, refs, placeholders)
+                            $6::boolean[], $8::int[], $9::int[], $10::text[])
+                     AS t(message_ref, field, rule, hits, keys, redacted, refs, placeholders,
+                          origins)
                 ON CONFLICT (message_ref, field, rule, detector_version) DO NOTHING
                 ",
             )
@@ -631,6 +635,7 @@ pub async fn ingest(
             .bind(i32::try_from(redact::DETECTOR_VERSION).unwrap_or(i32::MAX))
             .bind(&cf_refs)
             .bind(&cf_placeholders)
+            .bind(&cf_origins)
             .execute(&mut *tx)
             .await?;
         }

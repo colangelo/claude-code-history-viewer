@@ -71,6 +71,12 @@ pub struct FindingsSummary {
     /// Every other count leaves them out, so they no longer page.
     #[serde(default)]
     pub acked_by_rule: BTreeMap<String, i64>,
+    /// Per rule, distinct messages by `<role>:<origin>`, e.g. `user:text` for
+    /// what a person typed, `user:tool_result` for a fetched page or a file a
+    /// tool read (Gitea #82). Counted as `messages_by_rule` is; findings
+    /// recorded before origins existed are not in it.
+    #[serde(default)]
+    pub origins_by_rule: BTreeMap<String, BTreeMap<String, i64>>,
     /// With `days=N`: one entry per UTC day, oldest first, every day present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub daily: Vec<DayCount>,
@@ -133,6 +139,7 @@ async fn count_since(
         latest_detected_at: None,
         detector_version: redact::DETECTOR_VERSION,
         acked_by_rule: BTreeMap::new(),
+        origins_by_rule: BTreeMap::new(),
         daily: Vec::new(),
     };
     for row in rows {
@@ -176,6 +183,28 @@ async fn count_since(
             );
         }
         out.messages_by_rule.insert(rule, row.get("n"));
+    }
+    let origins = sqlx::query(&format!(
+        r"
+        SELECT f.rule, coalesce(m.role, '?') || ':' || o.origin AS origin,
+               count(DISTINCT f.message_ref) AS n
+        FROM credential_findings f
+        JOIN messages m ON m.id = f.message_ref
+        CROSS JOIN LATERAL unnest(f.origins) AS o(origin)
+        WHERE f.detected_at > now() - make_interval(secs => $1)
+          AND m.type IS DISTINCT FROM 'api-request-blob'
+          AND {UNACKED}
+        GROUP BY 1, 2
+        "
+    ))
+    .bind(since_secs as f64)
+    .fetch_all(pool)
+    .await?;
+    for row in origins {
+        out.origins_by_rule
+            .entry(row.get("rule"))
+            .or_default()
+            .insert(row.get("origin"), row.get("n"));
     }
     if let Some(days) = days {
         out.daily = daily(pool, days).await?;
@@ -1255,8 +1284,8 @@ async fn rewrite_row(
             r"
             INSERT INTO credential_findings
                 (message_ref, field, rule, hits, key_names, redacted, detector_version,
-                 reference_hits, placeholder_hits)
-            VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8)
+                 reference_hits, placeholder_hits, origins)
+            VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9)
             ON CONFLICT (message_ref, field, rule, detector_version)
                 DO UPDATE SET redacted = true
             ",
@@ -1269,6 +1298,7 @@ async fn rewrite_row(
         .bind(i32::try_from(redact::DETECTOR_VERSION).unwrap_or(i32::MAX))
         .bind(i32::try_from(h.reference_hits).unwrap_or(i32::MAX))
         .bind(i32::try_from(h.placeholder_hits).unwrap_or(i32::MAX))
+        .bind(&h.origins)
         .execute(&mut *tx)
         .await?;
     }

@@ -1,0 +1,36 @@
+## Why
+
+On 2026-10-24 Gatus `cchv-findings` went red on one message (Gitea #82). Triage had to
+open the client-data owner's transcript to learn two things the finding could have said
+itself: the value was AWS's published documentation example key, and it sat in a
+tool result (a fetched docs page), not in text a person typed. Every user-role row
+looks the same today, because a Claude tool result is also stored with role `user`.
+
+## What Changes
+
+- The `prefix` rule no longer fires on AWS's documentation example access keys: a whole
+  `AKIA` match ending in `EXAMPLE`. AWS issues random key ids, so a real one ending in
+  that word is a 1-in-32^7 accident. No other example is exempted.
+- Every finding from a JSON field records the content-block kind of each hit (`text`,
+  `tool_result`, `tool_input`, `tool_use`, `other`). Migration 0015 adds
+  `credential_findings.origins`; ingest and `findings redact` write it. `search_text` has
+  no blocks, so its rows stay empty.
+- The findings summary and health body gain `origins_by_rule`: per rule, distinct
+  messages by `<role>:<origin>`, e.g. `user:text` for what a person typed and
+  `user:tool_result` for a fetched page or a file a tool read.
+- A test pins that a bare PEM header (no body, no END line) fires no rule. It already
+  fired none; the 2026-10-24 hits were all `prefix`.
+
+## Impact
+
+- Hub binary and one migration, stacked on `findings-ack` (0014). Same release path; the
+  rollback adds `DELETE FROM _sqlx_migrations WHERE version = 15`.
+- The example-key exemption changes what the detector redacts, so ac/security approves it
+  before merge (scan policy is theirs).
+- Rows written before 0015 report no origin; nothing is backfilled.
+
+## Open for security
+
+A PEM block with a header and footer but no body between them (`…BEGIN…`, `...`,
+`…END…`) still fires `pem`. Whether a body under some length should be exempt is a
+policy call, left out of this change.

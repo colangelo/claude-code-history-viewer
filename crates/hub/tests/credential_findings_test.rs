@@ -1428,3 +1428,47 @@ async fn daily_counts_cover_every_day_and_today() {
     assert_eq!(get("days=0").await.status(), 400);
     assert_eq!(get("days=91").await.status(), 400);
 }
+
+/// Gitea #82: a finding records its origin, and the summary splits a fetched
+/// page (`user:tool_result`) from what a person typed (`user:text`).
+#[tokio::test]
+async fn findings_record_their_origin() {
+    let hub = spawn(Vec::new()).await;
+    let now = Utc::now().to_rfc3339();
+    let mut fetched = msg("s-origin", "k-origin", &now, "");
+    let page = format!("docs page {} end", synthetic_token());
+    fetched.content =
+        Some(json!([{ "type": "tool_result", "tool_use_id": "t1", "content": page }]));
+    fetched.raw = json!({ "uuid": "u-k-origin", "content": fetched.content.clone() });
+    fetched.search_text = Some(page);
+    post(&hub, &batch(hub.machine_id, "s-origin", vec![fetched])).await;
+    let (row, ..) = stored(&hub, "k-origin").await;
+
+    let origins: Vec<(String, Vec<String>)> = sqlx::query_as(
+        "SELECT field, origins FROM credential_findings WHERE message_ref = $1 ORDER BY field",
+    )
+    .bind(row)
+    .fetch_all(&hub.pool)
+    .await
+    .unwrap();
+    let tool = vec!["tool_result".to_string()];
+    assert_eq!(
+        origins,
+        vec![
+            ("content".into(), tool.clone()),
+            ("raw".into(), tool),
+            ("search_text".into(), Vec::new()),
+        ]
+    );
+
+    let s: findings::FindingsSummary = reqwest::Client::new()
+        .get(format!("{}/v1/findings/summary?since=1h", hub.base))
+        .bearer_auth(&hub.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(s.origins_by_rule["prefix"]["user:tool_result"] >= 1);
+}

@@ -75,6 +75,10 @@ pub struct Finding {
     pub placeholder: bool,
     /// `pair` only: `name`, `flag` or `name+flag` ([`crate::pair::Basis`]).
     pub pair_basis: Option<&'static str>,
+    /// Where in a JSON message the value sat ([`block_kind`]): `text`,
+    /// `tool_result`, `tool_input`, `tool_use` or `other`. `None` for plain
+    /// text, which has no blocks.
+    pub origin: Option<&'static str>,
 }
 
 const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
@@ -175,6 +179,7 @@ fn finding(rule: Rule, key: Option<&str>, value: &str) -> Finding {
         reference: assign && is_reference(value),
         placeholder: assign && is_placeholder(value),
         pair_basis: None,
+        origin: None,
         key: key.map(str::to_owned),
         value_len_bucket: match len {
             0..=15 => "8-15",
@@ -267,6 +272,13 @@ fn gitlab_file_name(value: &str) -> bool {
         && (extensions.is_empty() || extensions.split('.').all(lower_alnum))
 }
 
+/// AWS's documentation example access keys (`AKIA…EXAMPLE`), printed on every
+/// AWS docs page that shows a credential. AWS issues random key ids, so a real
+/// one ending in the word `EXAMPLE` is a 1-in-32^7 accident.
+fn aws_documentation_example(value: &str) -> bool {
+    value.starts_with("AKIA") && value.ends_with("EXAMPLE")
+}
+
 /// The prefix rule's leading token marker, stripped before judging the payload.
 static PREFIX_HEAD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:gh[pousr]_|github_pat_|sk-ant-|sk-lm-|sk-proj-|sk-|xox[abposr]-|AKIA|hv[sbr]\.|gl(?:pat|rt)-)")
@@ -311,6 +323,7 @@ fn spans(text: &str) -> Vec<Span> {
                             .is_some_and(|v| v.len() < 20)
                     }) || gitlab_file_name(value.as_str())
                         || mask_or_placeholder(value.as_str())
+                        || aws_documentation_example(value.as_str())
                     {
                         continue;
                     }
@@ -446,24 +459,13 @@ pub(crate) fn json_values(v: &Value) -> Vec<(Finding, String, Origin)> {
                     }
                 }
                 for (key, value) in values {
-                    // A Claude transcript line keeps the structured tool result
-                    // beside the message, not inside its tool_result block.
-                    let child = if key == "toolUseResult" {
-                        Origin {
-                            kind: "tool_result",
-                            tool_use_id: only_tool_use_id(values),
-                        }
-                    } else if here.kind == "tool_use" {
-                        Origin {
-                            kind: if key == "input" {
-                                "tool_input"
-                            } else {
-                                "other"
-                            },
-                            tool_use_id: here.tool_use_id.clone(),
-                        }
-                    } else {
-                        here.clone()
+                    let child = Origin {
+                        kind: child_kind(here.kind, key),
+                        tool_use_id: if key == "toolUseResult" {
+                            only_tool_use_id(values)
+                        } else {
+                            here.tool_use_id.clone()
+                        },
                     };
                     walk(value, Some(key), &child, out);
                 }
@@ -476,24 +478,45 @@ pub(crate) fn json_values(v: &Value) -> Vec<(Finding, String, Origin)> {
     out
 }
 
-/// The origin a typed content block sets for everything inside it.
-fn block_origin(block: &serde_json::Map<String, Value>) -> Option<Origin> {
-    let id = |field: &str| block.get(field).and_then(Value::as_str).map(str::to_owned);
+/// The origin kind a typed content block sets for everything inside it.
+fn block_kind(block: &serde_json::Map<String, Value>) -> Option<&'static str> {
     match block.get("type").and_then(Value::as_str)? {
-        "tool_result" => Some(Origin {
-            kind: "tool_result",
-            tool_use_id: id("tool_use_id"),
-        }),
-        "tool_use" => Some(Origin {
-            kind: "tool_use",
-            tool_use_id: id("id"),
-        }),
-        "text" | "thinking" => Some(Origin {
-            kind: "text",
-            tool_use_id: None,
-        }),
+        "tool_result" => Some("tool_result"),
+        "tool_use" => Some("tool_use"),
+        "text" | "thinking" => Some("text"),
         _ => None,
     }
+}
+
+/// The origin kind of the value under `key` in an object of kind `here`.
+fn child_kind(here: &'static str, key: &str) -> &'static str {
+    match (here, key) {
+        // A Claude transcript line keeps the structured tool result beside the
+        // message, not inside its tool_result block.
+        (_, "toolUseResult") => "tool_result",
+        ("tool_use", "input") => "tool_input",
+        ("tool_use", _) => "other",
+        _ => here,
+    }
+}
+
+/// [`block_kind`] with the `tool_use_id` that links a result to its call.
+fn block_origin(block: &serde_json::Map<String, Value>) -> Option<Origin> {
+    let kind = block_kind(block)?;
+    let field = match kind {
+        "tool_result" => "tool_use_id",
+        "tool_use" => "id",
+        _ => {
+            return Some(Origin {
+                kind,
+                tool_use_id: None,
+            })
+        }
+    };
+    Some(Origin {
+        kind,
+        tool_use_id: block.get(field).and_then(Value::as_str).map(str::to_owned),
+    })
 }
 
 /// The single `tool_use_id` among a message's `tool_result` blocks, if there is
@@ -581,7 +604,14 @@ pub fn redact(text: &str, rules: &[Rule]) -> (String, Vec<Finding>) {
 /// Walk string leaves and secret-named object keys paired with string values.
 /// Keys and non-string leaves are preserved. Findings include flag-only rules.
 pub fn redact_json(v: &mut Value, rules: &[Rule]) -> Vec<Finding> {
-    fn walk(v: &mut Value, key: Option<&str>, rules: &[Rule], hits: &mut Vec<Finding>) {
+    fn walk(
+        v: &mut Value,
+        key: Option<&str>,
+        at: &'static str,
+        rules: &[Rule],
+        hits: &mut Vec<Finding>,
+    ) {
+        let start = hits.len();
         match v {
             Value::String(text) => {
                 let assignment = key.and_then(|key| assignment_finding(key, text, false));
@@ -606,30 +636,39 @@ pub fn redact_json(v: &mut Value, rules: &[Rule]) -> Vec<Finding> {
             }
             Value::Array(values) => {
                 for value in values {
-                    walk(value, None, rules, hits);
+                    walk(value, None, at, rules, hits);
                 }
             }
             Value::Object(values) => {
+                let here = block_kind(values).unwrap_or(at);
                 // A structured name/value object: judge its value fields as a pair.
                 let pair = pair::object_pair(values);
                 for (key, value) in values.iter_mut() {
                     if let (Some(p), Value::String(text)) = (&pair, &mut *value) {
                         if p.value_keys.contains(key) {
-                            hits.push(pair_finding(&p.name, text, p.basis));
+                            hits.push(Finding {
+                                origin: Some(here),
+                                ..pair_finding(&p.name, text, p.basis)
+                            });
                             if Rule::Pair.selected(rules) {
                                 "[REDACTED:pair]".clone_into(text);
                                 continue;
                             }
                         }
                     }
-                    walk(value, Some(key), rules, hits);
+                    walk(value, Some(key), child_kind(here, key), rules, hits);
                 }
             }
             _ => {}
         }
+        if matches!(v, Value::String(_)) {
+            for hit in &mut hits[start..] {
+                hit.origin = Some(at);
+            }
+        }
     }
     let mut hits = Vec::new();
-    walk(v, None, rules, &mut hits);
+    walk(v, None, "other", rules, &mut hits);
     hits
 }
 
@@ -648,6 +687,9 @@ pub struct FieldHits {
     pub key_names: Vec<String>,
     /// Whether this rule replaced the value(s) before storage.
     pub redacted: bool,
+    /// The distinct [`Finding::origin`]s of the hits, sorted; empty for
+    /// `search_text`.
+    pub origins: Vec<&'static str>,
 }
 
 const MAX_KEY_NAMES: usize = 8;
@@ -666,12 +708,18 @@ fn group(field: &'static str, findings: Vec<Finding>, redact_rules: &[Rule]) -> 
                 placeholder_hits: 0,
                 key_names: Vec::new(),
                 redacted: f.rule.selected(redact_rules),
+                origins: Vec::new(),
             });
             out.last_mut().expect("just pushed")
         };
         entry.hits += 1;
         entry.reference_hits += u32::from(f.reference);
         entry.placeholder_hits += u32::from(f.placeholder);
+        if let Some(o) = f.origin {
+            if let Err(at) = entry.origins.binary_search(&o) {
+                entry.origins.insert(at, o);
+            }
+        }
         if let Some(k) = f.key {
             if entry.key_names.len() < MAX_KEY_NAMES && !entry.key_names.contains(&k) {
                 entry.key_names.push(k);
@@ -1558,5 +1606,52 @@ mod tests {
         };
         assert_eq!(count(Rule::Assign), (1, 1, 0));
         assert_eq!(count(Rule::AssignStrong), (1, 0, 1));
+    }
+
+    /// Gitea #82: AWS's documentation example key is printed on every AWS docs
+    /// page; a random key id of the same shape still fires.
+    #[test]
+    fn aws_documentation_example_key_is_not_a_finding() {
+        let example = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+        let text = format!("aws_access_key_id = {example}\nother {}", token("AKIA", 16));
+        let hits: Vec<Rule> = scan(&text).into_iter().map(|f| f.rule).collect();
+        assert_eq!(hits, vec![Rule::Prefix], "only the random key fires");
+        let (out, _) = redact(&format!("key {example} here"), &[Rule::Prefix]);
+        assert!(out.contains(&example), "the example is left in place");
+    }
+
+    /// Gitea #82: a PEM header with no body and no END line is not a key.
+    #[test]
+    fn bare_pem_header_fires_nothing() {
+        for label in ["RSA", "OPENSSH", "EC"] {
+            let text = format!("Your key file starts with -----BEGIN {label} PRIVATE KEY----- and");
+            assert!(scan(&text).is_empty(), "{label}");
+        }
+    }
+
+    /// Gitea #82: each hit records the content block it sat in.
+    #[test]
+    fn redact_json_records_where_each_hit_sat() {
+        let secret = || token("ghp_", 36);
+        let mut line = serde_json::json!({
+            "content": [
+                { "type": "text", "text": format!("typed {}", secret()) },
+                { "type": "tool_result", "tool_use_id": "t1", "content": format!("fetched {}", secret()) },
+                { "type": "tool_use", "id": "t2", "input": { "command": format!("run {}", secret()) } },
+            ],
+            "toolUseResult": { "stdout": format!("out {}", secret()) },
+            "summary": format!("loose {}", secret()),
+        });
+        let mut origins: Vec<&str> = redact_json(&mut line, &[])
+            .into_iter()
+            .map(|f| f.origin.expect("JSON hits carry an origin"))
+            .collect();
+        origins.sort_unstable();
+        assert_eq!(
+            origins,
+            ["other", "text", "tool_input", "tool_result", "tool_result"]
+        );
+        let (_, plain) = redact(&format!("plain {}", secret()), &[]);
+        assert_eq!(plain[0].origin, None);
     }
 }
