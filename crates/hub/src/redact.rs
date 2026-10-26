@@ -84,7 +84,7 @@ pub struct Finding {
 const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
 const PATTERNS: [&str; 4] = [
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
-    r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,}|gl(?:pat|rt)-[A-Za-z0-9_\-]{20,}(?:\.[A-Za-z0-9_\-]+)*)",
+    r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|(?:sk-(?:bf|mw)|aiproxy-(?:ws|pi))-[A-Za-z0-9_:\-]{30,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,}|gl(?:pat|rt)-[A-Za-z0-9_\-]{20,}(?:\.[A-Za-z0-9_\-]+)*)",
     r"\b(?i:Bearer)[ \t]+(?P<value>[A-Za-z0-9._~+/=\-]{20,})",
     r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
 ];
@@ -248,14 +248,21 @@ struct Span {
     counted: bool,
 }
 
-/// A file name that merely starts with a GitLab prefix, not a token: lowercase
-/// words and numbers joined by hyphens (at least two segments, the first a word),
-/// with an optional lowercase extension. A real tail is random mixed case.
-fn gitlab_file_name(value: &str) -> bool {
-    let Some(tail) = value
-        .strip_prefix("glpat-")
-        .or_else(|| value.strip_prefix("glrt-"))
-    else {
+/// A file name that merely starts with a hyphenated key prefix (GitLab's, or
+/// the client-key prefixes infra issues), not a token: lowercase words and
+/// numbers joined by hyphens (at least two segments, the first a word), with
+/// an optional lowercase extension. A real tail is random mixed case.
+fn hyphenated_file_name(value: &str) -> bool {
+    let Some(tail) = [
+        "glpat-",
+        "glrt-",
+        "sk-bf-",
+        "sk-mw-",
+        "aiproxy-ws-",
+        "aiproxy-pi-",
+    ]
+    .iter()
+    .find_map(|prefix| value.strip_prefix(prefix)) else {
         return false;
     };
     let lower_alnum = |s: &str| {
@@ -281,7 +288,7 @@ fn aws_documentation_example(value: &str) -> bool {
 
 /// The prefix rule's leading token marker, stripped before judging the payload.
 static PREFIX_HEAD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:gh[pousr]_|github_pat_|sk-ant-|sk-lm-|sk-proj-|sk-|xox[abposr]-|AKIA|hv[sbr]\.|gl(?:pat|rt)-)")
+    Regex::new(r"^(?:gh[pousr]_|github_pat_|sk-ant-|sk-lm-|sk-proj-|sk-bf-|sk-mw-|aiproxy-ws-|aiproxy-pi-|sk-|xox[abposr]-|AKIA|hv[sbr]\.|gl(?:pat|rt)-)")
         .expect("static prefix head must compile")
 });
 
@@ -321,7 +328,7 @@ fn spans(text: &str) -> Vec<Span> {
                             .as_str()
                             .strip_prefix(prefix)
                             .is_some_and(|v| v.len() < 20)
-                    }) || gitlab_file_name(value.as_str())
+                    }) || hyphenated_file_name(value.as_str())
                         || mask_or_placeholder(value.as_str())
                         || aws_documentation_example(value.as_str())
                     {
@@ -757,7 +764,7 @@ mod tests {
     use super::*;
 
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const PREFIXES: [(&str, usize); 22] = [
+    const PREFIXES: [(&str, usize); 24] = [
         ("ghp_", 36),
         ("gho_", 36),
         ("ghu_", 36),
@@ -779,6 +786,8 @@ mod tests {
         ("hvr.", 20),
         ("glpat-", 20),
         ("glrt-", 20),
+        ("aiproxy-ws-", 30),
+        ("aiproxy-pi-", 30),
         ("sk-proj-", 64),
     ];
 
@@ -1653,5 +1662,27 @@ mod tests {
         );
         let (_, plain) = redact(&format!("plain {}", secret()), &[]);
         assert_eq!(plain[0].origin, None);
+    }
+
+    /// Infra's client keys (2026-10-26): a colon inside the tail no longer ends
+    /// the match, so no part of the key is left in clear, and a file name that
+    /// starts with the prefix is not a key.
+    #[test]
+    fn infra_client_keys_are_redacted_whole() {
+        for prefix in ["sk-bf-", "sk-mw-", "aiproxy-ws-", "aiproxy-pi-"] {
+            let value = format!(
+                "{prefix}{}:{}",
+                synthetic(20, ALPHABET),
+                synthetic(16, ALPHABET)
+            );
+            let (out, hits) = redact(&format!("key {value} end"), &[Rule::Prefix]);
+            assert_eq!(out, "key [REDACTED:prefix] end", "{prefix}");
+            assert_eq!(hits.len(), 1, "{prefix}");
+            let file = format!("{prefix}rotation-runbook-for-the-new-workstations.md");
+            assert!(
+                scan(&format!("see {file} here")).is_empty(),
+                "{prefix} file name"
+            );
+        }
     }
 }

@@ -30,3 +30,18 @@ finding under any rule.
 #### Scenario: A docs sentence naming the header
 - **WHEN** text says a key file starts with `-----BEGIN RSA PRIVATE KEY-----`
 - **THEN** the detector reports nothing
+
+### Requirement: Infra client keys are prefix findings
+
+The `prefix` rule SHALL report `sk-bf-`, `sk-mw-`, `aiproxy-ws-` and `aiproxy-pi-` followed by
+30 or more characters of `[A-Za-z0-9_:-]` as one match, colons included. It SHALL NOT report a
+value whose tail after such a prefix is lowercase words and numbers joined by hyphens with an
+optional lowercase extension (a file name).
+
+#### Scenario: A key with a colon is redacted whole
+- **WHEN** an `aiproxy-ws-` key whose tail holds a colon is in redact mode
+- **THEN** the whole key, both sides of the colon, is replaced by one `[REDACTED:prefix]`
+
+#### Scenario: A runbook file name is left alone
+- **WHEN** text names `aiproxy-ws-rotation-runbook-for-the-new-workstations.md`
+- **THEN** the detector reports nothing

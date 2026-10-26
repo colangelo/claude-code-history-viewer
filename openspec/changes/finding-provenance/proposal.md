@@ -18,6 +18,7 @@ looks the same today, because a Claude tool result is also stored with role `use
 - The findings summary and health body gain `origins_by_rule`: per rule, distinct
   messages by `<role>:<origin>`, e.g. `user:text` for what a person typed and
   `user:tool_result` for a fetched page or a file a tool read.
+- The `prefix` rule learns the client-key prefixes infra issues (infra-cpa, 2026-10-26): `sk-bf-`, `sk-mw-`, `aiproxy-ws-` and `aiproxy-pi-`, each followed by 30 or more of `[A-Za-z0-9_:-]`. A colon in the tail no longer ends the match, so no part of a key stays in clear. A file name that starts with one of these prefixes, or with GitLab's, is not a key (lowercase hyphenated words). On 2026-10-26 an `aiproxy-pi-` key was stored in clear because no rule knew the prefix.
 - A test pins that a bare PEM header (no body, no END line) fires no rule. It already
   fired none; the 2026-10-24 hits were all `prefix`.
 
@@ -25,8 +26,8 @@ looks the same today, because a Claude tool result is also stored with role `use
 
 - Hub binary and one migration, stacked on `findings-ack` (0014). Same release path; the
   rollback adds `DELETE FROM _sqlx_migrations WHERE version = 15`.
-- The example-key exemption changes what the detector redacts, so ac/security approves it
-  before merge (scan policy is theirs).
+- The example-key exemption and the new prefixes change what the detector redacts, so
+  ac/security approves both before merge (scan policy is theirs).
 - Rows written before 0015 report no origin; nothing is backfilled.
 
 ## Open for security
