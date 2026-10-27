@@ -30,8 +30,16 @@ looks the same today, because a Claude tool result is also stored with role `use
   ac/security approves both before merge (scan policy is theirs).
 - Rows written before 0015 report no origin; nothing is backfilled.
 
-## Open for security
+- A PEM block whose body holds fewer than 40 base64 characters (`...`, `<key>`, empty) is
+  not a key (ac/security 2026-10-27): the smallest real private key body, Ed25519 PKCS#8,
+  is 64.
+- The file-name exemption no longer covers a tail shaped like a UUID or holding a hex run of
+  8 or more with a letter in it (ac/security 2026-10-27): every minted Bifrost key is
+  `sk-bf-` + a UUID, and about 1 in 2,600 has a first segment of letters a-f only. A run of
+  digits alone (a date, an id) still reads as a file name, as GitLab backup names need.
 
-A PEM block with a header and footer but no body between them (`…BEGIN…`, `...`,
-`…END…`) still fires `pem`. Whether a body under some length should be exempt is a
-policy call, left out of this change.
+## Approval
+
+ac/security approved the example key, the short-body PEM exemption and the new prefixes on
+2026-10-27, on condition of the UUID fix above (now in). Each change in what the detector
+redacts goes through the usual live canary.

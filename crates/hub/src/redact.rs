@@ -272,11 +272,42 @@ fn hyphenated_file_name(value: &str) -> bool {
     };
     let (stem, extensions) = tail.split_once('.').unwrap_or((tail, ""));
     let segments: Vec<&str> = stem.split('-').collect();
-    segments.len() >= 2
+    // A UUID or hex tail is a key whose first segment happens to be letters
+    // a-f (1 in ~2,600 UUIDs), not a file name (ac/security 2026-10-27). A run
+    // of digits alone is a date or an id in a file name, as GitLab backups had.
+    let hex = |s: &str| s.bytes().all(|b| b.is_ascii_hexdigit());
+    let uuid =
+        segments.iter().map(|s| s.len()).eq([8, 4, 4, 4, 12]) && segments.iter().all(|s| hex(s));
+    let hex_run = |s: &&str| s.len() >= 8 && hex(s) && s.bytes().any(|b| b.is_ascii_alphabetic());
+    !uuid
+        && !segments.iter().any(hex_run)
+        && segments.len() >= 2
         && segments[0].len() >= 3
         && segments[0].bytes().all(|b| b.is_ascii_lowercase())
         && segments.iter().all(|s| lower_alnum(s))
         && (extensions.is_empty() || extensions.split('.').all(lower_alnum))
+}
+
+/// A PEM block whose body holds fewer than 40 base64 characters: a docs page's
+/// `...` or `<key>` between the lines, never a key. The smallest real private
+/// key body, Ed25519 PKCS#8, is 64 (ac/security 2026-10-27).
+fn pem_without_key(captures: &regex::Captures<'_>) -> bool {
+    let (Some(label), Some(end_label)) = (captures.name("label"), captures.name("end_label"))
+    else {
+        return false;
+    };
+    let body_start = label.end() + "-----".len();
+    let body_end = end_label.start() - "-----END ".len();
+    let body = captures.get(0).map_or("", |m| {
+        let base = m.start();
+        m.as_str()
+            .get(body_start - base..body_end - base)
+            .unwrap_or("")
+    });
+    body.bytes()
+        .filter(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+        .count()
+        < 40
 }
 
 /// AWS's documentation example access keys (`AKIA…EXAMPLE`), printed on every
@@ -313,7 +344,7 @@ fn spans(text: &str) -> Vec<Span> {
         for captures in DETECTOR.patterns[index].captures_iter(text) {
             let (value, hit) = match rule {
                 Rule::Pem => {
-                    if captures["label"] != captures["end_label"] {
+                    if captures["label"] != captures["end_label"] || pem_without_key(&captures) {
                         continue;
                     }
                     let value = captures.get(0).expect("whole PEM match");
@@ -1684,5 +1715,32 @@ mod tests {
                 "{prefix} file name"
             );
         }
+    }
+
+    /// ac/security 2026-10-27: a key with a UUID tail whose first segment is
+    /// all a-f letters must not pass as a file name.
+    #[test]
+    fn uuid_tail_is_a_key_not_a_file_name() {
+        let uuid = ["deadbeef", "-1c2d", "-4e5f", "-8a9b", "-0c1d2e3f4a5b"].concat();
+        for prefix in ["sk-bf-", "aiproxy-ws-", "glpat-"] {
+            let key = format!("{prefix}{uuid}");
+            assert_eq!(scan(&format!("key {key} end")).len(), 1, "{prefix}");
+        }
+        let file = "aiproxy-ws-rotation-runbook-for-the-new-workstations.md";
+        assert!(scan(&format!("see {file} here")).is_empty());
+    }
+
+    /// ac/security 2026-10-27: a PEM block with no key body (a docs page's
+    /// `...`) is exempt; the smallest real body (Ed25519, 64) still fires.
+    #[test]
+    fn pem_without_a_key_body_is_exempt() {
+        let block =
+            |body: &str| format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----");
+        for body in ["...", "<your key here>", "", "MIIEvQ...AgEAAoIBAQ"] {
+            assert!(scan(&block(body)).is_empty(), "{body:?}");
+        }
+        let ed25519 = synthetic(64, ALPHABET);
+        let hits: Vec<Rule> = scan(&block(&ed25519)).into_iter().map(|f| f.rule).collect();
+        assert_eq!(hits, vec![Rule::Pem]);
     }
 }

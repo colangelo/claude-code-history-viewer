@@ -22,10 +22,17 @@ counted as `messages_by_rule` is.
 - **WHEN** a user-role message holds a key-format value inside a tool_result block
 - **THEN** its `content` and `raw` findings have origins `{tool_result}`, its `search_text` finding has none, and `origins_by_rule["prefix"]["user:tool_result"]` counts it
 
-### Requirement: A bare PEM header is not a key
+### Requirement: A PEM block without a key body is not a key
 
 Text holding a PEM private-key header with no body and no END line SHALL produce no
-finding under any rule.
+finding under any rule. A complete PEM block whose body holds fewer than 40 base64
+characters (`[A-Za-z0-9+/=]`, whitespace ignored) SHALL NOT be a `pem` finding; a body of
+64 or more SHALL be.
+
+#### Scenario: A docs page's elided key
+- **WHEN** a PEM block's body is `...`
+- **THEN** the detector reports nothing, while the same block with a 64-character body is a `pem` finding
+
 
 #### Scenario: A docs sentence naming the header
 - **WHEN** text says a key file starts with `-----BEGIN RSA PRIVATE KEY-----`
@@ -41,6 +48,10 @@ optional lowercase extension (a file name).
 #### Scenario: A key with a colon is redacted whole
 - **WHEN** an `aiproxy-ws-` key whose tail holds a colon is in redact mode
 - **THEN** the whole key, both sides of the colon, is replaced by one `[REDACTED:prefix]`
+
+#### Scenario: A UUID tail is a key
+- **WHEN** text holds `sk-bf-` followed by a UUID whose first segment is letters a-f only
+- **THEN** it is a `prefix` finding
 
 #### Scenario: A runbook file name is left alone
 - **WHEN** text names `aiproxy-ws-rotation-runbook-for-the-new-workstations.md`
