@@ -717,3 +717,60 @@ async fn aider_sections_are_each_delivered_and_checkpointed() {
     assert_eq!(hub2.total_messages(), 0, "unchanged history not re-sent");
     assert_eq!(stats.sessions_skipped, 2);
 }
+
+/// infra's guest canary (#84): a project under an excluded path never reaches
+/// the hub, and a project elsewhere still does.
+#[tokio::test]
+#[serial]
+async fn project_path_exclude_keeps_matching_projects_on_the_machine() {
+    let fx = fixture();
+    for (dir, sid, cwd) in [
+        (
+            "-home-agent-client-canary",
+            "sess-canary",
+            "/home/agent/client-canary",
+        ),
+        ("-home-agent-infra", "sess-control", "/home/agent/infra"),
+    ] {
+        write_session(
+            &fx.home,
+            dir,
+            sid,
+            &[user_line(
+                &("u-".to_owned() + sid),
+                sid,
+                "2026-01-01T00:00:00Z",
+                "hello",
+                cwd,
+            )],
+        );
+    }
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    let rules = sync_daemon::path_exclude::PathExclude::parse(&["/home/agent/client*".to_string()])
+        .unwrap();
+
+    let stats = sync::run_once_scoped(&hub, &fx.identity, &mut cp, 500, &[], &rules).await;
+
+    let sent: HashSet<String> = hub
+        .state
+        .lock()
+        .unwrap()
+        .batches
+        .iter()
+        .flat_map(|b| b.sessions.iter().map(|s| s.session_id.clone()))
+        .collect();
+    assert!(
+        sent.contains("sess-control"),
+        "the control project is uploaded"
+    );
+    assert!(
+        !sent.contains("sess-canary"),
+        "the excluded project never leaves the machine"
+    );
+    assert_eq!(stats.projects_path_excluded, 1);
+    assert!(
+        !cp.files.keys().any(|f| f.contains("client-canary")),
+        "an excluded project is not even recorded as seen"
+    );
+}

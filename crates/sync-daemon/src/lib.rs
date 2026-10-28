@@ -12,6 +12,7 @@ pub mod convert;
 pub mod fs_atomic;
 pub mod git_fingerprint;
 pub mod identity;
+pub mod path_exclude;
 pub mod sync;
 pub mod watcher;
 
@@ -31,6 +32,7 @@ struct Runtime {
     client: ReqwestHubClient,
     checkpoint: Checkpoint,
     exclude: Vec<history_core::providers::ProviderId>,
+    path_exclude: path_exclude::PathExclude,
 }
 
 impl Runtime {
@@ -55,12 +57,20 @@ impl Runtime {
         if !exclude.is_empty() {
             tracing::info!(?exclude, "provider scan exclusions active");
         }
+        let path_exclude = path_exclude::PathExclude::parse(&config.project_path_exclude)?;
+        if !path_exclude.is_empty() {
+            tracing::info!(
+                patterns = path_exclude.len(),
+                "project path exclusions active: matching projects are never uploaded"
+            );
+        }
         Ok(Runtime {
             config,
             identity,
             client,
             checkpoint,
             exclude,
+            path_exclude,
         })
     }
 }
@@ -69,12 +79,13 @@ impl Runtime {
 /// the pass surface as a non-zero exit so backfill scripts can gate on it.
 pub async fn run_once() -> anyhow::Result<()> {
     let mut rt = Runtime::init()?;
-    let stats = sync::run_once(
+    let stats = sync::run_once_scoped(
         &rt.client,
         &rt.identity,
         &mut rt.checkpoint,
         rt.config.batch_max_messages,
         &rt.exclude,
+        &rt.path_exclude,
     )
     .await;
     tracing::info!(?stats, "sync pass complete");
@@ -95,6 +106,7 @@ pub async fn run() -> anyhow::Result<()> {
         client,
         mut checkpoint,
         exclude,
+        path_exclude,
     } = Runtime::init()?;
 
     // Watch-root discovery runs provider detection, which walks the
@@ -154,12 +166,13 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::time::Instant::now() + Duration::from_secs(config.scan_interval_secs);
 
     loop {
-        let stats = sync::run_once(
+        let stats = sync::run_once_scoped(
             &client,
             &identity,
             &mut checkpoint,
             config.batch_max_messages,
             &exclude,
+            &path_exclude,
         )
         .await;
         tracing::info!(?stats, "sync pass complete");

@@ -27,6 +27,7 @@ use crate::checkpoint::{Checkpoint, FileState};
 use crate::client::HubClient;
 use crate::convert::{to_ingest_message, to_ingest_project, to_ingest_session};
 use crate::identity::Identity;
+use crate::path_exclude::PathExclude;
 
 /// Default hard deadline for a single `client.ingest()` call, independent of
 /// whatever the `HubClient` implementation does internally — defense in depth
@@ -73,6 +74,8 @@ pub struct SyncStats {
     /// Messages of changed sessions NOT sent because the hub had already
     /// acknowledged them on an earlier pass (#49).
     pub messages_already_acknowledged: usize,
+    /// Projects skipped whole because `project_path_exclude` matched them.
+    pub projects_path_excluded: usize,
     pub errors: usize,
 }
 
@@ -141,6 +144,27 @@ pub async fn run_once<C: HubClient>(
     batch_max: usize,
     exclude: &[ProviderId],
 ) -> SyncStats {
+    run_once_scoped(
+        client,
+        identity,
+        checkpoint,
+        batch_max,
+        exclude,
+        &PathExclude::default(),
+    )
+    .await
+}
+
+/// [`run_once`], also skipping every project whose path `path_exclude`
+/// matches, before any of its sessions is parsed (`project_path_exclude`).
+pub async fn run_once_scoped<C: HubClient>(
+    client: &C,
+    identity: &Identity,
+    checkpoint: &mut Checkpoint,
+    batch_max: usize,
+    exclude: &[ProviderId],
+    path_exclude: &PathExclude,
+) -> SyncStats {
     let mut stats = SyncStats::default();
     let machine = MachineInfo {
         machine_id: identity.machine_id,
@@ -161,6 +185,10 @@ pub async fn run_once<C: HubClient>(
         } else {
             project.actual_path.clone()
         };
+        if path_exclude.excludes(&project_path) {
+            stats.projects_path_excluded += 1;
+            continue;
+        }
 
         let sessions = match providers::load_sessions(provider, &project.path, false) {
             Ok(s) => s,

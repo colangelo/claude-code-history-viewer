@@ -24,6 +24,11 @@ pub struct DaemonConfig {
     /// are logged and ignored at startup.
     #[serde(default)]
     pub providers_exclude: Vec<String>,
+    /// Globs on a project's decoded path (e.g. `["/home/agent/client*"]`):
+    /// matching projects are never parsed or uploaded. A bad glob stops the
+    /// daemon at start-up.
+    #[serde(default)]
+    pub project_path_exclude: Vec<String>,
     /// Debounce window for the file watcher, in seconds.
     #[serde(default = "default_watch_debounce_secs")]
     pub watch_debounce_secs: u64,
@@ -68,6 +73,7 @@ impl DaemonConfig {
             batch_max_messages: default_batch_size(),
             state_dir: None,
             providers_exclude: Vec::new(),
+            project_path_exclude: Vec::new(),
             watch_debounce_secs: default_watch_debounce_secs(),
             watch_min_pass_gap_secs: default_watch_min_pass_gap_secs(),
         })

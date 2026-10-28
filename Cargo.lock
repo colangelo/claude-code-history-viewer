@@ -4511,6 +4511,7 @@ dependencies = [
  "axum",
  "dirs",
  "gethostname",
+ "glob",
  "history-core",
  "hub",
  "notify",
