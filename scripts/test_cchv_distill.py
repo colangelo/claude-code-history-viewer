@@ -585,5 +585,8 @@ def test_direct_claude_call_strips_proxy_env_and_reports_model_usage(monkeypatch
     monkeypatch.setattr(d.subprocess, "run", fake_run)
     result, served = d._claude_generate("claude-haiku-5-5", "p", direct=True)
     assert (result, served) == ("ok", {"claude-haiku-5-5"})
-    assert seen["cmd"][:4] == ["claude", "-p", "--model", "claude-haiku-5-5"]
+    assert seen["cmd"][:2] == ["claude", "-p"]
+    assert seen["cmd"][seen["cmd"].index("--model") + 1] == "claude-haiku-5-5"
+    # B-1: a persisted print-mode session would re-archive the protected prompt.
+    assert "--no-session-persistence" in seen["cmd"]
     assert "ANTHROPIC_BASE_URL" not in seen["env"] and "ANTHROPIC_AUTH_TOKEN" not in seen["env"]

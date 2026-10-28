@@ -701,7 +701,10 @@ def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str
 
     def run_claude() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["claude", "-p", "--model", model, "--output-format", "json"],
+            # Print mode persists a session by default, and from cwd=~ it lands in
+            # the home project, where the daemon archives the whole prompt and the
+            # next night distills it again outside its protected route (B-1).
+            ["claude", "-p", "--no-session-persistence", "--model", model, "--output-format", "json"],
             input=prompt,
             capture_output=True,
             text=True,
