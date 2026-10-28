@@ -8,7 +8,9 @@ use std::path::PathBuf;
 pub struct DaemonConfig {
     /// Base URL of the hub, e.g. `http://hub.tailnet:8787`.
     pub hub_url: String,
-    /// Bearer token identifying this machine to the hub.
+    /// Bearer token identifying this machine to the hub. May be left out of
+    /// the file and passed as `HUB_TOKEN` instead, so it never sits on disk.
+    #[serde(default)]
     pub hub_token: String,
     /// Seconds between safety-net rescans.
     #[serde(default = "default_scan_interval")]
@@ -57,7 +59,15 @@ impl DaemonConfig {
         if let Ok(path) = std::env::var("DAEMON_CONFIG") {
             let text = std::fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("reading DAEMON_CONFIG {path}: {e}"))?;
-            return toml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing {path}: {e}"));
+            let mut config: DaemonConfig =
+                toml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing {path}: {e}"))?;
+            if config.hub_token.is_empty() {
+                config.hub_token = std::env::var("HUB_TOKEN").unwrap_or_default();
+            }
+            if config.hub_token.is_empty() {
+                anyhow::bail!("{path} has no hub_token and HUB_TOKEN is not set");
+            }
+            return Ok(config);
         }
         let hub_url = std::env::var("HUB_URL")
             .map_err(|_| anyhow::anyhow!("HUB_URL or DAEMON_CONFIG must be set"))?;

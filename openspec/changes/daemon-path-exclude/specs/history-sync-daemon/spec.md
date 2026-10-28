@@ -14,3 +14,13 @@ An invalid glob SHALL stop the daemon at start-up.
 #### Scenario: A typo does not fail open
 - **WHEN** a pattern does not parse as a glob
 - **THEN** the daemon refuses to start and names the pattern
+
+### Requirement: The hub token may come from the environment
+
+When `DAEMON_CONFIG` names a file without `hub_token`, the daemon SHALL take the token from
+`HUB_TOKEN`. A token in the file SHALL win over the environment. With neither, the daemon
+SHALL refuse to start.
+
+#### Scenario: A guest keeps its token off disk
+- **WHEN** the config file has no `hub_token` and `HUB_TOKEN` is set
+- **THEN** the daemon authenticates with the environment value

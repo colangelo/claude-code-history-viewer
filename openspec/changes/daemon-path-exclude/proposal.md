@@ -13,6 +13,9 @@ after the data had already left the guest.
 - A matching project is skipped before any of its sessions is parsed or uploaded, and is
   not recorded in the checkpoint. Each pass counts skipped projects in
   `projects_path_excluded`.
+- A config file may leave `hub_token` out; `HUB_TOKEN` from the environment fills it, so a
+  guest that reads its token from the vault at each start never writes it to disk. A value
+  in the file wins. With neither, the daemon refuses to start.
 - A pattern that does not parse stops the daemon at start-up, so a typo cannot upload what
   it was meant to keep back. The start-up log states how many patterns are active.
 

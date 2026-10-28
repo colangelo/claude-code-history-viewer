@@ -774,3 +774,36 @@ async fn project_path_exclude_keeps_matching_projects_on_the_machine() {
         "an excluded project is not even recorded as seen"
     );
 }
+
+/// infra's guest reads its ingest token from the vault at start and passes it
+/// only in the environment: a config file may leave `hub_token` out.
+#[tokio::test]
+#[serial]
+async fn config_file_takes_the_token_from_the_environment() {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("daemon.toml");
+    std::fs::write(&file, "hub_url = \"http://hub.example:8787\"\n").unwrap();
+    std::env::set_var("DAEMON_CONFIG", &file);
+
+    std::env::set_var("HUB_TOKEN", "from-env");
+    let cfg = sync_daemon::config::DaemonConfig::load().unwrap();
+    assert_eq!(cfg.hub_token, "from-env");
+
+    std::env::remove_var("HUB_TOKEN");
+    let err = sync_daemon::config::DaemonConfig::load()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("no hub_token and HUB_TOKEN is not set"),
+        "{err}"
+    );
+
+    std::fs::write(&file, "hub_url = \"http://h\"\nhub_token = \"in-file\"\n").unwrap();
+    std::env::set_var("HUB_TOKEN", "from-env");
+    assert_eq!(
+        sync_daemon::config::DaemonConfig::load().unwrap().hub_token,
+        "in-file"
+    );
+    std::env::remove_var("DAEMON_CONFIG");
+    std::env::remove_var("HUB_TOKEN");
+}
