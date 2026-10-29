@@ -76,8 +76,17 @@ impl CandleEmbedder {
                 .with_context(|| format!("reading {}/config.json", dir.display()))?,
         )
         .context("parsing embed model config.json")?;
-        let tokenizer = tokenizers::Tokenizer::from_file(dir.join("tokenizer.json"))
+        let mut tokenizer = tokenizers::Tokenizer::from_file(dir.join("tokenizer.json"))
             .map_err(|e| anyhow::anyhow!("loading {}/tokenizer.json: {e}", dir.display()))?;
+        // bge's tokenizer.json ships without truncation, and an input past the
+        // model's positions fails the forward pass ("index-select invalid index
+        // 512"), so a long entry was never embedded. Keep the head, as bge does.
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: config.max_position_embeddings,
+                ..Default::default()
+            }))
+            .map_err(|e| anyhow::anyhow!("setting tokenizer truncation: {e}"))?;
         // Buffered (not mmaped) load: the workspace denies `unsafe`, and a
         // one-time ~130 MB read at first use is acceptable for a daemon.
         let weights = std::fs::read(dir.join("model.safetensors"))
@@ -242,5 +251,21 @@ mod tests {
         // Still answers metadata queries.
         assert_eq!(e.model_id(), "bge-small-en-v1.5");
         assert_eq!(e.dim(), 384);
+    }
+
+    /// Needs the real model: `HUB_EMBED_MODEL_DIR=<dir> cargo test -p hub
+    /// embed -- --ignored`. A text past the model's 512 positions used to fail
+    /// every sweep with "index-select invalid index 512".
+    #[test]
+    #[ignore = "needs the bge-small model dir in HUB_EMBED_MODEL_DIR"]
+    fn candle_embedder_truncates_input_longer_than_the_model() {
+        let dir = std::env::var("HUB_EMBED_MODEL_DIR").expect("HUB_EMBED_MODEL_DIR");
+        let e = CandleEmbedder::new(PathBuf::from(dir));
+        let long = "journal entry text with several words ".repeat(400);
+        let v = e.embed(&long).expect("long input embeds");
+        assert_eq!(v.len(), 384);
+        // Truncation keeps the head, so the long text embeds like its first 512 tokens.
+        let head = e.embed(&long[..long.len() / 2]).expect("half embeds");
+        assert!(cosine(&v, &head).expect("same dim") > 0.99);
     }
 }
