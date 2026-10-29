@@ -109,6 +109,14 @@ arrive as Gitea issues labelled `agent-relay`. Canonical spec + registry:
 home-network `agent-relay/AGENTS.md` (portable: CONTEXT `PATTERNS/agent-relay.md`);
 send with home-network `tools/relay-send`.
 
+<!-- relay:session-start v1 (canonical: CONTEXT PATTERNS/agent-relay.md) -->
+**Session start: run `/check-relay` first, every time.** At the start of every session, again after a `/clear`
+or a resume, before other work, and never deferred. Interactive relay messages are no reason to wait: in a
+repo a gestore runs, the gestore is your attended human (one ask desk), so drain them, handle what you can,
+and send any decision to your gestore as an `ASK:`. Only a `--headless` or poller run leaves interactive
+messages untouched. (ac, 2026-10-29.)
+<!-- /relay:session-start -->
+
 **Checkpoint by committing — an uncommitted fix is not partial progress, it is
 nothing.** A handler here works a tree whose `.git` *and* worktree are
 Syncthing-shared, so written-but-uncommitted work is not merely unsaved: it sits
