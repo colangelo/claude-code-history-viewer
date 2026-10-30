@@ -80,7 +80,7 @@ Issues labelled **`agent-relay`** (plus `agent-working` / `agent-blocked` /
 `relay-interactive`) are the cross-repo message channel, not backlog. They are
 `reserved`, so they are excluded from every derived view. A backlog item is never
 `agent-relay`. This repo is a **`nats`-variant participant** with no committed relay
-surface — see `AGENTS.md` § Agent relay, and handle traffic with `/check-relay`.
+surface — see `docs/agents/agent-relay.md` (linked from `AGENTS.md` § Agent relay), and handle traffic with `/check-relay`.
 
 ## Branch policy for PRs
 
