@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 use std::sync::LazyLock;
 
-use crate::redact::placeholder;
+use crate::redact::{password_hash, placeholder};
 
 /// Why a pair fired: (a) a secret-named name, (b) a sensitivity flag, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +197,7 @@ pub fn passes_floor(value: &str) -> bool {
         .expect("whole reference pattern")
     });
     let v = value.trim();
-    if v.chars().count() < 8 || placeholder(v) || REFERENCE.is_match(v) {
+    if v.chars().count() < 8 || placeholder(v) || password_hash(v) || REFERENCE.is_match(v) {
         return false;
     }
     if ["true", "false", "yes", "no"]

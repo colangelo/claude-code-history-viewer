@@ -207,24 +207,55 @@ fn code_expression(value: &str) -> bool {
     value.contains(['(', ')', '[']) || (value.contains('.') && value.split('.').all(identifier))
 }
 
+/// A value that is wholly a bcrypt, argon2 or sha-crypt hash (shadow files,
+/// cloud-init, a harness `users.conf`) is a stored hash, not a credential
+/// (security 5211704d). Anchored at both ends: anything appended makes it a
+/// candidate again.
+pub(crate) fn password_hash(value: &str) -> bool {
+    static HASH: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"^(?:\$2[abxy]?\$[0-9]{2}\$[./A-Za-z0-9]{53}",
+            r"|\$argon2(?:id|i|d)\$v=[0-9]+\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]{11,}\$[A-Za-z0-9+/]{16,}",
+            r"|\$5\$(?:rounds=[0-9]+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{43}",
+            r"|\$6\$(?:rounds=[0-9]+\$)?[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86})$",
+        ))
+        .expect("password hash pattern")
+    });
+    HASH.is_match(value.trim())
+}
+
+/// A quoted capture that starts by closing something (`) ] } ,`) began at the
+/// closing quote of a string literal on the key side, as in
+/// `startswith("password=")), None)`: it is code. Only with a second code
+/// signal (whitespace, or another bracket), because a random secret can start
+/// with those characters too (security 5211704d).
+fn closed_literal_code(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|c| matches!(c, ')' | ']' | '}' | ','))
+        && chars.any(|c| c.is_whitespace() || "()[]{}".contains(c))
+}
+
 /// `bare`: the value was unquoted text, so it may be code rather than a literal.
 fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
+    let not_a_secret =
+        placeholder(value) || password_hash(value) || (bare && code_expression(value));
     (secret_key(key)
         && value.chars().count() >= 8
         && !value.chars().all(|c| c.is_ascii_digit())
-        && !placeholder(value)
-        && !(bare && code_expression(value)))
-    .then(|| {
-        let hit = finding(Rule::Assign, Some(key), value);
-        if strong(&hit) && !hit.reference {
-            Finding {
-                rule: Rule::AssignStrong,
-                ..hit
+        && !not_a_secret)
+        .then(|| {
+            let hit = finding(Rule::Assign, Some(key), value);
+            if strong(&hit) && !hit.reference {
+                Finding {
+                    rule: Rule::AssignStrong,
+                    ..hit
+                }
+            } else {
+                hit
             }
-        } else {
-            hit
-        }
-    })
+        })
 }
 
 /// 32+ characters from all four classes, or 64+ from at least three: the shape
@@ -381,6 +412,9 @@ fn spans(text: &str) -> Vec<Span> {
                         .or_else(|| captures.name("bare"))
                         .expect("assignment value capture");
                     let bare = captures.name("bare").is_some();
+                    if !bare && closed_literal_code(value.as_str()) {
+                        continue;
+                    }
                     let Some(hit) = assignment_finding(&captures["key"], value.as_str(), bare)
                     else {
                         continue;
@@ -1658,6 +1692,82 @@ mod tests {
         assert_eq!(hits, vec![Rule::Prefix], "only the random key fires");
         let (out, _) = redact(&format!("key {example} here"), &[Rule::Prefix]);
         assert!(out.contains(&example), "the example is left in place");
+    }
+
+    /// security 5211704d: a value that is wholly a bcrypt, argon2 or sha-crypt
+    /// hash is a hash, not a credential (assign, assign-strong and pair). The
+    /// same hash with anything appended still fires.
+    #[test]
+    fn password_hashes_are_not_credentials() {
+        const CRYPT: &[u8] = b"./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let dollar = "$";
+        let hashes = [
+            ["", "2b", "12", &synthetic(53, CRYPT)].join(dollar),
+            [
+                "",
+                "argon2id",
+                "v=19",
+                "m=65536,t=3,p=4",
+                &synthetic(22, B64),
+                &synthetic(43, B64),
+            ]
+            .join(dollar),
+            [
+                "",
+                "5",
+                "rounds=5000",
+                &synthetic(16, CRYPT),
+                &synthetic(43, CRYPT),
+            ]
+            .join(dollar),
+            ["", "6", &synthetic(16, CRYPT), &synthetic(86, CRYPT)].join(dollar),
+        ];
+        let pw = ["PASS", "WORD"].concat();
+        for hash in &hashes {
+            let line = format!("{pw} = \"{hash}\"");
+            assert!(
+                scan(&line).is_empty(),
+                "a bare hash is not a finding: {line}"
+            );
+            let object = format!("{{\"Name\": \"DB_{pw}\", \"Value\": \"{hash}\"}}");
+            assert!(scan(&object).is_empty(), "not a pair either");
+            let tampered = format!("{pw} = \"{hash}X9#q\"");
+            assert!(
+                scan(&tampered)
+                    .iter()
+                    .any(|f| matches!(f.rule, Rule::Assign | Rule::AssignStrong)),
+                "a hash with a tail is no longer a hash: {tampered}"
+            );
+        }
+    }
+
+    /// context 8fb6863f + security 5211704d: a quoted value that starts after a
+    /// closed string literal (`) ] } ,`) AND holds a second code signal
+    /// (whitespace, or another bracket) is code. A leading `)` alone is not.
+    #[test]
+    fn code_after_a_closed_string_literal_is_not_a_secret() {
+        let pw = ["pass", "word"].concat();
+        // The quote after `=` closes the string literal; the capture then runs
+        // on to the next quote, the way the real hit did (84 characters).
+        let code = format!(
+            "    token = next((line[9:] for line in out if line.startswith(\"{pw}=\")), None)\n    \
+             return token.strip() if token else fail(\"no token in the helper output\")\n"
+        );
+        assert!(scan(&code).is_empty(), "the credential-helper parse line");
+        let secret = format!(")K{}", synthetic(30, ALPHABET));
+        let line = format!("{pw} = \"{secret}\"");
+        assert!(
+            scan(&line)
+                .iter()
+                .any(|f| matches!(f.rule, Rule::Assign | Rule::AssignStrong)),
+            "a real-shaped secret starting with ) still fires"
+        );
+        let comma = format!("{pw}: ',{}'", synthetic(24, ALPHABET));
+        assert!(
+            !scan(&comma).is_empty(),
+            "a leading comma alone is not code"
+        );
     }
 
     /// Gitea #82: a PEM header with no body and no END line is not a key.
