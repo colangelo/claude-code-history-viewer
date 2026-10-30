@@ -11,5 +11,7 @@
 ## 2. Release and ops
 
 - [x] 2.1 ac/security approves the example-key exemption and the new prefixes (scan policy). Approved 2026-10-27 08:31Z with the UUID condition, which 1.7 meets.
-- [ ] 2.3 Live canary after the swap: the AWS example and a short-body PEM kept; a UUID-tail `sk-bf-` key, a colon key and a 64-char PEM body redacted.
-- [ ] 2.2 Merge after `findings-ack`; release and swap with it or after it (a1024-02).
+- [x] 2.3 Live canary after the swap: the AWS example and a short-body PEM kept; a UUID-tail `sk-bf-` key, a colon key and a 64-char PEM body redacted.
+- [x] 2.2 Merge after `findings-ack`; release and swap with it or after it (a1024-02).
+
+Released in cchv-v0.31.0 (tag 84efbafa) on ac's yes to a1029-23; live on m4m 2026-10-30 00:00:45Z. Live canary session cchv-canary-0.31.0-c23e70f3 PASS (5 redacted with a text origin, AWS example key and a 20-char PEM template kept), its 15 findings acked as handled.
