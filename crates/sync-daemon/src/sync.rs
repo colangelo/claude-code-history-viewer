@@ -17,6 +17,7 @@
 //! optimization, not done: the parse is local and cheap next to the wire.
 
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use archive_protocol::{IngestBatch, IngestMessage, IngestResponse, MachineInfo};
@@ -151,6 +152,7 @@ pub async fn run_once<C: HubClient>(
         batch_max,
         exclude,
         &PathExclude::default(),
+        &[],
     )
     .await
 }
@@ -164,6 +166,7 @@ pub async fn run_once_scoped<C: HubClient>(
     batch_max: usize,
     exclude: &[ProviderId],
     path_exclude: &PathExclude,
+    claude_extra_roots: &[PathBuf],
 ) -> SyncStats {
     let mut stats = SyncStats::default();
     let machine = MachineInfo {
@@ -173,7 +176,23 @@ pub async fn run_once_scoped<C: HubClient>(
     };
     let mut fp_cache = crate::git_fingerprint::FingerprintCache::default();
 
-    for project in providers::scan_all_projects_except(exclude) {
+    let mut projects = providers::scan_all_projects_except(exclude);
+    if !exclude.contains(&ProviderId::Claude) {
+        for root in claude_extra_roots {
+            match providers::claude::scan_projects(&root.to_string_lossy()) {
+                Ok(found) => projects.extend(found.into_iter().map(|mut p| {
+                    p.provider = Some(ProviderId::Claude.as_str().to_string());
+                    p
+                })),
+                Err(e) => {
+                    tracing::warn!(root = %root.display(), error = %e, "scan of an extra Claude folder failed");
+                    stats.errors += 1;
+                }
+            }
+        }
+    }
+
+    for project in projects {
         let Some(provider_str) = project.provider.clone() else {
             continue;
         };

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use archive_protocol::{IngestBatch, IngestResponse};
+use history_core::providers::ProviderId;
 use serde_json::json;
 use serial_test::serial;
 use sync_daemon::checkpoint::Checkpoint;
@@ -750,7 +751,7 @@ async fn project_path_exclude_keeps_matching_projects_on_the_machine() {
     let rules = sync_daemon::path_exclude::PathExclude::parse(&["/home/agent/client*".to_string()])
         .unwrap();
 
-    let stats = sync::run_once_scoped(&hub, &fx.identity, &mut cp, 500, &[], &rules).await;
+    let stats = sync::run_once_scoped(&hub, &fx.identity, &mut cp, 500, &[], &rules, &[]).await;
 
     let sent: HashSet<String> = hub
         .state
@@ -806,4 +807,96 @@ async fn config_file_takes_the_token_from_the_environment() {
     );
     std::env::remove_var("DAEMON_CONFIG");
     std::env::remove_var("HUB_TOKEN");
+}
+
+/// A helper's own Claude account folder (`CLAUDE_CONFIG_DIR`) is archived like
+/// `~/.claude` once it is listed in `claude_extra_roots`, and not before.
+#[tokio::test]
+#[serial]
+async fn an_extra_claude_root_is_archived_only_when_listed() {
+    let fx = fixture();
+    let line = |sid: &str| {
+        vec![user_line(
+            &("u-".to_owned() + sid),
+            sid,
+            "2026-01-01T00:00:00Z",
+            "hello",
+            "/Users/x/repo",
+        )]
+    };
+    write_session(&fx.home, "-Users-x-repo", "sess-main", &line("sess-main"));
+    let extra = fx.home.join(".config/claude-hlp-b");
+    let dir = extra.join("projects/-Users-x-repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("sess-hlp.jsonl"),
+        format!("{}\n", line("sess-hlp").join("\n")),
+    )
+    .unwrap();
+    let roots = sync_daemon::claude_roots::resolve(
+        &["~/.config/claude-hlp-b".to_string()],
+        &fx.home,
+        Some(&fx.home.join(".claude")),
+    );
+    assert_eq!(roots.len(), 1);
+
+    let sent = |hub: &MockHub| -> Vec<(String, String, Option<String>)> {
+        let mut v: Vec<_> = hub
+            .state
+            .lock()
+            .unwrap()
+            .batches
+            .iter()
+            .flat_map(|b| {
+                b.sessions.iter().map(|s| {
+                    (
+                        s.session_id.clone(),
+                        s.provider.clone(),
+                        s.project_path.clone(),
+                    )
+                })
+            })
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let none = sync_daemon::path_exclude::PathExclude::default();
+
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir);
+    sync::run_once_scoped(&hub, &fx.identity, &mut cp, 500, &[], &none, &[]).await;
+    let ids: Vec<String> = sent(&hub).into_iter().map(|t| t.0).collect();
+    assert_eq!(
+        ids,
+        vec!["sess-main".to_string()],
+        "unlisted folders stay out"
+    );
+
+    sync::run_once_scoped(&hub, &fx.identity, &mut cp, 500, &[], &none, &roots).await;
+    let got = sent(&hub);
+    let hlp = got
+        .iter()
+        .find(|t| t.0 == "sess-hlp")
+        .expect("the listed folder is archived");
+    let main = got.iter().find(|t| t.0 == "sess-main").unwrap();
+    assert_eq!(hlp.1, "claude");
+    assert_eq!(hlp.2, main.2, "the same repo lands in the same project");
+
+    let hub = MockHub::default();
+    let mut cp = Checkpoint::load(&fx.state_dir.join("fresh"));
+    sync::run_once_scoped(
+        &hub,
+        &fx.identity,
+        &mut cp,
+        500,
+        &[ProviderId::Claude],
+        &none,
+        &roots,
+    )
+    .await;
+    assert!(
+        sent(&hub).is_empty(),
+        "excluding claude skips its extra roots too"
+    );
 }

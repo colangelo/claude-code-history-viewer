@@ -6,6 +6,7 @@
 //! anything from the hub.
 
 pub mod checkpoint;
+pub mod claude_roots;
 pub mod client;
 pub mod config;
 pub mod convert;
@@ -33,6 +34,7 @@ struct Runtime {
     checkpoint: Checkpoint,
     exclude: Vec<history_core::providers::ProviderId>,
     path_exclude: path_exclude::PathExclude,
+    claude_extra_roots: Vec<PathBuf>,
 }
 
 impl Runtime {
@@ -64,6 +66,13 @@ impl Runtime {
                 "project path exclusions active: matching projects are never uploaded"
             );
         }
+        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine home dir"))?;
+        let main = history_core::providers::claude::get_base_path().map(PathBuf::from);
+        let claude_extra_roots =
+            claude_roots::resolve(&config.claude_extra_roots, &home, main.as_deref());
+        if !claude_extra_roots.is_empty() {
+            tracing::info!(roots = ?claude_extra_roots, "extra Claude folders archived");
+        }
         Ok(Runtime {
             config,
             identity,
@@ -71,6 +80,7 @@ impl Runtime {
             checkpoint,
             exclude,
             path_exclude,
+            claude_extra_roots,
         })
     }
 }
@@ -86,6 +96,7 @@ pub async fn run_once() -> anyhow::Result<()> {
         rt.config.batch_max_messages,
         &rt.exclude,
         &rt.path_exclude,
+        &rt.claude_extra_roots,
     )
     .await;
     tracing::info!(?stats, "sync pass complete");
@@ -107,6 +118,7 @@ pub async fn run() -> anyhow::Result<()> {
         mut checkpoint,
         exclude,
         path_exclude,
+        claude_extra_roots,
     } = Runtime::init()?;
 
     // Watch-root discovery runs provider detection, which walks the
@@ -116,7 +128,7 @@ pub async fn run() -> anyhow::Result<()> {
     // gets a deadline). On timeout the daemon stays rescan-only — watching
     // is a latency optimization, never worth a hang.
     let detect_exclude = exclude.clone();
-    let watch_roots: Vec<PathBuf> = match tokio::time::timeout(
+    let mut watch_roots: Vec<PathBuf> = match tokio::time::timeout(
         Duration::from_secs(15),
         tokio::task::spawn_blocking(move || {
             history_core::providers::detect_providers_except(&detect_exclude)
@@ -138,6 +150,10 @@ pub async fn run() -> anyhow::Result<()> {
             Vec::new()
         }
     };
+
+    if !exclude.contains(&history_core::providers::ProviderId::Claude) {
+        watch_roots.extend(claude_extra_roots.iter().cloned());
+    }
 
     let mut watcher_guard = None;
     let mut watcher_rx = None;
@@ -173,6 +189,7 @@ pub async fn run() -> anyhow::Result<()> {
             config.batch_max_messages,
             &exclude,
             &path_exclude,
+            &claude_extra_roots,
         )
         .await;
         tracing::info!(?stats, "sync pass complete");

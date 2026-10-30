@@ -31,6 +31,11 @@ pub struct DaemonConfig {
     /// daemon at start-up.
     #[serde(default)]
     pub project_path_exclude: Vec<String>,
+    /// Extra Claude config folders (each holds a `projects/`), e.g.
+    /// `["~/.config/claude-hlp-b"]`: archived like `~/.claude`. Unusable or
+    /// repeated roots are skipped at start-up with a warning.
+    #[serde(default)]
+    pub claude_extra_roots: Vec<String>,
     /// Debounce window for the file watcher, in seconds.
     #[serde(default = "default_watch_debounce_secs")]
     pub watch_debounce_secs: u64,
@@ -84,6 +89,7 @@ impl DaemonConfig {
             state_dir: None,
             providers_exclude: Vec::new(),
             project_path_exclude: Vec::new(),
+            claude_extra_roots: Vec::new(),
             watch_debounce_secs: default_watch_debounce_secs(),
             watch_min_pass_gap_secs: default_watch_min_pass_gap_secs(),
         })
