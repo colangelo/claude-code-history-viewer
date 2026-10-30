@@ -7,5 +7,7 @@
 
 ## 2. Release and ops
 
-- [ ] 2.1 Release with v0.32.0 on ac's word (asks row via manager-lab).
+- [x] 2.1 Release with v0.32.0 on ac's word (asks row via manager-lab).
 - [ ] 2.2 ac-mbm5: mac-m5 installs the daemon and adds `claude_extra_roots = ["~/.config/claude-hlp-b"]` (via that Mac's gestore); cchv reads back the helper's sessions in the hub.
+
+Released in cchv-v0.32.0 (tag 8c5aa337), with a new asset cchv-sync-daemon-0.32.0-aarch64-apple-darwin. The install on the Mac whose helper moved (2.2) is pending.

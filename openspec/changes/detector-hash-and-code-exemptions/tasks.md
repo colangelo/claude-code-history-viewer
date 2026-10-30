@@ -5,5 +5,7 @@
 
 ## 2. Release
 
-- [ ] 2.1 Release with v0.32.0 (with `daemon-claude-extra-roots`) on ac's word; swap via infra.
-- [ ] 2.2 After the swap, a live canary: a planted bcrypt hash and the parse line are kept, a `)`-leading fake is redacted; ack the canary's findings at once.
+- [x] 2.1 Release with v0.32.0 (with `daemon-claude-extra-roots`) on ac's word; swap via infra.
+- [x] 2.2 After the swap, a live canary: a planted bcrypt hash and the parse line are kept, a `)`-leading fake is redacted; ack the canary's findings at once.
+
+Released in cchv-v0.32.0 (tag 8c5aa337) on ac's yes to a1030-08; live on m4m 2026-10-30 10:25:29Z. Live canary cchv-canary-0.32.0-517b0e5e PASS (bcrypt, sha-crypt and the code line kept; a )-leading fake redacted); the same canary failed the three keep cases on 0.31.0.
