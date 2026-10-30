@@ -475,7 +475,11 @@ Monitoring: `GET /v1/healthz/findings?since=24h` is unauthenticated like the
 other health checks and carries counts only: `200` (`status: ok`) while no
 finding was recorded in the window, `503` (`status: findings`) once one was,
 with `total`, `by_rule`, `redacted` and `latest_detected_at`. The Gatus check on
-it pages infra to rotate the credential (Q-b). The authenticated
+it pages infra to rotate the credential (Q-b). `messages_by_rule` leaves a rule
+out when it has no messages in the window, and the paging conditions rely on
+that (`has([BODY].messages_by_rule.pem)`); `messages_by_rule_all` carries every
+rule with an explicit `0`, for per-rule thresholds (`< N`), since a Gatus
+condition on a missing path fails (ac/security#14). The authenticated
 `/v1/findings/summary` returns the same counts. To see where a hit is, run
 `hub findings dry-run --since 24h`: read-only, it prints locations and value
 shapes, never values. Its `--since` is **not** the check's window. It filters on the

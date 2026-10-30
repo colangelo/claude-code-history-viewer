@@ -1312,6 +1312,11 @@ async fn acked_findings_stop_paging_and_a_new_one_still_pages() {
     assert_eq!(body["total"], 0);
     assert_eq!(body["acked_by_rule"]["prefix"], 3);
     assert!(body["messages_by_rule"].get("prefix").is_none());
+    assert_eq!(
+        body["messages_by_rule_all"],
+        serde_json::json!({"assign": 0, "assign-strong": 0, "bearer": 0, "pair": 0, "pem": 0, "prefix": 0}),
+        "every rule present with an explicit zero, so a threshold reads a number"
+    );
 
     let again = findings::ack(&hub.pool, &ack_opts(row, 3, "vendor docs example"))
         .await
@@ -1332,6 +1337,12 @@ async fn acked_findings_stop_paging_and_a_new_one_still_pages() {
     let (code, body) = health().await;
     assert_eq!(code, 503, "a new finding pages despite the earlier ack");
     assert_eq!(body["messages_by_rule"]["prefix"], 1);
+    assert_eq!(body["messages_by_rule_all"]["prefix"], 1);
+    assert_eq!(body["messages_by_rule_all"]["pem"], 0);
+    assert!(
+        body["messages_by_rule"].get("pem").is_none(),
+        "messages_by_rule keeps omitting zero rules: Gatus pages on has()"
+    );
 }
 
 #[tokio::test]

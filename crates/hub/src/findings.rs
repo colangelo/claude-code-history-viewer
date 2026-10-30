@@ -57,6 +57,12 @@ pub struct FindingsSummary {
     /// `api-request-blob` copies: the per-day count monitoring alerts on.
     #[serde(default)]
     pub messages_by_rule: BTreeMap<String, i64>,
+    /// `messages_by_rule` with every detector rule present, `0` when it has
+    /// none, so a per-rule threshold always reads a number (ac/security#14).
+    /// The field above keeps leaving zero rules out: monitoring pages on a
+    /// rule being present there.
+    #[serde(default)]
+    pub messages_by_rule_all: BTreeMap<String, i64>,
     /// Of `messages_by_rule`, per rule, the messages with at least one
     /// `reference` and at least one `placeholder` hit, so a step-change alert
     /// can leave them out (ac/security policy 2026-10-22). Rules with neither
@@ -134,6 +140,7 @@ async fn count_since(
         total: 0,
         by_rule: BTreeMap::new(),
         messages_by_rule: BTreeMap::new(),
+        messages_by_rule_all: BTreeMap::new(),
         flagged_messages_by_rule: BTreeMap::new(),
         redacted: 0,
         latest_detected_at: None,
@@ -184,6 +191,13 @@ async fn count_since(
         }
         out.messages_by_rule.insert(rule, row.get("n"));
     }
+    out.messages_by_rule_all = redact::Rule::ALL
+        .iter()
+        .map(|r| {
+            let n = out.messages_by_rule.get(r.id()).copied().unwrap_or(0);
+            (r.id().to_owned(), n)
+        })
+        .collect();
     let origins = sqlx::query(&format!(
         r"
         SELECT f.rule, coalesce(m.role, '?') || ':' || o.origin AS origin,
