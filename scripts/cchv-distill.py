@@ -55,7 +55,7 @@ import requests
 # Cargo.toml) — never bump it by hand: the forgotten bump
 # is the exact failure #40 exists to make visible. The trailing marker is what
 # scripts/sync-version.cjs anchors on, and test_cchv_distill.py pins its form.
-DISTILL_VERSION = "0.32.0"  # sync-version
+DISTILL_VERSION = "0.33.0"  # sync-version
 
 # --- config -----------------------------------------------------------------
 
