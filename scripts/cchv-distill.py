@@ -80,6 +80,10 @@ ROUTING_FILE = Path(
     or Path.home() / ".config/cchv/distill-routing.toml"
 )
 FALLBACK_PROTECTED_MODEL = "claude-haiku-5-5"
+# The hub's journal protection tag (crates/hub/src/journal.rs PROTECTION_TAG;
+# a test checks the two agree). Stripped from offered thread wording so the
+# model does not copy it into new stored text (#19, review F5).
+PROTECTION_TAG = "[cchv:protected-journal]"
 # The floor record (#84 #13, re-test C6): the minimum count per kind of routing
 # entry and the routing file's sha256, kept OUTSIDE the routing file so one edit
 # cannot lower both. Written only by `--record-routing-floor`, checked at every
@@ -485,7 +489,7 @@ class Hub:
                 origin="general" if general else None,
             )
             body = r.json()
-            threads = list(body.get("threads") or [])
+            threads = [_untagged(t) for t in body.get("threads") or []]
             if not general:
                 return threads
             if body.get("origin") != "general":
@@ -521,6 +525,14 @@ class Hub:
                 )
 
         _with_retry("post entry", attempt)
+
+
+def _untagged(thread: dict) -> dict:
+    """A thread whose wording no longer starts with the protection tag."""
+    q = thread.get("question")
+    if isinstance(q, str) and q.startswith(PROTECTION_TAG):
+        return {**thread, "question": q[len(PROTECTION_TAG):].lstrip()}
+    return thread
 
 
 # --- transcript building ------------------------------------------------------

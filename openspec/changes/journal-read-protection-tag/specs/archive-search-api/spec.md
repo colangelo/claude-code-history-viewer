@@ -37,6 +37,16 @@ without modification at any scope.
 - **WHEN** any search matches text associated with a `skip`-status journal row
 - **THEN** that row does not appear in results
 
+#### Scenario: A message snippet from tagged text
+
+- **WHEN** a message hit's stored text holds the protection tag, whatever word matched
+- **THEN** its snippet starts with the tag
+
+#### Scenario: General-only journal leg
+
+- **WHEN** a search carries `route=general`
+- **THEN** the journal block holds only entries whose counted route is `general`, in every mode, and any other value is rejected with `400`
+
 #### Scenario: Protected journal hit
 
 - **WHEN** a journal hit comes from an entry whose counted route is not `general`, in any search mode

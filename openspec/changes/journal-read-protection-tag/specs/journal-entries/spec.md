@@ -28,7 +28,13 @@ question) of an entry whose counted route is not `general` with the tag
 The hub SHALL expose `GET /v1/journal/entries` (read-auth) listing entries
 filterable by project and date range, newest-first, paginated, returning full
 entry content including session ids so a caller can drill into the underlying
-transcripts, and each entry's counted `route` (`general`, `protected` or null).
+transcripts, and each entry's counted `route` (`general`, `protected` or null). With
+`route=general` it SHALL return only entries whose counted route is `general`.
+
+#### Scenario: General-only browse
+
+- **WHEN** a client browses with `route=general`
+- **THEN** only entries whose counted route is `general` are returned
 
 #### Scenario: Browse a project's journal
 

@@ -2829,6 +2829,13 @@ equivalently.
     (0016) before the distiller; until then a new distiller offers no threads on general days.
     Rollback: `DELETE FROM _sqlx_migrations WHERE version = 16` before the older binary (the
     columns may stay; their route then stops counting).
+  - **Journal reads are tagged** (`openspec/changes/journal-read-protection-tag`): browse, every
+    journal hit of `/v1/search` and the open-questions report return `route`, and every text
+    field of a non-general row starts with the hub's protection tag (`PROTECTION_TAG` in
+    `crates/hub/src/journal.rs`), which the routing file holds as a content term; so does a
+    message-search snippet whose stored text holds it. `route=general` returns general rows
+    only. Release probe: `scripts/journal-tag-probe.py [distiller]` routes the hub fixture's
+    shapes through that distiller and the live routing file; every line must say `ok`.
   - **What the log shows:** every call logs `call <day> <path>: route=… requested=… served=…`.
     The served model comes from `claude -p`'s `modelUsage` or aiproxy's response `model`.
   - **What gets refused:** a protected result whose `modelUsage` is not exactly `{<id>}` is

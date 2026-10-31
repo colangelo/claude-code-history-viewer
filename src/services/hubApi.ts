@@ -171,6 +171,10 @@ export interface JournalEntry {
   session_ids: number[];
   model: string | null;
   generated_at: string;
+  /** The route the entry was generated on (`general` | `protected`), or
+   * `null` when unknown. Absent on hubs before #19. Text fields of a
+   * non-general entry start with the hub's protection tag. */
+  route?: string | null;
 }
 
 /**

@@ -1245,7 +1245,7 @@ def _shape(kind: str, general: bool) -> dict:
     if kind == "list of blocks":
         return {"type": "tool_result", "content": [{"type": "text", "text": json.dumps(body)}]}
     if kind == "head-cut preview":
-        return {"type": "tool_result", "content": json.dumps(body, indent=2)[:120] + "\n… (truncated)"}
+        return {"type": "tool_result", "content": json.dumps(body, indent=2)[:300] + "\n… (truncated)"}
     return {"type": "tool_result", "content": json.dumps(body, indent=2)}  # pretty, search
 
 
