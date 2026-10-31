@@ -1694,3 +1694,26 @@ async fn ingest_health_echoes_the_window_and_rejects_bad_ones() {
         );
     }
 }
+
+
+/// #84 M1/C3: every message carries a `cwd` key; null when the stored record has none.
+#[tokio::test]
+async fn session_messages_return_the_working_folder() {
+    let hub = spawn().await;
+    let mut with = msg("s-cwd", "k-cwd-1", 0, "2026-10-31T10:00:00Z", "a");
+    with.raw = json!({ "text": "a", "cwd": "/w/_clientx/repo" });
+    let without = msg("s-cwd", "k-cwd-2", 1, "2026-10-31T10:00:01Z", "b");
+    let b = batch(
+        &hub,
+        vec![proj("/w/p", "p")],
+        vec![sess("s-cwd", "/w/p")],
+        vec![with, without],
+    );
+    ingest(&hub, &b).await;
+    let msgs = get(&hub, "/v1/sessions/s-cwd/messages", &[], Some(&hub.token)).await;
+    assert_eq!(msgs.status(), 200);
+    let msgs: Value = msgs.json().await.unwrap();
+    assert_eq!(msgs[0]["cwd"], json!("/w/_clientx/repo"));
+    assert!(msgs[1].as_object().unwrap().contains_key("cwd"), "the key is always present");
+    assert!(msgs[1]["cwd"].is_null());
+}

@@ -2079,6 +2079,17 @@ mod tests {
         )
     }
 
+    /// #84 M1: the working folder is kept on the normalized message.
+    #[test]
+    fn load_messages_keeps_the_working_folder() {
+        let dir = TempDir::new().unwrap();
+        let line = r#"{"uuid":"u1","sessionId":"s1","timestamp":"2025-06-26T10:00:00Z","type":"user","cwd":"/w/_clientx/repo","message":{"role":"user","content":"hi"}}"#;
+        let path = create_test_jsonl_file(&dir, "s.jsonl", &format!("{line}\n"));
+        let msgs = load_messages(path.to_str().unwrap()).unwrap();
+        let v = serde_json::to_value(&msgs[0]).unwrap();
+        assert_eq!(v["cwd"], serde_json::json!("/w/_clientx/repo"));
+    }
+
     fn create_sample_summary_message(summary: &str) -> String {
         format!(r#"{{"type":"summary","summary":"{summary}","leafUuid":"leaf-123"}}"#)
     }

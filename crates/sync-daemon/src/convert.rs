@@ -204,6 +204,54 @@ mod tests {
         m
     }
 
+    /// One Claude Code JSONL line through history-core's real Claude parser.
+    fn parsed_claude_line(line: &serde_json::Value) -> ClaudeMessage {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let mut msgs =
+            history_core::providers::claude::load_messages(path.to_str().unwrap()).unwrap();
+        assert_eq!(msgs.len(), 1);
+        msgs.remove(0)
+    }
+
+    fn claude_user_line(cwd: Option<&str>) -> serde_json::Value {
+        let mut line = json!({
+            "uuid": "11111111-1111-4111-8111-111111111111",
+            "sessionId": "session-1",
+            "timestamp": "2026-10-31T10:00:00Z",
+            "type": "user",
+            "message": { "role": "user", "content": "hello" },
+        });
+        if let Some(c) = cwd {
+            line["cwd"] = json!(c);
+        }
+        line
+    }
+
+    /// #84 M1: the working folder survives the real convert path into `raw`,
+    /// where the hub reads it for the distiller's routing.
+    #[test]
+    fn cwd_reaches_raw_through_the_real_parse_path() {
+        let m = parsed_claude_line(&claude_user_line(Some("/w/_clientx/repo")));
+        let ingest = to_ingest_message("claude", "session-1", 0, &m);
+        assert_eq!(ingest.raw["cwd"], json!("/w/_clientx/repo"));
+        let without = parsed_claude_line(&claude_user_line(None));
+        let ingest = to_ingest_message("claude", "session-1", 0, &without);
+        assert!(ingest.raw.get("cwd").is_none(), "no cwd in the source, none in raw");
+    }
+
+    /// …and never into the dedup key: archived rows were keyed without it.
+    #[test]
+    fn cwd_does_not_change_message_key() {
+        let with = parsed_claude_line(&claude_user_line(Some("/w/x")));
+        let without = parsed_claude_line(&claude_user_line(None));
+        assert_eq!(
+            message_key("claude", "s", 0, &with),
+            message_key("claude", "s", 0, &without)
+        );
+    }
+
     /// #46: the payload reaches the hub inside `raw`…
     #[test]
     fn attachment_payload_is_archived_in_raw() {
