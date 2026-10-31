@@ -203,6 +203,7 @@ impl MessageBuilder {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         }
     }
 

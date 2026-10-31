@@ -185,6 +185,13 @@ pub struct ClaudeMessage {
     /// their keys instead of being stored a second time with a payload.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<serde_json::Value>,
+
+    /// The working folder the source record names (Claude Code's `cwd`), kept
+    /// so the archive can route on it (#84 M1). Like `attachment`, it reaches
+    /// the archive inside `raw` only and is NOT part of the sync daemon's
+    /// `message_key`, so adding it never re-keys an archived message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,6 +275,7 @@ impl TryFrom<RawLogEntry> for ClaudeMessage {
             microcompact_metadata: log_entry.microcompact_metadata,
             provider: None,
             attachment: log_entry.attachment,
+            cwd: log_entry.cwd,
         })
     }
 }
@@ -440,6 +448,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let serialized = serde_json::to_string(&message).unwrap();
@@ -486,6 +495,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let serialized = serde_json::to_string(&message).unwrap();

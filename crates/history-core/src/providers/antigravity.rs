@@ -553,6 +553,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
             compact_metadata: None,
             microcompact_metadata: None,
             attachment: None,
+            cwd: None,
         });
 
         // Assistant turn with real token usage
@@ -599,6 +600,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
             compact_metadata: None,
             microcompact_metadata: None,
             attachment: None,
+            cwd: None,
         });
     }
 
@@ -701,6 +703,7 @@ pub fn search(query: &str, max_results: usize) -> Result<Vec<ClaudeMessage>, Str
             compact_metadata: None,
             microcompact_metadata: None,
             attachment: None,
+            cwd: None,
         });
     }
 
@@ -802,6 +805,7 @@ mod tests {
             compact_metadata: None,
             microcompact_metadata: None,
             attachment: None,
+            cwd: None,
         }];
 
         let merged = merge_tool_names_into_messages(
@@ -987,6 +991,7 @@ mod tests {
                 compact_metadata: None,
                 microcompact_metadata: None,
                 attachment: None,
+                cwd: None,
             });
         }
 

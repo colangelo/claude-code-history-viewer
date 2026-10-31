@@ -238,7 +238,10 @@ mod tests {
         assert_eq!(ingest.raw["cwd"], json!("/w/_clientx/repo"));
         let without = parsed_claude_line(&claude_user_line(None));
         let ingest = to_ingest_message("claude", "session-1", 0, &without);
-        assert!(ingest.raw.get("cwd").is_none(), "no cwd in the source, none in raw");
+        assert!(
+            ingest.raw.get("cwd").is_none(),
+            "no cwd in the source, none in raw"
+        );
     }
 
     /// …and never into the dedup key: archived rows were keyed without it.

@@ -489,6 +489,7 @@ pub fn build_provider_message(
         microcompact_metadata: None,
         provider: Some(provider.to_string()),
         attachment: None,
+        cwd: None,
     }
 }
 

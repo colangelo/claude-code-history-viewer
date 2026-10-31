@@ -3883,6 +3883,7 @@ mod tests {
             microcompact_metadata: None,
             provider: provider.map(std::string::ToString::to_string),
             attachment: None,
+            cwd: None,
         }
     }
 
@@ -4248,6 +4249,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4300,6 +4302,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4350,6 +4353,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4396,6 +4400,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4440,6 +4445,7 @@ mod tests {
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: None,
         };
 
         let usage = extract_token_usage(&msg);

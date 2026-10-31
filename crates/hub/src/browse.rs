@@ -293,6 +293,11 @@ pub struct MessageRow {
     pub duration_ms: Option<i64>,
     pub is_sidechain: bool,
     pub content: Option<serde_json::Value>,
+    /// The working folder from the stored record (`raw->>'cwd'`, #84 M1).
+    /// Serialized as `null` when absent, never left out: the journal distiller
+    /// reads a missing key as "this hub cannot say" and protects the group,
+    /// while `null` is "no signal" for that message.
+    pub cwd: Option<String>,
 }
 
 /// Resolve a `:id` path segment to a session surrogate id: numeric values are
@@ -400,7 +405,8 @@ pub async fn session_messages(
                m.cost_usd,
                m.duration_ms,
                m.is_sidechain,
-               m.content
+               m.content,
+               m.raw->>'cwd'   AS cwd
         FROM messages m
         WHERE m.session_id = $1
           AND ($4::timestamptz IS NULL OR m."timestamp" >= $4)

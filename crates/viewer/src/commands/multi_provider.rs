@@ -1011,6 +1011,7 @@ mod tests {
             microcompact_metadata: None,
             provider: Some("claude".to_string()),
             attachment: None,
+            cwd: None,
         }
     }
 

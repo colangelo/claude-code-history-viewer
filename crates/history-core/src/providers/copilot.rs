@@ -424,6 +424,7 @@ mod tests {
             microcompact_metadata: None,
             provider: Some(PROVIDER_ID.to_string()),
             attachment: None,
+            cwd: None,
         }
     }
 

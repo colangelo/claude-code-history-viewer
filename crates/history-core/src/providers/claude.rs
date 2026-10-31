@@ -1451,6 +1451,7 @@ fn parse_line_to_message(
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: log_entry.cwd,
         });
     }
 
@@ -1513,6 +1514,7 @@ fn parse_line_to_message(
         microcompact_metadata: log_entry.microcompact_metadata,
         provider: None,
         attachment: log_entry.attachment,
+        cwd: log_entry.cwd,
     })
 }
 
@@ -1583,6 +1585,7 @@ fn parse_line_simd(
             microcompact_metadata: None,
             provider: None,
             attachment: None,
+            cwd: log_entry.cwd,
         });
     }
 
@@ -1658,6 +1661,7 @@ fn parse_line_simd(
         microcompact_metadata: log_entry.microcompact_metadata,
         provider: None,
         attachment: log_entry.attachment,
+        cwd: log_entry.cwd,
     })
 }
 
