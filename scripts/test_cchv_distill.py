@@ -39,6 +39,23 @@ def _load():
 d = _load()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_claude(monkeypatch):
+    """No test may start a real `claude -p`: a routing slip would send a model call.
+
+    Tests that exercise the subprocess path patch `subprocess.run` themselves,
+    which replaces this guard for that test.
+    """
+    real = d.subprocess.run
+
+    def guard(cmd, *a, **k):
+        if cmd and cmd[0] == "claude":
+            raise AssertionError("a test reached a real claude -p")
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(d.subprocess, "run", guard)
+
+
 def test_day_start_hour_matches_the_hub() -> None:
     """The hub groups the sessions; this script windows their messages.
 
@@ -114,6 +131,8 @@ class StubHub:
             {
                 "role": "user",
                 "is_sidechain": False,
+                # The hub always returns the key (#84 C3); null is "no signal".
+                "cwd": None,
                 "content": [{"type": "text", "text": self.text}],
             }
         ]
@@ -401,7 +420,7 @@ def test_validate_accepts_both_question_shapes_and_rejects_others() -> None:
 def test_process_group_posts_links_for_offered_threads(monkeypatch) -> None:
     seen: dict = {}
 
-    def fake_generate(llm, entry_date, project, transcript, threads):
+    def fake_generate(llm, entry_date, project, transcript, threads, route=None):
         seen["threads"] = threads
         return {
             "status": "entry",
@@ -425,6 +444,7 @@ def test_process_group_posts_links_for_offered_threads(monkeypatch) -> None:
 
     class Model:
         model = "m"
+        routing = d.Routing(model="m")  # no markers, no terms: routes general
 
     group = {"entry_date": "2026-10-10", "project_path": "/w/p", "session_ids": [11], "as_of": None}
     assert d.process_group(ThreadHub(), group, Model(), dry_run=False) is True

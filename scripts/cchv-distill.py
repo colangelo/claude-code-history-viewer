@@ -45,6 +45,8 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.parse
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -442,6 +444,9 @@ class Hub:
             # terminates on the filtered set rather than on the session's size.
             total = int(r.headers.get("X-Total-Count", len(msgs)))
             offset += len(page)
+            if not page and offset < total:
+                # Fewer than the hub counted: routing must not decide on a part.
+                raise RuntimeError(f"session {session_id}: read {offset} of {total} messages")
             if not page or offset >= total:
                 return msgs
 
@@ -488,34 +493,82 @@ class Hub:
 # --- transcript building ------------------------------------------------------
 
 
-def _content_text(content) -> str:
-    """Flatten a normalized message content value to plain text."""
+@dataclass
+class Flat:
+    """One message content value, flattened once for both of its readers.
+
+    `capped` is what the prompt gets (today's caps); `full` the same parts
+    uncapped, for routing; each capped part is a prefix of its full part, so
+    the prompt never holds text the routing view did not see (#84 M4).
+    `tool_values` are a tool input's string values, Glob/Grep `path` joined
+    with `pattern`. `unknown` marks a shape this function does not know.
+    """
+
+    capped: list[str] = field(default_factory=list)
+    full: list[str] = field(default_factory=list)
+    tool_values: list[str] = field(default_factory=list)
+    unknown: bool = False
+
+    def add(self, full: str, cap: int | None = None, head: str = "") -> None:
+        if full or head:
+            self.full.append(f"{head}{full}")
+            self.capped.append(f"{head}{full if cap is None else full[:cap]}")
+
+
+def _string_values(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out = [v for x in value.values() for v in _string_values(x)]
+        if isinstance(value.get("path"), str) and isinstance(value.get("pattern"), str):
+            out.append(value["path"].rstrip("/\\") + "/" + value["pattern"])
+        return out
+    if isinstance(value, list):
+        return [v for x in value for v in _string_values(x)]
+    return []
+
+
+def flatten(content) -> Flat:
+    f = Flat()
     if content is None:
-        return ""
+        return f
     if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            t = item.get("type")
-            if t == "text":
-                parts.append(item.get("text", ""))
-            elif t == "thinking":
-                parts.append(f"[thinking] {item.get('thinking', '')[:500]}")
-            elif t == "tool_use":
-                name = item.get("name", "?")
-                inp = json.dumps(item.get("input", {}), ensure_ascii=False)[:300]
-                parts.append(f"[tool_use {name}] {inp}")
-            elif t == "tool_result":
-                c = item.get("content")
-                text = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
-                parts.append(f"[tool_result] {(text or '')[:500]}")
-        return "\n".join(p for p in parts if p)
+        f.add(content)
+        return f
     if isinstance(content, dict):
-        return json.dumps(content, ensure_ascii=False)[:500]
-    return str(content)
+        f.add(json.dumps(content, ensure_ascii=False), cap=500)
+        return f
+    if not isinstance(content, list):
+        f.unknown = True
+        return f
+    for item in content:
+        if not isinstance(item, dict):
+            f.unknown = True
+            continue
+        t = item.get("type")
+        if t == "text":
+            f.add(item.get("text", ""))
+        elif t == "thinking":
+            f.add(item.get("thinking", ""), cap=500, head="[thinking] ")
+        elif t == "tool_use":
+            inp = item.get("input", {})
+            f.add(json.dumps(inp, ensure_ascii=False), cap=300, head=f"[tool_use {item.get('name', '?')}] ")
+            f.tool_values.extend(_string_values(inp))
+        elif t == "tool_result":
+            c = item.get("content")
+            text = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
+            f.add(text or "", cap=500, head="[tool_result] ")
+        else:
+            # Not in the prompt, as before; routing still reads it.
+            f.full.append(json.dumps(item, ensure_ascii=False))
+    return f
+
+
+def _content_text(content) -> str:
+    """Flatten a normalized message content value to plain text (the prompt's view)."""
+    if content is not None and not isinstance(content, (str, list, dict)):
+        return str(content)
+    return "\n".join(p for p in flatten(content).capped if p)
 
 
 def truncate(text: str, budget: int) -> str:
@@ -623,13 +676,86 @@ class Routing:
     protect_all: bool = False
     reason: str = ""
 
-    def is_protected(self, project_path: str, prompt: str) -> bool:
+    def __post_init__(self) -> None:
+        self._markers = [normalize(m) for m in self.path_markers]
+        self._terms = [normalize(t) for t in self.content_terms]
+        # A marker `/<name>` also matches `<name>` as a path segment (#84 C2):
+        # after start, `/`, `-`, whitespace, a quote, a backtick, `:` or `=`;
+        # before end, `/`, whitespace, a quote, a backtick, `:`, `,`, `)` or `]`.
+        self._segments = [
+            re.compile(r"(?:^|[/\-\s'\"`:=])" + re.escape(m.strip("/")) + r"(?=$|[/\s'\"`:,)\]])")
+            for m in self._markers if m.startswith("/") and m.strip("/")
+        ]
+
+    def marker_in(self, text: str) -> bool:
+        """`text` is already normalized."""
+        return any(m in text for m in self._markers) or any(p.search(text) for p in self._segments)
+
+    def term_in(self, text: str) -> bool:
+        return any(t in text for t in self._terms)
+
+    def prompt_class(self, project_path: str, prompt: str) -> str | None:
+        """The route class from what is about to be sent, or None for general."""
         if self.protect_all:
-            return True
-        path, text = project_path.lower(), prompt.lower()
-        return any(m.lower() in path for m in self.path_markers) or any(
-            t.lower() in text for t in self.content_terms
-        )
+            return "protect_all"
+        if self.marker_in(normalize(project_path)):
+            return "path"
+        p = normalize(prompt)
+        return "prompt" if self.marker_in(p) or self.term_in(p) else None
+
+    def is_protected(self, project_path: str, prompt: str) -> bool:
+        return self.prompt_class(project_path, prompt) is not None
+
+
+def normalize(text: str) -> str:
+    """What the matcher compares: URL-decoded, backslashes as `/`, lower case (#84 M8)."""
+    return urllib.parse.unquote(text).replace("\\", "/").lower()
+
+
+# The routing pass reads every message of every session in a group; past this
+# many it stops and protects the group rather than route on a partial view.
+ROUTING_MAX_MESSAGES = 200_000
+
+
+def route_group(hub, routing: Routing, project_path: str, session_ids: list[int]) -> str | None:
+    """The route class for a group, from all of its sessions, or None for general.
+
+    Reads each session whole (all days, sidechains included), so a session
+    protected on one day is protected on every day (#84 M5, M6). Checks one
+    message at a time and stops at the first hit. Every way of not knowing
+    protects: a failed or partial read, an unknown content shape, a message
+    without the `cwd` key (#84 M9, C3).
+    """
+    if routing.protect_all:
+        return "protect_all"
+    if routing.marker_in(normalize(project_path)):
+        return "path"
+    seen = 0
+    for sid in session_ids:
+        try:
+            msgs = hub.session_messages(sid)
+        except Exception:  # noqa: BLE001 - any failure to read is a reason to protect
+            return "unreadable"
+        for m in msgs:
+            seen += 1
+            if seen > ROUTING_MAX_MESSAGES or not isinstance(m, dict):
+                return "unreadable"
+            if "cwd" not in m:
+                return "cwd_unavailable"
+            if isinstance(m["cwd"], str) and routing.marker_in(normalize(m["cwd"])):
+                return "cwd"
+            f = flatten(m.get("content"))
+            if f.unknown:
+                return "unreadable"
+            if any(routing.marker_in(normalize(v)) for v in f.tool_values):
+                return "tool_input"
+            for part in f.full:
+                n = normalize(part)
+                if routing.marker_in(n):
+                    return "text_marker"
+                if routing.term_in(n):
+                    return "text_term"
+    return None
 
 
 def load_routing(path: Path = ROUTING_FILE) -> Routing:
@@ -819,27 +945,58 @@ def thread_links(entry: dict, offered: set[int]) -> tuple[list[str], list[int | 
     return questions, links, resolved_ids
 
 
+class GateHit(RuntimeError):
+    """A general-route string held a marker or term: it must not be sent."""
+
+
+# Route classes of this run, for the per-class counts at its end.
+ROUTE_COUNTS: Counter = Counter()
+
+
+def _send_general(llm: LLM, prompt: str) -> tuple[str, str]:
+    """The one way out to a general backend → (raw result, serving model).
+
+    The gate wraps the send: every string this call sends (the prompt is the
+    only one we write; a `claude -p` retry resends the same string) is checked
+    for every marker and term first, normalized as the routing view is (#84 C4).
+    """
+    p = normalize(prompt)
+    if llm.routing.marker_in(p) or llm.routing.term_in(p):
+        raise GateHit("prompt")
+    if llm.backend == "aiproxy":
+        return _aiproxy_generate(llm, prompt)
+    raw, usage = _claude_generate(llm.model, prompt)
+    return raw, ",".join(sorted(usage)) or llm.model
+
+
 def generate(
-    llm: LLM, entry_date: str, project: str, transcript: str, threads: list[dict]
+    llm: LLM, entry_date: str, project: str, transcript: str, threads: list[dict],
+    route: str | None = None,
 ) -> tuple[dict, str]:
-    """Generate one entry → (entry, serving model). Raises `Refused` per the guard."""
+    """Generate one entry → (entry, serving model). Raises `Refused` per the guard.
+
+    `route` is the group's class from `route_group`; None means it found nothing,
+    and the prompt itself is still checked here and again at the send.
+    """
     prompt = build_prompt(entry_date, project, transcript, threads)
     label = f"{entry_date} {project}"
-    if llm.routing.is_protected(project, prompt):
+    cls = route or llm.routing.prompt_class(project, prompt)
+    raw, served = "", ""
+    if cls is None:
+        try:
+            raw, served = _send_general(llm, prompt)
+            log(f"call {label}: route=general backend={llm.backend} requested={llm.model} served={served}")
+        except GateHit:
+            cls = "prompt"
+    if cls is not None:
         want = llm.routing.model
         raw, usage = _claude_generate(want, prompt, direct=True)
         served = ",".join(sorted(usage)) or "<none>"
-        log(f"call {label}: route=protected requested={want} served={served}")
+        log(f"call {label}: route=protected class={cls} requested={want} served={served}")
         if usage != {want}:
             log(f"REFUSED {label}: served={served}, protected route requires exactly {want}")
             raise Refused(f"protected group served by {served}, not {want}")
-    elif llm.backend == "aiproxy":
-        raw, served = _aiproxy_generate(llm, prompt)
-        log(f"call {label}: route=general backend=aiproxy requested={llm.model} served={served}")
-    else:
-        raw, usage = _claude_generate(llm.model, prompt)
-        served = ",".join(sorted(usage)) or llm.model
-        log(f"call {label}: route=general backend=claude requested={llm.model} served={served}")
+    ROUTE_COUNTS[cls or "general"] += 1
     # tolerate stray code fences despite the instruction
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
     try:
@@ -897,8 +1054,9 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
     if not transcript.strip():
         entry = {"status": "skip", "skip_reason": "no textual content in this day's messages"}
     else:
+        route = route_group(hub, llm.routing, project_path, session_ids)
         threads = hub.open_threads(project_path, entry_date)
-        entry, served = generate(llm, entry_date, project_path, transcript, threads)
+        entry, served = generate(llm, entry_date, project_path, transcript, threads, route=route)
 
     if err := validate(entry):
         log(f"REJECTED {label}: {err} — leaving pending")
@@ -1026,6 +1184,8 @@ def main() -> int:
             log(f"ERROR on {group.get('entry_date')} {group.get('project_path')}: {e}")
 
     log(f"done: {len(groups) - failures} ok, {failures} failed")
+    if ROUTE_COUNTS:
+        log("routes: " + ", ".join(f"{k}={v}" for k, v in sorted(ROUTE_COUNTS.items())))
     return 1 if failures else 0
 
 
