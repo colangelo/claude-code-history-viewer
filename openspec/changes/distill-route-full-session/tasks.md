@@ -26,13 +26,13 @@
 
 - [x] 4.1 Routing file, entries by kind (C1), by the client's manager's decision, applied by cchv 2026-10-31: plain path markers (the client roots and repos, 11); their encoded storage forms (`/` and `_` → `-`, 10); content terms (6), among them the single client-name term that covers the org URL form, the client's hosts, its controller and reviewer session names and the encoded form in text. Acceptance probe per entry through the INSTALLED loader against the LIVE file: 11/11, 10/10 and 6/6 routed protected; 3 lab controls 0/3. Fingerprint recorded with the client's manager.
 - [x] 4.2 #13's floor and fingerprint in `~/.config/cchv/distill-routing.floor.json` (not the routing file), checked at start, else protect everything; `--record-routing-floor` re-records after a widening edit and refuses to lower a count (C6)
-- [ ] 4.3 #12's origin filter ships with or before this change (release gate), as the change `distill-thread-origin-filter`, with its test: a project with one protected day then one general day → the general prompt offers 0 threads from the protected entry (C5)
-- [ ] 4.4 #14's hardened protected call: NOT in this release (manager-lab 2026-10-31 16:53Z); the first follow-up after it
+- [x] 4.3 #12's origin filter ships with or before this change (release gate), as the change `distill-thread-origin-filter`, with its test: a project with one protected day then one general day → the general prompt offers 0 threads from the protected entry (C5): shipped together in cchv-v0.34.0
+- [x] 4.4 #14's hardened protected call: NOT in this release (manager-lab 2026-10-31 16:53Z); the first follow-up after it (Gitea #94)
 - [x] 4.5 Review 3 (thread origin) M4: the segment boundary by character class (before: not [a-z0-9_]; after: not [a-z0-9_-]); prose punctuation and wrappers protect, longer names do not (release gate)
 
 ## 5. Release
 
-- [ ] 5.1 Gate, release; hub swap, then the daemon on both Macs, then the distiller reinstall; on ac's word
+- [x] 5.1 Gate, release; hub swap, then the daemon on both Macs, then the distiller reinstall; on ac's word: released as cchv-v0.34.0 on 2026-10-31, ac gestore-lab.a1031-18; the gate on a672c68d, then hub, daemons and distiller in that order
 - [ ] 5.2 Read back one night: route counts by class; general-routed groups whose full text holds any marker or term = 0; sent to the client's manager and its security reviewer
 - [ ] 5.3 #10 closes only when 2–4 and the routing-file half (4.1, 4.2) are in
 - [x] 5.4 Follow-ups (C8): an issue for Codex and Pi `cwd` (turn level); the daemon-lag window in `docs/residuals.md` until both Macs run the new daemon (Gitea #92; the residual is in `docs/residuals.md`)
