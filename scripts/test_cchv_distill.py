@@ -11,7 +11,9 @@ rather than in the hub.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import re
 import sys
 from datetime import datetime, timezone
@@ -771,3 +773,141 @@ def test_every_capped_part_is_inside_the_view(tmp_path) -> None:
     f = d.flatten(content)
     assert f.capped and all(any(c in full for full in f.full) for c in f.capped)
     assert d._content_text(content) == "\n".join(f.capped)
+
+
+# --- routing floor and fingerprint (#84 #13, re-test C6, task 4.2) -------------
+#
+# The floor lives outside the routing file, in its own record. At start a
+# missing, invalid or stale record protects every group; the one command that
+# writes it refuses to lower a count unless a narrowing is named.
+
+FLOOR_TOML = """
+[protected]
+model = "claude-haiku-5-5"
+path_markers = ["/_clientx/", "/Clientx-Ops", "clientx-tools", "-Users-ac--sync-dev--clientx"]
+content_terms = ["clientx.example", "BuildThing"]
+"""
+
+
+def _floor_paths(tmp_path, body: str = FLOOR_TOML):
+    f = tmp_path / "distill-routing.toml"
+    f.write_text(body)
+    return f, tmp_path / "distill-routing.floor.json"
+
+
+def test_routing_kinds_split_plain_encoded_and_terms(tmp_path) -> None:
+    f, _ = _floor_paths(tmp_path)
+    r = d.load_routing(f)
+    assert d.routing_kinds(r) == {"plain_path_markers": 3, "encoded_path_markers": 1,
+                                  "content_terms": 2}
+
+
+def test_record_floor_writes_counts_and_fingerprint_mode_600(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    ok, msg = d.record_routing_floor(f, floor)
+    assert ok, msg
+    rec = json.loads(floor.read_text())
+    assert rec["plain_path_markers"] == 3 and rec["encoded_path_markers"] == 1
+    assert rec["content_terms"] == 2
+    assert rec["sha256"] == hashlib.sha256(f.read_bytes()).hexdigest()
+    assert floor.stat().st_mode & 0o777 == 0o600
+    assert rec["sha256"] in msg, "the fingerprint is printed for the client's manager"
+
+
+def test_a_recorded_floor_lets_the_routing_file_through(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    assert d.record_routing_floor(f, floor)[0]
+    r = d.load_routing(f, floor=floor)
+    assert not r.protect_all, r.reason
+    assert not r.is_protected("/Users/ac/_sync/dev/other", "hello")
+
+
+@pytest.mark.parametrize("floor_body", [None, "not json", '{"sha256": "x"}', "[]"])
+def test_a_missing_or_invalid_floor_protects_everything(tmp_path, floor_body) -> None:
+    f, floor = _floor_paths(tmp_path)
+    if floor_body is not None:
+        floor.write_text(floor_body)
+    r = d.load_routing(f, floor=floor)
+    assert r.protect_all and "floor" in r.reason
+    assert r.is_protected("/anything", "anything")
+
+
+def test_an_edit_after_the_floor_was_recorded_protects_everything(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    assert d.record_routing_floor(f, floor)[0]
+    f.write_text(FLOOR_TOML.replace('"BuildThing"', '"BuildThing", "Another"'))
+    r = d.load_routing(f, floor=floor)
+    assert r.protect_all and "fingerprint" in r.reason
+
+
+def test_a_count_below_the_floor_protects_everything_even_with_a_matching_hash(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    assert d.record_routing_floor(f, floor)[0]
+    rec = json.loads(floor.read_text())
+    rec["content_terms"] = 9
+    floor.write_text(json.dumps(rec))
+    r = d.load_routing(f, floor=floor)
+    assert r.protect_all and "content_terms" in r.reason
+
+
+def test_record_after_a_widening_edit_raises_the_floor(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    assert d.record_routing_floor(f, floor)[0]
+    f.write_text(FLOOR_TOML.replace('"BuildThing"', '"BuildThing", "Another"'))
+    ok, msg = d.record_routing_floor(f, floor)
+    assert ok, msg
+    assert json.loads(floor.read_text())["content_terms"] == 3
+    assert not d.load_routing(f, floor=floor).protect_all
+
+
+def test_record_refuses_to_lower_a_count(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    assert d.record_routing_floor(f, floor)[0]
+    before = floor.read_text()
+    f.write_text(FLOOR_TOML.replace(', "-Users-ac--sync-dev--clientx"', ""))
+    ok, msg = d.record_routing_floor(f, floor)
+    assert not ok and "encoded_path_markers" in msg
+    assert floor.read_text() == before, "a refused record leaves the floor as it was"
+    assert d.load_routing(f, floor=floor).protect_all
+
+
+def test_a_named_narrowing_is_recorded(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path)
+    assert d.record_routing_floor(f, floor)[0]
+    f.write_text(FLOOR_TOML.replace(', "-Users-ac--sync-dev--clientx"', ""))
+    ok, msg = d.record_routing_floor(f, floor, narrowing_approved_by="the client's manager, bell 1")
+    assert ok, msg
+    rec = json.loads(floor.read_text())
+    assert rec["encoded_path_markers"] == 0
+    assert rec["narrowing_approved_by"] == "the client's manager, bell 1"
+    assert not d.load_routing(f, floor=floor).protect_all
+
+
+def test_record_refuses_an_invalid_routing_file(tmp_path) -> None:
+    f, floor = _floor_paths(tmp_path, "not = [valid")
+    ok, msg = d.record_routing_floor(f, floor)
+    assert not ok and not floor.exists()
+
+
+def test_record_command_exits_before_the_hub_or_any_secret(tmp_path, monkeypatch) -> None:
+    f, floor = _floor_paths(tmp_path)
+    monkeypatch.setattr(d, "ROUTING_FILE", f)
+    monkeypatch.setattr(d, "ROUTING_FLOOR_FILE", floor)
+    monkeypatch.setattr(d, "Hub", lambda *a, **k: pytest.fail("the hub was reached"))
+    monkeypatch.setattr(d, "resolve_token", lambda: pytest.fail("a secret was read"))
+    monkeypatch.setattr(d, "resolve_aiproxy_key", lambda: pytest.fail("a secret was read"))
+    monkeypatch.setattr(sys, "argv", ["cchv-distill", "--record-routing-floor"])
+    assert d.main() == 0
+    assert json.loads(floor.read_text())["content_terms"] == 2
+    f.write_text(FLOOR_TOML.replace(', "BuildThing"', ""))
+    assert d.main() == 2, "lowering without a named narrowing is refused"
+
+
+def test_the_default_llm_routing_checks_the_floor(tmp_path, monkeypatch) -> None:
+    f, floor = _floor_paths(tmp_path)
+    monkeypatch.setattr(d, "ROUTING_FILE", f)
+    monkeypatch.setattr(d, "ROUTING_FLOOR_FILE", floor)
+    llm = d.LLM(backend="aiproxy", model="gpt-6.1-sol", effort="low")
+    assert llm.routing.protect_all, "no floor recorded yet"
+    assert d.record_routing_floor(f, floor)[0]
+    assert not d.LLM(backend="aiproxy", model="gpt-6.1-sol", effort="low").routing.protect_all
