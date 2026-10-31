@@ -431,13 +431,13 @@ def test_process_group_posts_links_for_offered_threads(monkeypatch) -> None:
             "topics": ["a", "b", "c"],
             "open_questions": [{"q": "again", "continues": 12}, {"q": "new", "continues": None}],
             "resolved": [13],
-        }, "m"
+        }, "m", None
 
     monkeypatch.setattr(d, "generate", fake_generate)
     posted: list[dict] = []
 
     class ThreadHub(StubHub):
-        def open_threads(self, project_path, before):
+        def open_threads(self, project_path, before, **kw):
             assert (project_path, before) == ("/w/p", "2026-10-10")
             return [{"thread_id": 12, "question": "q12"}, {"thread_id": 13, "question": "q13"}]
 
@@ -531,7 +531,7 @@ def test_protected_group_goes_to_claude_with_the_exact_id(tmp_path, monkeypatch)
         lambda model, prompt, direct=False: calls.append((model, direct)) or (ENTRY_JSON, {"claude-haiku-5-5"}),
     )
     llm = _llm(_routing(tmp_path, ROUTING_TOML))
-    entry, served = d.generate(llm, "2026-10-20", "/Users/ac/_sync/dev/_clientx/r", "hi", [])
+    entry, served, _ = d.generate(llm, "2026-10-20", "/Users/ac/_sync/dev/_clientx/r", "hi", [])
     assert calls == [("claude-haiku-5-5", True)]
     assert entry["status"] == "entry" and served == "claude-haiku-5-5"
 
@@ -540,7 +540,7 @@ def test_general_group_goes_to_the_general_backend(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(d, "_claude_generate", lambda *a, **k: pytest.fail("claude was called"))
     monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, prompt: (ENTRY_JSON, "gpt-6.1-sol"))
     llm = _llm(_routing(tmp_path, ROUTING_TOML))
-    _, served = d.generate(llm, "2026-10-20", "/Users/ac/_sync/dev/other", "hi", [])
+    _, served, _ = d.generate(llm, "2026-10-20", "/Users/ac/_sync/dev/other", "hi", [])
     assert served == "gpt-6.1-sol"
 
 
@@ -549,7 +549,7 @@ def test_threads_count_toward_the_content_match(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(d, "_claude_generate", lambda m, p, direct=False: (ENTRY_JSON, {m}))
     llm = _llm(_routing(tmp_path, ROUTING_TOML))
     threads = [{"thread_id": 1, "question": "ask BuildThing about the mirror"}]
-    _, served = d.generate(llm, "2026-10-20", "/w/other", "hi", threads)
+    _, served, _ = d.generate(llm, "2026-10-20", "/w/other", "hi", threads)
     assert served == "claude-haiku-5-5"
 
 
@@ -566,7 +566,7 @@ def test_a_refused_group_is_not_posted(tmp_path, monkeypatch) -> None:
     posted: list[dict] = []
 
     class PostingHub(StubHub):
-        def open_threads(self, project_path, before):
+        def open_threads(self, project_path, before, **kw):
             return []
 
         def post_entry(self, payload):
@@ -583,7 +583,7 @@ def test_stored_model_is_the_serving_model(tmp_path, monkeypatch) -> None:
     posted: list[dict] = []
 
     class PostingHub(StubHub):
-        def open_threads(self, project_path, before):
+        def open_threads(self, project_path, before, **kw):
             return []
 
         def post_entry(self, payload):
@@ -704,7 +704,7 @@ def test_the_gate_stops_a_marker_in_an_offered_thread_before_any_send(tmp_path, 
     monkeypatch.setattr(d.subprocess, "run", record_run)
     llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
     threads = [{"thread_id": 1, "question": "revisit /Users/ac/_sync/dev/_clientx/repo layout"}]
-    entry, served = d.generate(llm, "2026-10-20", LAB, "neutral day", threads)
+    entry, served, _ = d.generate(llm, "2026-10-20", LAB, "neutral day", threads)
     assert served == "claude-haiku-5-5"
     assert len(sent) == 1 and "claude-haiku-5-5" in sent[0]
 
@@ -713,7 +713,7 @@ def test_a_neutral_general_call_passes_the_gate(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(d, "_claude_generate", lambda *a, **k: pytest.fail("claude was called"))
     monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, prompt: (ENTRY_JSON, "gpt-6.1-sol"))
     llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
-    _, served = d.generate(llm, "2026-10-20", LAB, "neutral day", [])
+    _, served, _ = d.generate(llm, "2026-10-20", LAB, "neutral day", [])
     assert served == "gpt-6.1-sol"
 
 
@@ -964,3 +964,158 @@ def test_the_default_llm_routing_checks_the_floor(tmp_path, monkeypatch) -> None
     assert llm.routing.protect_all, "no floor recorded yet"
     assert d.record_routing_floor(f, floor)[0]
     assert not d.LLM(backend="aiproxy", model="gpt-6.1-sol", effort="low").routing.protect_all
+
+
+# --- thread origin (openspec/changes/distill-thread-origin-filter, #84 #12) ----
+
+
+class _Resp:
+    def __init__(self, body):
+        self.body = body
+
+    def json(self):
+        return self.body
+
+
+def _thread_hub(monkeypatch, body):
+    hub = d.Hub(url="http://127.0.0.1:9", token="t")
+    seen: list[dict] = []
+    monkeypatch.setattr(hub, "get", lambda path, **params: seen.append(params) or _Resp(body))
+    return hub, seen
+
+
+GEN = {"thread_id": 1, "question": "g", "origin": "general"}
+PROT = {"thread_id": 2, "question": "p", "origin": "protected"}
+BARE = {"thread_id": 3, "question": "b"}
+
+
+def test_general_threads_need_the_echo_and_a_general_origin_each(monkeypatch, capsys) -> None:
+    hub, seen = _thread_hub(monkeypatch, {"origin": "general", "threads": [GEN, PROT, BARE]})
+    assert [t["thread_id"] for t in hub.open_threads("/w/p", "2026-10-10")] == [1]
+    assert seen[-1]["origin"] == "general", "general is the default"
+    assert "dropped 2" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("body", [
+    {"threads": [GEN]},                       # a hub without the filter
+    {"origin": "General", "threads": [GEN]},  # echo checked by value (M8 d)
+    {"origin": "protected", "threads": [GEN]},
+])
+def test_no_echo_means_no_threads_for_a_general_call(monkeypatch, body) -> None:
+    hub, _ = _thread_hub(monkeypatch, body)
+    assert hub.open_threads("/w/p", "2026-10-10", general=True) == []
+
+
+def test_a_protected_call_gets_every_thread_unfiltered(monkeypatch) -> None:
+    hub, seen = _thread_hub(monkeypatch, {"threads": [GEN, PROT, BARE]})
+    assert len(hub.open_threads("/w/p", "2026-10-10", general=False)) == 3
+    assert "origin" not in seen[-1]
+
+
+def test_generate_reports_the_route_it_ended_on(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, prompt: (ENTRY_JSON, "gpt-6.1-sol"))
+    monkeypatch.setattr(d, "_claude_generate", lambda m, p, direct=False: (ENTRY_JSON, {m}))
+    llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
+    assert d.generate(llm, "2026-10-20", LAB, "neutral", [])[2] is None
+    assert d.generate(llm, "2026-10-20", LAB, "neutral", [], route="cwd")[2] == "cwd"
+    gate = [{"thread_id": 1, "question": "see /w/_clientx/r"}]
+    assert d.generate(llm, "2026-10-20", LAB, "neutral", gate)[2] == "prompt"
+
+
+def _route_case(tmp_path, monkeypatch, text, cls):
+    """process_group on one group; returns (open_threads kwargs, posted payload)."""
+    monkeypatch.setattr(d, "generate", lambda llm, day, project, transcript, threads, route=None:
+                        ({"status": "entry", "headline": "h", "summary": "s",
+                          "topics": ["a", "b", "c"], "open_questions": []}, "m", cls or route))
+    calls: list[dict] = []
+    posted: list[dict] = []
+
+    class Hub(StubHub):
+        def open_threads(self, project_path, before, **kw):
+            calls.append(kw)
+            return []
+
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    group = {"entry_date": "2026-10-20", "project_path": LAB, "session_ids": [11], "as_of": None}
+    assert d.process_group(Hub(text), group, _llm(_routing(tmp_path, ROUTING_FULL_TOML)), dry_run=False)
+    return calls[0] if calls else None, posted[0]
+
+
+def test_process_group_posts_the_route_and_asks_threads_per_route(tmp_path, monkeypatch) -> None:
+    kw, p = _route_case(tmp_path, monkeypatch, "neutral", None)
+    assert kw == {"general": True} and p["route"] == "general"
+    kw, p = _route_case(tmp_path, monkeypatch, "edit /w/_clientx/r", None)
+    assert kw == {"general": False} and p["route"] == "protected"
+    # M8 e: found general, turned protected at the gate: general-only list, posts protected.
+    kw, p = _route_case(tmp_path, monkeypatch, "neutral", "prompt")
+    assert kw == {"general": True} and p["route"] == "protected"
+
+
+def test_a_local_skip_posts_no_route() -> None:
+    posted: list[dict] = []
+
+    class Hub(StubHub):
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    group = {"entry_date": "2026-10-20", "project_path": LAB, "session_ids": [11], "as_of": None}
+    assert d.process_group(Hub(text=""), group, object(), dry_run=False)
+    assert posted[0]["status"] == "skip" and "route" not in posted[0]
+
+
+class OriginHub(d.Hub):
+    """A hub stand-in that folds threads by origin as the real one does (tested in
+    crates/hub/tests/journal_threads_test.rs): general only when every mention is general."""
+
+    def __init__(self, days: dict) -> None:
+        super().__init__(url="http://127.0.0.1:9", token="t")
+        self.days, self.entries, self.next_id = days, [], 100
+
+    def session_messages(self, session_id, window=None):
+        return [{"role": "user", "is_sidechain": False, "cwd": None,
+                 "content": [{"type": "text", "text": self.days[session_id]}]}]
+
+    def post_entry(self, payload):
+        ids = []
+        for link in payload.get("open_question_threads") or []:
+            if link is None:
+                self.next_id += 1
+                link = self.next_id
+            ids.append(link)
+        self.entries.append({**payload, "ids": ids})
+
+    def get(self, path, **params):
+        assert path == "/v1/journal/open-questions"
+        threads: dict[int, dict] = {}
+        for e in self.entries:
+            if e["entry_date"] >= params["before"]:
+                continue
+            for q, i in zip(e["open_questions"], e["ids"]):
+                t = threads.setdefault(i, {"thread_id": i, "general": True,
+                                           "last_seen": e["entry_date"]})
+                t["question"], t["general"] = q, t["general"] and e.get("route") == "general"
+        out = [{**t, "origin": "general" if t["general"] else "protected"} for t in threads.values()]
+        body = {"threads": out}
+        if params.get("origin") == "general":
+            body = {"origin": "general", "threads": [t for t in out if t["origin"] == "general"]}
+        return _Resp(body)
+
+
+@pytest.mark.parametrize("day1, offered", [("edit /w/_clientx/r today", False), ("neutral work", True)])
+def test_a_general_day_after_a_protected_day_offers_none_of_its_threads(tmp_path, monkeypatch, day1, offered) -> None:
+    """C5 (task 3.4): day 1 protected → day 2's general prompt offers 0 of day 1's threads.
+    Twin: day 1 general → day 2 offers them."""
+    answer = ('{"status": "entry", "headline": "h", "summary": "s", "topics": ["a", "b", "c"],'
+              ' "open_questions": [{"q": "QUESTION-FROM-DAY-ONE", "continues": null}]}')
+    prompts: list[str] = []
+    monkeypatch.setattr(d, "_claude_generate", lambda m, p, direct=False: (answer, {m}))
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, p: prompts.append(p) or (answer, "gpt-6.1-sol"))
+    hub = OriginHub({1: day1, 2: "neutral follow-up"})
+    llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
+    for day, sid in (("2026-10-20", 1), ("2026-10-21", 2)):
+        group = {"entry_date": day, "project_path": LAB, "session_ids": [sid], "as_of": None}
+        assert d.process_group(hub, group, llm, dry_run=False)
+    assert ("QUESTION-FROM-DAY-ONE" in prompts[-1]) is offered
+    assert hub.entries[1]["route"] == "general"
