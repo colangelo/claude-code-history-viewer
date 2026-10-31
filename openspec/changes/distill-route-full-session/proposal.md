@@ -8,31 +8,52 @@ of a thinking block, and `truncate` keeps a head and a tail of each session. So 
 working folder or file paths sit under a protected marker, or whose only client term falls in a
 dropped middle, goes to the general backend.
 
+**Revision 2 (2026-10-31)** follows the client-side second review of revision 1 (two separate
+Claude reviews, merged as findings M1–M10, verdict "revise, then go"). Revision 1 claimed a `cwd`
+signal the stored record cannot provide (M1), matched markers only on paths (M2), had no task for
+the term half of #10 (M3), and routed on a different string than the one sent (M4). It also left
+sidechains (M5), later days of the same session (M6) and the open-threads feed (M7) outside the
+decision, matched only verbatim path shapes (M8), and failed open on some edges (M9).
+
 ## What Changes
 
-- The hub's `GET /v1/sessions/:id/messages` returns each message's working folder (`cwd`, from the
-  stored raw record) as a new nullable field. Nothing else in the response changes.
-- The distiller decides the route from a **routing view** of the whole group, built before any
-  truncation: the project path, every message's `cwd`, the full text of every tool input, and the
-  full text of every message. A path marker in the project path, in any `cwd` or in any tool input
-  protects the group; a content term anywhere in the full text protects it. The prompt check stays,
-  so nothing that protects today stops protecting.
-- If the routing view cannot be built for a group (a hub read fails), the group is protected
-  (fail closed), as a missing routing file already is.
-- Wider content terms are a change to the routing file, which lives outside this repo and is owned
-  by the client's manager; this change only makes every term reach the full text.
+- **The working folder is stored.** `ClaudeMessage` gains a nullable `cwd`, filled by the Claude
+  provider from the source record, so the daemon's normalized `raw` carries it. The hub's
+  `GET /v1/sessions/:id/messages` returns it. History is not re-ingested: the signal covers data
+  ingested after both Macs run the new daemon, and the spec says so.
+- **One flatten, one view.** A single flatten pass over the group's messages produces both the
+  capped transcript lines and an uncapped routing view, so the prompt is a subset of the view by
+  construction. Sidechain messages enter the view (not the transcript). The view reads each
+  session's whole history, not just the day, so protection sticks to the session.
+- **Markers everywhere, terms everywhere.** Path markers match the project path, every `cwd`, every
+  tool-input value (decoded and normalized) and the full text, tool results included. Content terms
+  match the full text. Path shapes are normalized before matching.
+- **Send-time gate.** On the general route, the exact string about to be sent is checked last for
+  every marker and term; any hit protects the group.
+- **Fail closed, completely.** An unreadable session, a partial read, an unexpected content shape,
+  a missing `cwd` key from an updated hub, or a routing file below its recorded floor protects the
+  group, with a logged class. Matching stops at the first hit and never holds one large string.
+- **The routing file's half is a task.** The client's manager adds the terms and markers #10 needs
+  (an interim set was applied 2026-10-31), and #13's floor and fingerprint land before release.
+  #10 closes only when both halves are in.
+- **Release gates:** #12's origin filter (threads from protected entries offered only to protected
+  calls) ships with or before this change; #14's hardened protected call is recommended to land
+  with it; #18 (protected error paths log no derived text) is linked.
 
 ## Capabilities
 
 ### Modified Capabilities
-- `journal-entries`: the protected-routing requirement decides on the full session, not the prompt.
+- `journal-entries`: protected routing decides on the whole session and on the bytes sent.
 - `archive-search-api`: session messages carry `cwd`.
+- `archive-ingestion`: the stored normalized record keeps the working folder.
 
 ## Impact
 
-- `crates/hub/src/browse.rs` (one column), `scripts/cchv-distill.py` (routing view, `is_protected`).
-- Deploy order: hub first, then the distiller. A distiller run against an older hub sees no `cwd`
-  and still routes on tool inputs and full text; it logs that `cwd` was unavailable.
-- Cost: the routing view holds a group's full text in memory once; groups are one project-day.
-- Second review by the client-side security reviewer before implementation (two-vendor rule does not apply: client
-  work is Claude-only).
+- `crates/history-core` (`ClaudeMessage.cwd`, Claude provider), `crates/sync-daemon` (stores it via
+  `raw`), `crates/hub/src/browse.rs` (returns it), `scripts/cchv-distill.py` (flatten, view,
+  matcher, gate, fail-closed edges).
+- Deploy order: hub, then the daemon on both Macs, then the distiller. Until a Mac runs the new
+  daemon, its new messages have no `cwd`; the other signals still apply.
+- More groups take the protected route (the point); measured by per-class counts after release.
+- Second review by the client-side security reviewer: done for revision 1; revision 2 gets one
+  re-test against M1–M4 before implementation.

@@ -2,7 +2,7 @@
 
 ### Requirement: Protected routing for client projects
 
-The distiller SHALL route each group either to a protected model or to the general backend. It SHALL decide from the whole group before any truncation: a group is protected when a configured path marker appears in its `project_path`, in any message's `cwd`, or in the text of any tool input, or when a configured content term appears in the full text of any message or in the prompt (all case-insensitive). The markers, terms and the protected model id SHALL live in a routing file outside the repository. A protected call SHALL use `claude -p` with the exact configured id and without any `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` in its environment. If the routing file is missing or invalid, or the group's messages cannot be read, the group SHALL be protected.
+The distiller SHALL route each group either to a protected model or to the general backend, deciding from a routing view of every session in the group, read across all of the session's days and including sidechain messages, built from the same flatten pass as the prompt so that the prompt is a subset of the view. A group is protected when a configured path marker appears in its `project_path`, in any message's `cwd`, in any tool-input value or in the full text of any message, or when a configured content term appears in the full text, all case-insensitive and after normalizing URL-encoding, backslashes and split path fields. The markers, terms and the protected model id SHALL live in a routing file outside the repository. A protected call SHALL use `claude -p` with the exact configured id and without any `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` in its environment.
 
 #### Scenario: Path marker routes to the protected model
 - **WHEN** a group's path contains a configured marker
@@ -17,21 +17,51 @@ The distiller SHALL route each group either to a protected model or to the gener
 - **THEN** every group is protected and the run logs why
 
 #### Scenario: A working folder under a marker protects
-- **WHEN** a group's project path matches no marker but one message's `cwd` contains a marker
+- **WHEN** a Claude message ingested with this change has a `cwd` containing a marker and the project path has none
 - **THEN** the group is protected
 
-#### Scenario: A tool input under a marker protects
-- **WHEN** a tool input names a file path containing a marker, past the characters the prompt keeps
+#### Scenario: A marker in text or a tool result protects
+- **WHEN** a marker appears only in a user prompt, a compaction summary, a peer message or a tool result
 - **THEN** the group is protected
+
+#### Scenario: A sidechain or another day of the same session protects
+- **WHEN** a marker appears only in a sidechain tool input, or only on another day of a session in the group
+- **THEN** the group is protected, and the prompt is the same as without the marker
 
 #### Scenario: A term cut from the prompt still protects
 - **WHEN** a content term appears only in the part of a long session that truncation drops from the prompt
 - **THEN** the group is protected
 
-#### Scenario: Unreadable messages protect the group
-- **WHEN** reading a group's messages from the hub fails
-- **THEN** the group is protected and the run logs why
+## ADDED Requirements
 
-#### Scenario: The log names the class, not the match
+### Requirement: Send-time routing gate
+
+On the general route, the distiller SHALL check the exact prompt string it is about to send for every configured marker and term, and SHALL protect the group if any is present.
+
+#### Scenario: A marker only in an offered thread
+- **WHEN** no session in the group holds a marker but an offered open thread does
+- **THEN** the group is protected with class `prompt`
+
+### Requirement: Routing fails closed
+
+The distiller SHALL protect a group, and log the class, when any session in it cannot be read in full, when a message has a content shape the flatten does not know, when an updated hub returns messages without a `cwd` key, or when the routing file is missing, invalid, or below its recorded floor or fingerprint. One failing group SHALL NOT stop the next.
+
+#### Scenario: A routing file below its floor protects everything
+- **WHEN** the routing file parses but holds fewer markers or terms than its recorded floor, or its fingerprint differs
+- **THEN** every group is protected with class `protect_all` and the run logs why
+
+#### Scenario: A partial read protects
+- **WHEN** a group has two sessions and one cannot be read
+- **THEN** the group is protected with class `unreadable`
+
+#### Scenario: A hub without the cwd key
+- **WHEN** the hub is at or past this release and its messages carry no `cwd` key
+- **THEN** the group is protected with class `cwd_unavailable`, while a `cwd` of null is no signal
+
+### Requirement: Routing log names the class only
+
+Every routing decision SHALL be logged with its class (`path`, `cwd`, `cwd_unavailable`, `tool_input`, `text_marker`, `text_term`, `prompt`, `unreadable`, `protect_all`) and never with the marker, the term or the matched text, and a run SHALL end with per-class counts.
+
+#### Scenario: A protected group is logged
 - **WHEN** a group is protected
-- **THEN** the log line names which input class matched (path, cwd, tool input, text or prompt) and never the marker, the term or the matched text
+- **THEN** its log line names the class and holds no marker, term or matched text
