@@ -25,7 +25,7 @@
 
 - [x] 4.1 Routing file, entries by kind (C1), by the client's manager's decision, applied by cchv 2026-10-31: plain path markers (the client roots and repos, 11); their encoded storage forms (`/` and `_` → `-`, 10); content terms (6), among them the single client-name term that covers the org URL form, the client's hosts, its controller and reviewer session names and the encoded form in text. Acceptance probe per entry through the INSTALLED loader against the LIVE file: 11/11, 10/10 and 6/6 routed protected; 3 lab controls 0/3. Fingerprint recorded with the client's manager.
 - [x] 4.2 #13's floor and fingerprint in `~/.config/cchv/distill-routing.floor.json` (not the routing file), checked at start, else protect everything; `--record-routing-floor` re-records after a widening edit and refuses to lower a count (C6)
-- [ ] 4.3 #12's origin filter ships with or before this change (release gate), with its test: a project with one protected day then one general day → the general prompt offers 0 threads from the protected entry (C5)
+- [ ] 4.3 #12's origin filter ships with or before this change (release gate), as the change `distill-thread-origin-filter`, with its test: a project with one protected day then one general day → the general prompt offers 0 threads from the protected entry (C5)
 - [ ] 4.4 #14's hardened protected call: land with this change if ready (recommended by both reviewers); #18 linked
 
 ## 5. Release
