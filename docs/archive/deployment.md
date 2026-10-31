@@ -2819,6 +2819,16 @@ equivalently.
     lower a count unless `--narrowing-approved-by "<who, where>"` names their word. Record
     it once on each host right after installing a distiller that checks it, before its
     next run.
+  - **Open threads by origin** (`openspec/changes/distill-thread-origin-filter`, migration
+    0016): each entry stores the route it was generated on (`journal_entries.route`, null on
+    rows from before 0016 and from older distillers). A thread is general origin only when every
+    entry mentioning it is `general` and shares no session with a protected day; a general call
+    is offered only those (`/v1/journal/open-questions?origin=general`, which the hub echoes),
+    and the hub refuses a `general` entry that links or resolves any other thread. Read-back:
+    `scripts/sql/journal-thread-origin-readback.sql` must return no rows. Release order: hub
+    (0016) before the distiller; until then a new distiller offers no threads on general days.
+    Rollback: `DELETE FROM _sqlx_migrations WHERE version = 16` before the older binary (the
+    columns may stay; their route then stops counting).
   - **What the log shows:** every call logs `call <day> <path>: route=… requested=… served=…`.
     The served model comes from `claude -p`'s `modelUsage` or aiproxy's response `model`.
   - **What gets refused:** a protected result whose `modelUsage` is not exactly `{<id>}` is

@@ -1009,7 +1009,7 @@ def test_no_echo_means_no_threads_for_a_general_call(monkeypatch, body) -> None:
 def test_a_protected_call_gets_every_thread_unfiltered(monkeypatch) -> None:
     hub, seen = _thread_hub(monkeypatch, {"threads": [GEN, PROT, BARE]})
     assert len(hub.open_threads("/w/p", "2026-10-10", general=False)) == 3
-    assert "origin" not in seen[-1]
+    assert seen[-1].get("origin") is None, "Hub.get drops None params: no filter is sent"
 
 
 def test_generate_reports_the_route_it_ended_on(tmp_path, monkeypatch) -> None:

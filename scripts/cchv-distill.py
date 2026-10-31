@@ -461,8 +461,14 @@ class Hub:
             if not page or offset >= total:
                 return msgs
 
-    def open_threads(self, project_path: str, before: str) -> list[dict]:
+    def open_threads(self, project_path: str, before: str, general: bool = True) -> list[dict]:
         """The project's unresolved threads mentioned before `before` (#15).
+
+        For a general call (the default), only threads of general origin (#84
+        #12): the hub must echo `origin == "general"` (a hub without the filter
+        ignores the parameter and would return every thread, so no echo means no
+        threads), and any returned thread whose own `origin` is not `general` is
+        dropped too. A protected call gets every thread.
 
         Best-effort: a hub without the endpoint (404 before the release lands)
         or any failure yields [] and the entry is written without links. Every
@@ -476,8 +482,21 @@ class Hub:
                 days=THREAD_LOOKBACK_DAYS,
                 state="open,quiet",
                 limit=MAX_OFFERED_THREADS,
+                origin="general" if general else None,
             )
-            return list(r.json().get("threads") or [])
+            body = r.json()
+            threads = list(body.get("threads") or [])
+            if not general:
+                return threads
+            if body.get("origin") != "general":
+                log(f"WARN: hub did not apply the general-origin filter for {project_path}; "
+                    f"offering no threads")
+                return []
+            kept = [t for t in threads if t.get("origin") == "general"]
+            if len(kept) < len(threads):
+                log(f"WARN: dropped {len(threads) - len(kept)} thread(s) not of general origin "
+                    f"for {project_path}")
+            return kept
         except Exception as e:  # noqa: BLE001 - never costs the entry
             log(f"WARN: open threads unavailable for {project_path} (writing without links): {e}")
             return []
@@ -1073,11 +1092,13 @@ def _send_general(llm: LLM, prompt: str) -> tuple[str, str]:
 def generate(
     llm: LLM, entry_date: str, project: str, transcript: str, threads: list[dict],
     route: str | None = None,
-) -> tuple[dict, str]:
-    """Generate one entry → (entry, serving model). Raises `Refused` per the guard.
+) -> tuple[dict, str, str | None]:
+    """Generate one entry → (entry, serving model, route class). Raises `Refused` per the guard.
 
     `route` is the group's class from `route_group`; None means it found nothing,
-    and the prompt itself is still checked here and again at the send.
+    and the prompt itself is still checked here and again at the send. The
+    returned class is the one the call ended on (None = general), so a group the
+    send-time gate turned protected reports `prompt` (#84 #12).
     """
     prompt = build_prompt(entry_date, project, transcript, threads)
     label = f"{entry_date} {project}"
@@ -1101,7 +1122,7 @@ def generate(
     # tolerate stray code fences despite the instruction
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
     try:
-        return json.loads(raw), served
+        return json.loads(raw), served, cls
     except json.JSONDecodeError as e:
         raise RuntimeError(
             f"{llm.backend} result is not entry JSON (result[:300]={raw[:300]!r})"
@@ -1152,12 +1173,17 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
     transcript = build_transcript(hub, session_ids, entry_date)
     threads: list[dict] = []
     served: str | None = None  # no call, no model: a local skip records none
+    posted_route: str | None = None  # likewise no route: it has no questions
     if not transcript.strip():
         entry = {"status": "skip", "skip_reason": "no textual content in this day's messages"}
     else:
         route = route_group(hub, llm.routing, project_path, session_ids)
-        threads = hub.open_threads(project_path, entry_date)
-        entry, served = generate(llm, entry_date, project_path, transcript, threads, route=route)
+        # A general call is offered only threads of general origin (#84 #12);
+        # if the gate later turns it protected, it keeps that shorter list.
+        threads = hub.open_threads(project_path, entry_date, general=route is None)
+        entry, served, cls = generate(llm, entry_date, project_path, transcript, threads,
+                                      route=route)
+        posted_route = "general" if cls is None else "protected"
 
     if err := validate(entry):
         log(f"REJECTED {label}: {err} — leaving pending")
@@ -1177,6 +1203,8 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
         "session_ids": session_ids,
         "model": served,
     }
+    if posted_route is not None:
+        payload["route"] = posted_route
     if entry["status"] == "entry":
         offered = {int(t["thread_id"]) for t in threads}
         questions, links, resolved = thread_links(entry, offered)
