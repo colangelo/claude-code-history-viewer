@@ -512,8 +512,11 @@ class Hub:
                 # Raise an HTTPError (carrying the response) so `_with_retry`
                 # retries a 5xx but re-raises a 4xx; keep the body in the message
                 # for the failure log either way.
+                # A protected (or route-less) entry's error body may echo its
+                # text: describe it instead (security-aruba #18).
+                body = r.text[:500] if payload.get("route") == "general" else describe(r.text)
                 raise requests.HTTPError(
-                    f"POST /v1/journal/entries {r.status_code}: {r.text[:500]}",
+                    f"POST /v1/journal/entries {r.status_code}: {body}",
                     response=r,
                 )
 
@@ -941,12 +944,23 @@ def _aiproxy_generate(llm: LLM, prompt: str) -> tuple[str, str]:
 PROXY_ENV = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
 
 
+def describe(text: str) -> str:
+    """Text as length and hash only: what a protected group's log may carry
+    instead of a slice of model or CLI output (security-aruba #18)."""
+    return f"<{len(text)} chars, sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]}>"
+
+
 def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str, set[str]]:
     """One `claude -p` call → (result, the models its `modelUsage` reports).
 
     `direct` strips the proxy variables, so the call cannot leave the direct login.
+    It is the protected call, so its errors describe the CLI's output by length
+    and hash and never quote it (security-aruba #18).
     """
     env = {k: v for k, v in os.environ.items() if not (direct and k in PROXY_ENV)}
+
+    def show(text: str) -> str:
+        return describe(text) if direct else repr(text[:300])
 
     def run_claude() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -972,17 +986,18 @@ def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str
     if proc.returncode != 0:
         raise RuntimeError(
             f"claude -p exited {proc.returncode} "
-            f"(stderr[:300]={proc.stderr[:300]!r}, stdout[:300]={proc.stdout[:300]!r})"
+            f"(stderr={show(proc.stderr)}, stdout={show(proc.stdout)})"
         )
     try:
         wrapper = json.loads(proc.stdout)
     except json.JSONDecodeError as e:
         raise RuntimeError(
-            f"claude -p emitted non-JSON (stdout[:300]={proc.stdout[:300]!r}, "
-            f"stderr[:300]={proc.stderr[:300]!r})"
+            f"claude -p emitted non-JSON (stdout={show(proc.stdout)}, "
+            f"stderr={show(proc.stderr)})"
         ) from e
     if wrapper.get("is_error"):
-        raise RuntimeError(f"claude -p returned an error result: {str(wrapper)[:400]}")
+        raise RuntimeError(f"claude -p returned an error result: "
+                           f"{describe(str(wrapper)) if direct else str(wrapper)[:400]}")
     usage = wrapper.get("modelUsage")
     return wrapper.get("result", ""), set(usage) if isinstance(usage, dict) else set()
 
@@ -1127,8 +1142,10 @@ def generate(
     try:
         return json.loads(raw), served, cls
     except json.JSONDecodeError as e:
+        shown = describe(raw) if cls is not None else repr(raw[:300])
         raise RuntimeError(
-            f"{llm.backend} result is not entry JSON (result[:300]={raw[:300]!r})"
+            f"{'protected' if cls is not None else llm.backend} result is not entry JSON "
+            f"(result={shown})"
         ) from e
 
 
@@ -1143,15 +1160,18 @@ def validate(entry: dict) -> str | None:
         return None
     if isinstance(entry.get("topics"), list) and len(entry["topics"]) > 8:
         entry["topics"] = entry["topics"][:8]
+    # Messages name the problem, never the model's words: they are logged on
+    # protected groups too (review 3, M9).
     if status != "entry":
-        return f"unknown status {status!r}"
+        return f"unknown status (a {type(status).__name__})"
     if not (entry.get("headline") or "").strip():
         return "empty headline"
     if not (entry.get("summary") or "").strip():
         return "empty summary"
     topics = entry.get("topics")
     if not isinstance(topics, list) or not 3 <= len(topics) <= 8:
-        return f"topics must be a list of 3-8 (got {topics!r})"
+        got = f"{len(topics)} items" if isinstance(topics, list) else f"a {type(topics).__name__}"
+        return f"topics must be a list of 3-8 (got {got})"
     oq = entry.get("open_questions")
     if oq is not None and not isinstance(oq, list):
         return "open_questions must be a list"

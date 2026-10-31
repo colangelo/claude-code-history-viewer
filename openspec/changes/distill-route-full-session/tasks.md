@@ -19,6 +19,7 @@
 - [x] 3.4 Send-time gate wrapping the single send function: every outbound string of a general call (system and user text, every retry, both general backends), normalized as the view is; a hit refuses the send and protects (class `prompt`); test with a stub that records all outbound strings (M4, C4)
 - [x] 3.5 Fail closed with classes: unreadable or partial session, a group over the read budget, unknown content shape (next group continues), a message with no `cwd` key (protect, `cwd_unavailable`; `null` is no signal), routing file below floor (M9, C3, C8)
 - [x] 3.6 Log the class only; per-class counts at the end of a run
+- [x] 3.8 No model or CLI text in any log line or raised message on a protected group: length and hash only (security-aruba #18, review 3 M9); tests: a stub `claude -p` exiting non-zero, emitting non-JSON, returning an error result, a non-JSON entry, an invalid entry quoting its topics, a hub 400 echo; no substring of the stub output longer than 8 characters reaches the log
 - [x] 3.7 Tests, each with a must-not-protect twin: marker only in a user prompt, a compaction summary, a tool result, a peer message, a sidechain tool input, a later day of the same session, an offered thread; each M8 path shape; the client folder name followed by a space, a backtick, a quote, a colon, a newline and the end of the string, each with a lab twin whose longer name only starts with it (C2); a term only in a cut middle; a hub stub whose messages have no `cwd` key → protected, and one with `cwd: null` → general (C3); a malformed content item → that group protected, the next group processed (C7); N = 2 sessions with one failing read
 
 ## 4. Routing file and gates (M3, M7)
@@ -26,7 +27,7 @@
 - [x] 4.1 Routing file, entries by kind (C1), by the client's manager's decision, applied by cchv 2026-10-31: plain path markers (the client roots and repos, 11); their encoded storage forms (`/` and `_` → `-`, 10); content terms (6), among them the single client-name term that covers the org URL form, the client's hosts, its controller and reviewer session names and the encoded form in text. Acceptance probe per entry through the INSTALLED loader against the LIVE file: 11/11, 10/10 and 6/6 routed protected; 3 lab controls 0/3. Fingerprint recorded with the client's manager.
 - [x] 4.2 #13's floor and fingerprint in `~/.config/cchv/distill-routing.floor.json` (not the routing file), checked at start, else protect everything; `--record-routing-floor` re-records after a widening edit and refuses to lower a count (C6)
 - [ ] 4.3 #12's origin filter ships with or before this change (release gate), as the change `distill-thread-origin-filter`, with its test: a project with one protected day then one general day → the general prompt offers 0 threads from the protected entry (C5)
-- [ ] 4.4 #14's hardened protected call: land with this change if ready (recommended by both reviewers); #18 linked
+- [ ] 4.4 #14's hardened protected call: NOT in this release (manager-lab 2026-10-31 16:53Z); the first follow-up after it
 - [x] 4.5 Review 3 (thread origin) M4: the segment boundary by character class (before: not [a-z0-9_]; after: not [a-z0-9_-]); prose punctuation and wrappers protect, longer names do not (release gate)
 
 ## 5. Release

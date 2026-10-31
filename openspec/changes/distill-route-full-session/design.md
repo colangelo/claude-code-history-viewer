@@ -51,6 +51,10 @@ rows). Review findings M1–M10 refer to the client-side review of revision 1.
    recorded the same way. Matching is per message and stops at the first hit.
 7. **Log classes only.** `path`, `cwd`, `cwd_unavailable`, `tool_input`, `text_marker`,
    `text_term`, `prompt`, `unreadable`, `protect_all`; never the marker, term or matched text.
+   **Every log line and raised message, not only the routing line** (security-aruba #18, review 3
+   M9): on a protected call, model and CLI output (a non-zero exit, non-JSON output, an error
+   result, a non-JSON entry, a hub error body) is shown as length and a short sha256 only;
+   `validate()` messages name the problem, never the model's words, on every route.
 8. **The open-threads feed (M7).** Newly protected groups write threads into lab projects. #12's
    origin filter (threads from protected entries offered only to protected calls) is a release gate
    for this change: it ships with it or before.
