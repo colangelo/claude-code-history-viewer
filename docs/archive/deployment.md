@@ -2795,13 +2795,30 @@ equivalently.
   ```toml
   [protected]
   model = "claude-haiku-5-5"            # exact id, never an alias
-  path_markers = ["/_clientx/"]         # case-insensitive substrings of project_path, any host
-  content_terms = ["clientx.example"]   # case-insensitive substrings of the full prompt
+  path_markers = ["/_clientx/"]         # project path, every cwd, tool-input values, full text
+  content_terms = ["clientx.example"]   # full text of every message
   ```
 
   A group that matches either list goes to `claude -p --model <id>`, with `ANTHROPIC_BASE_URL`
   and `ANTHROPIC_AUTH_TOKEN` stripped, whatever the general backend is. **A missing or invalid
   file protects every group** (the run logs `WARN: routing: every group protected (…)`).
+  - **Whole-session routing** (`openspec/changes/distill-route-full-session/`): the route is
+    decided on every message of every session in the group, all days and sidechains, before
+    any cut; strings are URL-decoded, `\` folded to `/` and lower-cased first, and a marker
+    `/<name>` also matches `<name>` as a path segment. Every general call passes a send-time
+    check of its outbound text. Any way of not knowing (a failed or partial read, an unknown
+    content shape, a hub message with no `cwd` key) protects the group. Each protected call
+    logs `route=protected class=<class>` (never the matched text) and the run ends with
+    `routes: <class>=<n>, …`.
+  - **Floor record** `~/.config/cchv/distill-routing.floor.json` (override
+    `CCHV_DISTILL_ROUTING_FLOOR`, mode 600): the minimum count per kind (plain path markers,
+    encoded path markers starting with `-`, content terms) and the routing file's sha256.
+    **A missing or invalid record, a count below it or a different hash protects every
+    group.** After an edit approved by the client's manager, re-record with
+    `cchv-distill --record-routing-floor` and send them the printed sha256; it refuses to
+    lower a count unless `--narrowing-approved-by "<who, where>"` names their word. Record
+    it once on each host right after installing a distiller that checks it, before its
+    next run.
   - **What the log shows:** every call logs `call <day> <path>: route=… requested=… served=…`.
     The served model comes from `claude -p`'s `modelUsage` or aiproxy's response `model`.
   - **What gets refused:** a protected result whose `modelUsage` is not exactly `{<id>}` is

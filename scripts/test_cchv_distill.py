@@ -629,7 +629,7 @@ content_terms = ["clientx.example", "BuildThing"]
 LAB = "/Users/ac/_sync/dev/lab"
 
 
-def _msg(*items, role="user", sidechain=False, cwd=..., content=None):
+def _msg(*items, role="user", sidechain=False, cwd: object = ..., content=None):
     m = {"role": role, "is_sidechain": sidechain,
          "content": content if content is not None else list(items)}
     if cwd is not ...:
@@ -729,6 +729,29 @@ def test_a_marker_anywhere_in_the_session_protects(tmp_path, message) -> None:
     assert hit in ("text_marker", "tool_input")
 
 
+def test_a_peer_message_naming_a_term_protects(tmp_path) -> None:
+    peer = _msg(_text("[agent-bell] peer message from the buildthing reviewer: done"), cwd=None)
+    hit, _ = _route(tmp_path, {1: [peer]})
+    assert hit == "text_term"
+
+
+# The must-not-protect twin of each shape above: the same shape naming a lab
+# folder, and a peer message with no term. (A longer name that only starts with
+# the client folder is a twin only for the bare segment form, C2 above: a marker
+# with its slash, `/_clientx`, is a plain substring and protects `/_clientxtra/`
+# too, a false positive that costs a protected call, never confidentiality.)
+@pytest.mark.parametrize("message", [
+    _msg(_text("please read /Users/ac/_sync/dev/lab/repo/README"), cwd=None),
+    _msg({"type": "tool_result", "content": "x" * 900 + " /Users/ac/_sync/dev/lab/r/a.py"}, cwd=None),
+    _msg(_text("Summary: earlier we edited /lab/r"), role="assistant", cwd=None),
+    _msg({"type": "tool_use", "name": "Read", "input": {"file_path": "/w/lab/r/a.py"}}, sidechain=True, cwd=None),
+    _msg(_text("[agent-bell] peer message from the lab reviewer: done"), cwd=None),
+])
+def test_the_lab_twin_of_each_shape_stays_general(tmp_path, message) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd=None), message]})
+    assert hit is None
+
+
 def test_the_view_reads_the_whole_session_not_the_day(tmp_path) -> None:
     _, hub = _route(tmp_path, {1: [_msg(_text("neutral"), cwd=None)]})
     assert hub.windows == [(1, None)]
@@ -761,6 +784,36 @@ def test_one_unreadable_session_of_two_protects(tmp_path) -> None:
 def test_a_malformed_content_item_protects(tmp_path) -> None:
     hit, _ = _route(tmp_path, {1: [_msg(content=[42, "stray"], cwd=None)]})
     assert hit == "unreadable"
+
+
+@pytest.mark.parametrize("cap", ["ROUTING_MAX_MESSAGES", "ROUTING_MAX_CHARS"])
+def test_a_group_over_the_read_budget_protects(tmp_path, monkeypatch, cap) -> None:
+    neutral = {1: [_msg(_text("neutral words"), cwd=None) for _ in range(3)]}
+    hit, _ = _route(tmp_path, neutral)
+    assert hit is None, "under the default budget the same group is general"
+    monkeypatch.setattr(d, cap, 2 if cap == "ROUTING_MAX_MESSAGES" else 20)
+    hit, _ = _route(tmp_path, neutral)
+    assert hit == "unreadable"
+
+
+def test_a_malformed_group_does_not_stop_the_next(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_FULL_TOML)
+    hub = RoutingHub({1: [_msg(content=[42, "stray"], cwd=None)], 2: [_msg(_text("neutral"), cwd=None)]})
+    assert d.route_group(hub, r, LAB, [1]) == "unreadable"
+    assert d.route_group(hub, r, LAB, [2]) is None
+
+
+# C4: the send function itself refuses, on both general backends, for every
+# encoded form; a retry resends the same string, so it passes the same check.
+@pytest.mark.parametrize("backend", ["aiproxy", "claude"])
+def test_the_send_gate_refuses_on_both_general_backends(tmp_path, monkeypatch, backend) -> None:
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda *a, **k: pytest.fail("aiproxy reached"))
+    monkeypatch.setattr(d, "_claude_generate", lambda *a, **k: pytest.fail("claude reached"))
+    llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML), backend=backend, model="haiku")
+    for prompt in ["see %2FUsers%2Fac%2F_clientx%2Frepo", "C:\\Users\\ac\\_clientx\\r",
+                   "the BUILDTHING job"]:
+        with pytest.raises(d.GateHit):
+            d._send_general(llm, prompt)
 
 
 def test_every_capped_part_is_inside_the_view(tmp_path) -> None:

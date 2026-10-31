@@ -38,6 +38,7 @@ Secrets (house launchd-resilience contract — never prompt headless):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -79,6 +80,16 @@ ROUTING_FILE = Path(
     or Path.home() / ".config/cchv/distill-routing.toml"
 )
 FALLBACK_PROTECTED_MODEL = "claude-haiku-5-5"
+# The floor record (#84 #13, re-test C6): the minimum count per kind of routing
+# entry and the routing file's sha256, kept OUTSIDE the routing file so one edit
+# cannot lower both. Written only by `--record-routing-floor`, checked at every
+# start; missing, invalid, below its counts or a different hash → every group
+# protected.
+ROUTING_FLOOR_FILE = Path(
+    os.environ.get("CCHV_DISTILL_ROUTING_FLOOR")
+    or Path.home() / ".config/cchv/distill-routing.floor.json"
+)
+FLOOR_KINDS = ("plain_path_markers", "encoded_path_markers", "content_terms")
 
 
 def _endpoints() -> dict[str, str]:
@@ -713,8 +724,10 @@ def normalize(text: str) -> str:
 
 
 # The routing pass reads every message of every session in a group; past this
-# many it stops and protects the group rather than route on a partial view.
+# many messages, or this many characters of text, it stops and protects the
+# group rather than route on a partial view (#84 C8, class `unreadable`).
 ROUTING_MAX_MESSAGES = 200_000
+ROUTING_MAX_CHARS = 400_000_000
 
 
 def route_group(hub, routing: Routing, project_path: str, session_ids: list[int]) -> str | None:
@@ -730,7 +743,7 @@ def route_group(hub, routing: Routing, project_path: str, session_ids: list[int]
         return "protect_all"
     if routing.marker_in(normalize(project_path)):
         return "path"
-    seen = 0
+    seen = chars = 0
     for sid in session_ids:
         try:
             msgs = hub.session_messages(sid)
@@ -747,6 +760,9 @@ def route_group(hub, routing: Routing, project_path: str, session_ids: list[int]
             f = flatten(m.get("content"))
             if f.unknown:
                 return "unreadable"
+            chars += sum(map(len, f.full)) + sum(map(len, f.tool_values))
+            if chars > ROUTING_MAX_CHARS:
+                return "unreadable"
             if any(routing.marker_in(normalize(v)) for v in f.tool_values):
                 return "tool_input"
             for part in f.full:
@@ -758,17 +774,57 @@ def route_group(hub, routing: Routing, project_path: str, session_ids: list[int]
     return None
 
 
-def load_routing(path: Path = ROUTING_FILE) -> Routing:
-    """Read the routing file; any failure protects every group (fail closed)."""
+def routing_kinds(r: Routing) -> dict[str, int]:
+    """Entry counts per floor kind. An encoded storage form (`/` and `_` → `-`)
+    starts with `-` and holds no `/`; every other marker is a plain one."""
+    encoded = sum(1 for m in r.path_markers if m.startswith("-") and "/" not in m)
+    return {"plain_path_markers": len(r.path_markers) - encoded,
+            "encoded_path_markers": encoded,
+            "content_terms": len(r.content_terms)}
+
+
+def _read_floor(floor: Path) -> dict:
+    """The floor record; raises FileNotFoundError, or ValueError when invalid."""
+    rec = json.loads(floor.read_text())
+    if not (isinstance(rec, dict) and isinstance(rec.get("sha256"), str)
+            and all(type(rec.get(k)) is int for k in FLOOR_KINDS)):
+        raise ValueError("not a floor record")
+    return rec
+
+
+def _floor_problem(data: bytes, r: Routing, floor: Path) -> str | None:
+    """Why the routing file does not pass its floor record, or None. Names kinds, never entries."""
+    try:
+        rec = _read_floor(floor)
+    except FileNotFoundError:
+        return f"no routing floor recorded at {floor} (run --record-routing-floor)"
+    except (OSError, ValueError) as e:
+        return f"routing floor {floor} unreadable or invalid: {e}"
+    kinds = routing_kinds(r)
+    low = [k for k in FLOOR_KINDS if kinds[k] < rec[k]]
+    if low:
+        return f"routing file below its floor ({', '.join(low)})"
+    if hashlib.sha256(data).hexdigest() != rec["sha256"]:
+        return ("routing file fingerprint differs from its floor record "
+                "(re-record after an approved edit)")
+    return None
+
+
+def load_routing(path: Path = ROUTING_FILE, floor: Path | None = None) -> Routing:
+    """Read the routing file; any failure protects every group (fail closed).
+
+    With `floor`, the file must also pass its floor record (#84 #13, C6).
+    """
 
     def protect_all(reason: str) -> Routing:
         return Routing(model=FALLBACK_PROTECTED_MODEL, protect_all=True, reason=reason)
 
     try:
-        cfg = tomllib.loads(path.read_text())
+        data = path.read_bytes()
+        cfg = tomllib.loads(data.decode())
     except FileNotFoundError:
         return protect_all(f"{path} not found")
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    except (OSError, ValueError) as e:  # TOMLDecodeError and UnicodeDecodeError are ValueErrors
         return protect_all(f"{path} unreadable: {e}")
     sect = cfg.get("protected")
     if not isinstance(sect, dict):
@@ -780,7 +836,51 @@ def load_routing(path: Path = ROUTING_FILE) -> Routing:
     if not all(isinstance(x, list) and all(isinstance(v, str) and v for v in x)
                for x in (markers, terms)):
         return protect_all(f"{path}: path_markers/content_terms must be lists of strings")
-    return Routing(model=model.strip(), path_markers=markers, content_terms=terms)
+    r = Routing(model=model.strip(), path_markers=markers, content_terms=terms)
+    if floor is not None and (problem := _floor_problem(data, r, floor)):
+        return protect_all(problem)
+    return r
+
+
+def record_routing_floor(path: Path, floor: Path,
+                         narrowing_approved_by: str | None = None) -> tuple[bool, str]:
+    """Record the routing file's counts and sha256 as its floor (`--record-routing-floor`).
+
+    Run after an approved edit. Refuses an invalid routing file, an unreadable
+    floor record, and any count lower than the recorded one unless the
+    narrowing is named (the client's manager's word). The returned message
+    carries the new fingerprint for the client's manager.
+    """
+    r = load_routing(path)
+    if r.protect_all:
+        return False, f"refused: {r.reason}"
+    data = path.read_bytes()
+    kinds = routing_kinds(r)
+    try:
+        old = _read_floor(floor)
+    except FileNotFoundError:
+        old = {}  # first record: nothing to lower
+    except (OSError, ValueError) as e:
+        return False, f"refused: existing floor {floor} unreadable or invalid: {e}"
+    lower = [k for k in FLOOR_KINDS if k in old and kinds[k] < old[k]]
+    if lower and not narrowing_approved_by:
+        return False, ("refused: would lower "
+                       + ", ".join(f"{k} {old[k]} -> {kinds[k]}" for k in lower)
+                       + " (a narrowing needs the client's manager's word: "
+                         "--narrowing-approved-by)")
+    rec: dict = {**kinds, "sha256": hashlib.sha256(data).hexdigest(),
+                 "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if lower:
+        rec["narrowing_approved_by"] = narrowing_approved_by
+    floor.parent.mkdir(parents=True, exist_ok=True)
+    tmp = floor.with_name(floor.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(rec, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, floor)
+    return True, (f"recorded {floor}: " + ", ".join(f"{k}={kinds[k]}" for k in FLOOR_KINDS)
+                  + f"; sha256 {rec['sha256']}")
 
 
 @dataclass
@@ -790,7 +890,8 @@ class LLM:
     effort: str
     aiproxy_url: str = DEFAULT_AIPROXY_URL
     aiproxy_key: str | None = None
-    routing: Routing = field(default_factory=lambda: load_routing())
+    routing: Routing = field(
+        default_factory=lambda: load_routing(ROUTING_FILE, floor=ROUTING_FLOOR_FILE))
 
 
 def _aiproxy_generate(llm: LLM, prompt: str) -> tuple[str, str]:
@@ -1121,7 +1222,18 @@ def main() -> int:
                     help="max groups this run (default: 50 forward, 20 backfill)")
     ap.add_argument("--dry-run", action="store_true",
                     help="generate + validate + print, never POST")
+    ap.add_argument("--record-routing-floor", action="store_true",
+                    help="record the routing file's counts and sha256 as its floor, then exit "
+                         "(after an approved edit; refuses to lower a count)")
+    ap.add_argument("--narrowing-approved-by",
+                    help="with --record-routing-floor: who approved lowering a count")
     args = ap.parse_args()
+
+    if args.record_routing_floor:
+        ok, msg = record_routing_floor(ROUTING_FILE, ROUTING_FLOOR_FILE,
+                                       args.narrowing_approved_by)
+        log(msg)
+        return 0 if ok else 2
 
     if args.from_date and not args.backfill:
         ap.error("--from requires --backfill")
