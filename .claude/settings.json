@@ -20,5 +20,72 @@
       "Bash(grep:*)",
       "Bash(cargo:*)"
     ]
+  },
+  "sandbox": {
+    "$comment": "Sandbox pilot, one week from 2026-10-31 (ac, asks a1030-20). Bash only. Write paths beyond this repo: its worktrees; ~/.config/cchv (notes, release staging, sandbox log); the fleet cargo lock; cargo/rustup, uv and pnpm caches for builds; the installed distiller copy (reinstalled each release); the reconcile records. Excluded commands open raw TCP (NATS, pg1), which the sandbox cannot proxy: agent-bell and cchv's three narrow wrappers (bell, pg1q read-only, relay-peek). Tailnet hosts are NOT listed here (public fork): the pilot launch file adds them with strictAllowlist. Blocked calls are logged by .claude/hooks/sandbox-log.py.",
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "excludedCommands": [
+      "agent-bell:*",
+      "~/.config/cchv/bin/bell:*",
+      "~/.config/cchv/bin/pg1q:*",
+      "~/.config/cchv/bin/relay-peek",
+      "~/_sync/dev/infra/tools/relay-send:*"
+    ],
+    "filesystem": {
+      "allowWrite": [
+        "~/dev/worktrees/claude-code-history-viewer/**",
+        "~/.config/cchv/**",
+        "/tmp/m4m-heavy.lock",
+        "~/.cargo/**",
+        "~/.rustup/**",
+        "~/.cache/uv/**",
+        "~/.local/share/uv/**",
+        "~/Library/pnpm/**",
+        "~/.local/bin/cchv-distill",
+        "~/_sync/dev/.agent-state/reconcile/**"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "uploads.github.com",
+        "*.githubusercontent.com",
+        "crates.io",
+        "static.crates.io",
+        "index.crates.io",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "localhost",
+        "127.0.0.1"
+      ],
+      "allowLocalBinding": true
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/sandbox-log.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/sandbox-log.py"
+          }
+        ]
+      }
+    ]
   }
 }
