@@ -27,6 +27,7 @@
 - [x] 4.2 #13's floor and fingerprint in `~/.config/cchv/distill-routing.floor.json` (not the routing file), checked at start, else protect everything; `--record-routing-floor` re-records after a widening edit and refuses to lower a count (C6)
 - [ ] 4.3 #12's origin filter ships with or before this change (release gate), as the change `distill-thread-origin-filter`, with its test: a project with one protected day then one general day → the general prompt offers 0 threads from the protected entry (C5)
 - [ ] 4.4 #14's hardened protected call: land with this change if ready (recommended by both reviewers); #18 linked
+- [x] 4.5 Review 3 (thread origin) M4: the segment boundary by character class (before: not [a-z0-9_]; after: not [a-z0-9_-]); prose punctuation and wrappers protect, longer names do not (release gate)
 
 ## 5. Release
 

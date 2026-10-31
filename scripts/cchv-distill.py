@@ -709,11 +709,14 @@ class Routing:
     def __post_init__(self) -> None:
         self._markers = [normalize(m) for m in self.path_markers]
         self._terms = [normalize(t) for t in self.content_terms]
-        # A marker `/<name>` also matches `<name>` as a path segment (#84 C2):
-        # after start, `/`, `-`, whitespace, a quote, a backtick, `:` or `=`;
-        # before end, `/`, whitespace, a quote, a backtick, `:`, `,`, `)` or `]`.
+        # A marker `/<name>` also matches `<name>` as a path segment (#84 C2),
+        # bounded by character class (review 3, M4): before it, the start or any
+        # character outside [a-z0-9_]; after it, the end or any character outside
+        # [a-z0-9_-]. Prose punctuation and wrappers (`.`, `;`, `?`, `**`, `()`,
+        # `<>`, `[]`) therefore match; a longer name (`<name>-lab`, `<name>x`)
+        # does not. A `<name>.git` also matches: it costs a protected call only.
         self._segments = [
-            re.compile(r"(?:^|[/\-\s'\"`:=])" + re.escape(m.strip("/")) + r"(?=$|[/\s'\"`:,)\]])")
+            re.compile(r"(?<![a-z0-9_])" + re.escape(m.strip("/")) + r"(?![a-z0-9_-])")
             for m in self._markers if m.startswith("/") and m.strip("/")
         ]
 
