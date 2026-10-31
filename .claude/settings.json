@@ -51,7 +51,7 @@
         "github.com",
         "api.github.com",
         "uploads.github.com",
-        "*.githubusercontent.com",
+        "release-assets.githubusercontent.com",
         "crates.io",
         "static.crates.io",
         "index.crates.io",
