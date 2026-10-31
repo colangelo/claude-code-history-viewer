@@ -1134,3 +1134,75 @@ def test_a_general_day_after_a_protected_day_offers_none_of_its_threads(tmp_path
         assert d.process_group(hub, group, llm, dry_run=False)
     assert ("QUESTION-FROM-DAY-ONE" in prompts[-1]) is offered
     assert hub.entries[1]["route"] == "general"
+
+
+# --- log hygiene on protected groups (#84 security-aruba #18, review 3 M9) -----
+#
+# On a protected group no log line or raised message carries a slice of model
+# or CLI output: lengths, exit codes, a hash and the class only.
+
+SECRET = "CLIENT-DERIVED-SUMMARY-TEXT quarterly orbit of the northern pipeline"
+
+
+def _leaks(text: str, secret: str = SECRET, n: int = 9) -> bool:
+    """Does `text` hold any substring of `secret` longer than 8 characters?"""
+    return any(secret[i:i + n] in text for i in range(len(secret) - n + 1))
+
+
+def _cp(code=0, stdout="", stderr=""):
+    return d.subprocess.CompletedProcess(["claude"], code, stdout=stdout, stderr=stderr)
+
+
+@pytest.mark.parametrize("proc", [
+    _cp(1, stdout=SECRET, stderr=SECRET),                                   # exits non-zero
+    _cp(0, stdout=SECRET),                                                  # non-JSON stdout
+    _cp(0, stdout=json.dumps({"is_error": True, "result": SECRET})),        # error result
+    _cp(0, stdout=json.dumps({"result": SECRET, "modelUsage": {"claude-haiku-5-5": {}}})),  # non-JSON entry
+    _cp(0, stdout=json.dumps({"result": json.dumps({  # M9: an invalid entry quoting its topics
+        "status": "entry", "headline": "h", "summary": "s", "topics": [SECRET, SECRET + " two"]}),
+        "modelUsage": {"claude-haiku-5-5": {}}})),
+])
+def test_a_protected_group_logs_no_model_or_cli_text(tmp_path, monkeypatch, capsys, proc) -> None:
+    monkeypatch.setattr(d.subprocess, "run", lambda *a, **k: proc)
+    monkeypatch.setattr(d.time, "sleep", lambda s: None)
+    posted: list[dict] = []
+
+    class Hub(StubHub):
+        def open_threads(self, project_path, before, **kw):
+            return []
+
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    group = {"entry_date": "2026-10-20", "project_path": LAB, "session_ids": [11], "as_of": None}
+    llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
+    raised = ""
+    try:
+        ok = d.process_group(Hub("edit /w/_clientx/r"), group, llm, dry_run=False)
+        assert ok is False, "an invalid entry is rejected, not posted"
+    except RuntimeError as e:
+        raised = str(e)  # main logs it as `ERROR on …: {e}`
+    out = capsys.readouterr().err + raised
+    assert "class=" in out or raised or "REJECTED" in out
+    assert not _leaks(out), out
+    assert posted == []
+
+
+def test_a_protected_post_error_logs_no_hub_echo(monkeypatch) -> None:
+    hub = d.Hub(url="http://127.0.0.1:9", token="t")
+    r = d.requests.Response()
+    r.status_code, r._content = 400, f"unknown status `{SECRET}`".encode()
+    monkeypatch.setattr(hub.session, "post", lambda *a, **k: r)
+    with pytest.raises(d.requests.HTTPError) as e:
+        hub.post_entry({"route": "protected", "status": "entry"})
+    assert "400" in str(e.value) and not _leaks(str(e.value))
+    with pytest.raises(d.requests.HTTPError) as e:
+        hub.post_entry({"route": "general", "status": "entry"})
+    assert _leaks(str(e.value)), "a general post keeps the body for debugging"
+
+
+def test_validate_messages_quote_no_model_text() -> None:
+    base = {"status": "entry", "headline": "h", "summary": "s"}
+    for entry in ({**base, "topics": [SECRET]}, {**base, "topics": SECRET}, {"status": SECRET}):
+        msg = d.validate(entry)
+        assert msg and not _leaks(msg), msg
