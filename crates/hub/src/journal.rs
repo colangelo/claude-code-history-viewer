@@ -36,6 +36,13 @@ use crate::state::AppState;
 /// distiller drains against.
 pub(crate) const DAY_START_HOUR: i32 = 4;
 
+/// The tag every text field of a non-general journal row starts with in read
+/// responses (#84 review 3 M2, openspec/changes/journal-read-protection-tag).
+/// The client's manager holds the same string as a routing content term, so a
+/// transcript that quotes such a field routes protected. Single source: tests,
+/// the distiller fixture and the release probe all take it from here.
+pub const PROTECTION_TAG: &str = "[cchv:protected-journal]";
+
 /// The shared logical-day fold, as a CTE body.
 ///
 /// A session belongs to every logical day on which it has **a message** — not to
