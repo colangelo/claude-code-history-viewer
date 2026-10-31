@@ -1206,3 +1206,109 @@ def test_validate_messages_quote_no_model_text() -> None:
     for entry in ({**base, "topics": [SECRET]}, {**base, "topics": SECRET}, {"status": SECRET}):
         msg = d.validate(entry)
         assert msg and not _leaks(msg), msg
+
+
+# --- journal read protection (#84 review 3 M2, #19; journal-read-protection-tag)
+#
+# Fixtures come from the hub's serializer (crates/hub/src/journal.rs,
+# `the_distiller_fixture_is_what_the_hub_serializes`), never hand-typed (C4).
+
+SHAPES = json.loads((Path(__file__).parent / "fixtures/journal-read-shapes.json").read_text())
+HUB_TAG = SHAPES["tag"]
+ROUTING_TAG_TOML = ROUTING_FULL_TOML.replace(
+    'content_terms = ["clientx.example", "BuildThing"]',
+    f'content_terms = ["clientx.example", "BuildThing", "{HUB_TAG}"]')
+
+
+def test_the_distiller_tag_is_the_hub_tag_and_the_routing_term_holds_it(tmp_path) -> None:
+    assert d.PROTECTION_TAG == HUB_TAG
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    assert any(t in d.normalize(HUB_TAG) for t in r._terms), "the term matches the hub's tag"
+
+
+def _rows(kind: str, general: bool) -> list:
+    rows = SHAPES["browse"] if kind != "search" else SHAPES["search"]["journal"]
+    return [r for r in rows if (r["route"] == "general") == general]
+
+
+def _shape(kind: str, general: bool) -> dict:
+    """One content block a lab session's transcript would hold after a journal read."""
+    if kind == "report":
+        threads = [t for t in SHAPES["report"]["threads"] if (t["origin"] == "general") == general]
+        return {"type": "tool_result", "content": json.dumps({"threads": threads})}
+    rows = _rows("search" if kind == "search" else "browse", general)
+    body = {"journal": rows} if kind == "search" else rows
+    if kind == "compact":
+        return {"type": "tool_result", "content": json.dumps(body, separators=(",", ":"))}
+    if kind == "jq -r summary":
+        return {"type": "tool_result", "content": "\n".join(r["summary"] for r in rows) + "\n"}
+    if kind == "list of blocks":
+        return {"type": "tool_result", "content": [{"type": "text", "text": json.dumps(body)}]}
+    if kind == "head-cut preview":
+        return {"type": "tool_result", "content": json.dumps(body, indent=2)[:120] + "\n… (truncated)"}
+    return {"type": "tool_result", "content": json.dumps(body, indent=2)}  # pretty, search
+
+
+SHAPE_KINDS = ["pretty", "compact", "jq -r summary", "list of blocks", "head-cut preview", "search", "report"]
+
+
+@pytest.mark.parametrize("kind", SHAPE_KINDS)
+def test_a_lab_day_quoting_a_protected_journal_read_routes_protected(tmp_path, kind) -> None:
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    hit = d.route_group(RoutingHub({1: [_msg(_shape(kind, general=False), cwd=None)]}), r, LAB, [1])
+    assert hit == "text_term"
+    twin = d.route_group(RoutingHub({1: [_msg(_shape(kind, general=True), cwd=None)]}), r, LAB, [1])
+    assert twin is None, "a general entry's read stays general"
+
+
+@pytest.mark.parametrize("word", ["unrouted-entry", "unknown-route-entry", "protected-entry"])
+def test_null_and_unknown_routes_are_tagged_like_protected(tmp_path, word) -> None:
+    row = next(e for e in SHAPES["browse"] if e["headline"].endswith(f"{word} headline"))
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    hub = RoutingHub({1: [_msg({"type": "tool_result", "content": json.dumps([row])}, cwd=None)]})
+    assert d.route_group(hub, r, LAB, [1]) == "text_term"
+
+
+# Documented negatives (review F1/F6): shapes that lose the whole tag route general
+# on the tag alone. The hub prefixes message-search snippets (C1); a hard wrap
+# inside the tag is the residual the review names.
+@pytest.mark.parametrize("text", [
+    HUB_TAG.replace("protected", "<b>protected</b>") + " summary",   # an un-prefixed highlighted snippet
+    HUB_TAG[:12] + "\n" + HUB_TAG[12:] + " summary",                # a hard wrap inside the tag
+])
+def test_shapes_that_cut_the_tag_are_general_on_the_tag_alone(tmp_path, text) -> None:
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    assert d.route_group(RoutingHub({1: [_msg(_text(text), cwd=None)]}), r, LAB, [1]) is None
+
+
+# F2: a paraphrase without a quote is caught only because route_group reads the
+# group's sessions whole (distill-route-full-session). These pin that dependency.
+PARAPHRASE = _text("as we found yesterday, the northern pipeline needs the quarterly fix")
+
+
+def test_a_paraphrase_in_the_same_session_as_the_tag_is_protected(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    hub = RoutingHub({1: [_msg(_shape("pretty", False), cwd=None), _msg(PARAPHRASE, cwd=None)]})
+    assert d.route_group(hub, r, LAB, [1]) == "text_term"
+
+
+def test_a_paraphrase_in_another_session_of_the_group_is_protected(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    hub = RoutingHub({1: [_msg(_shape("pretty", False), cwd=None)], 2: [_msg(PARAPHRASE, cwd=None)]})
+    assert d.route_group(hub, r, LAB, [2, 1]) == "text_term"
+
+
+def test_a_paraphrase_on_a_later_day_of_the_session_is_protected_on_both_days(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_TAG_TOML)
+    session = [_msg(_shape("pretty", False), cwd=None), _msg(PARAPHRASE, cwd=None)]  # day 1, day 2
+    for day_group in ([7], [7]):  # the day-1 group and the day-2 group both hold session 7
+        assert d.route_group(RoutingHub({7: session}), r, LAB, day_group) == "text_term"
+
+
+def test_offered_thread_wording_has_the_tag_stripped(monkeypatch) -> None:
+    """F5: a protected call gets tagged wording; the model must not copy the tag."""
+    body = {"threads": [{"thread_id": 1, "question": f"{HUB_TAG} why is X slow", "origin": "protected"},
+                        {"thread_id": 2, "question": "plain", "origin": "general"}]}
+    hub, _ = _thread_hub(monkeypatch, body)
+    got = hub.open_threads("/w/p", "2026-10-10", general=False)
+    assert [t["question"] for t in got] == ["why is X slow", "plain"]
