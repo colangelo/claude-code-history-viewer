@@ -23,5 +23,5 @@
 - [x] 4.1 The client's manager adds the tag to the routing file; cchv re-records the floor and sends the sha256 (done 2026-10-31 16:45Z, sha256 53db3f2e…); `scripts/journal-tag-probe.py` against the live file at release
 - [ ] 4.2 Ships with `distill-route-full-session` and `distill-thread-origin-filter` (a precondition, C3), on ac's word
 - [ ] 4.3 C2: count-only scan of the pre-release window at release; pending groups pinned protected or re-pended; count to the client's manager
-- [ ] 4.4 C5 + C7 step 2 in the release row as one decision for ac: the hand-off residual, or default-exclude after labelling
-- [ ] 4.5 Relay part 3 (C8) to context: every session outside client work filters `route == "general"` (null is not general), and no guidance quotes the literal tag
+- [x] 4.4 C5 + C7 step 2 in the release row as one decision for ac: ac chose (a) on 2026-10-31, the hand-off residual (`docs/residuals.md`), default-exclude after labelling as Gitea #95, due 2026-11-14
+- [x] 4.5 Relay part 3 (C8) to context: every session outside client work filters `route == "general"` (null is not general), and no guidance quotes the literal tag
