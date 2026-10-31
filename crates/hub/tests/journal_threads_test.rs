@@ -467,6 +467,7 @@ async fn state_filter_counts_mode_and_auth() {
 // ---------------------------------------------------------------------------
 
 /// POST an entry for day `offset` with an optional `route`.
+#[allow(clippy::too_many_arguments)] // a test helper: one argument per entry field
 async fn post_route(
     hub: &TestHub,
     project: &str,
@@ -598,14 +599,14 @@ async fn origin_is_general_only_when_every_mention_is_general() {
     // Thread A: general on day 6 and day 5.
     post_route(&hub, &p, &s, 6, &["a", "n"], None, &[], Some("general")).await;
     let six = stored_threads(&hub, &p, 6).await.unwrap().0;
-    let (a, n) = (six[0], six[1]);
+    let (ta, tn) = (six[0], six[1]);
     post_route(
         &hub,
         &p,
         &s,
         5,
         &["a again"],
-        Some(json!([a])),
+        Some(json!([ta])),
         &[],
         Some("general"),
     )
@@ -625,20 +626,20 @@ async fn origin_is_general_only_when_every_mention_is_general() {
     )
     .await;
     force_route(&hub, &p, 3, "general").await;
-    // Thread G: general on day 2, then continued by a protected day... posted as no-route (old distiller).
+    // Thread G: posted with no route on day 2 (an older distiller).
     post_route(&hub, &p, &s, 2, &["g"], None, &[], None).await;
-    let g = stored_threads(&hub, &p, 2).await.unwrap().0[0];
+    let tg = stored_threads(&hub, &p, 2).await.unwrap().0[0];
 
     let r = report(&hub, &[("project", &p)]).await;
-    assert_eq!(origin(&r, a), "general");
-    assert_eq!(origin(&r, n), "general");
+    assert_eq!(origin(&r, ta), "general");
+    assert_eq!(origin(&r, tn), "general");
     assert_eq!(
         origin(&r, pid),
         "protected",
         "an earlier protected mention keeps it protected"
     );
     assert_eq!(
-        origin(&r, g),
+        origin(&r, tg),
         "protected",
         "a mention with no route is protected"
     );

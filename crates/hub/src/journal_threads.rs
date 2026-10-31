@@ -243,7 +243,7 @@ pub fn fold_threads(rows: &[EntryThreads], quiet_after: usize) -> BTreeMap<Strin
         let general = row.is_general()
             && tainted
                 .get(row.project_path.as_str())
-                .is_none_or(|t| row.session_ids.iter().all(|s| !t.contains(s)));
+                .map_or(true, |t| row.session_ids.iter().all(|s| !t.contains(s)));
         for (q, id) in row.open_questions.iter().zip(&row.open_question_threads) {
             let acc = threads.entry(*id).or_default();
             acc.mentions.push((row.entry_date, q.clone()));
@@ -459,7 +459,7 @@ pub async fn open_questions(
     };
     let wanted = |t: &Thread| {
         t.last_seen >= from
-            && origin.is_none_or(|o| t.origin == o)
+            && origin.map_or(true, |o| t.origin == o)
             && match &states {
                 None => true,
                 Some(s) => s
