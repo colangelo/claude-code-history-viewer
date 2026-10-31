@@ -590,3 +590,164 @@ def test_direct_claude_call_strips_proxy_env_and_reports_model_usage(monkeypatch
     # B-1: a persisted print-mode session would re-archive the protected prompt.
     assert "--no-session-persistence" in seen["cmd"]
     assert "ANTHROPIC_BASE_URL" not in seen["env"] and "ANTHROPIC_AUTH_TOKEN" not in seen["env"]
+
+
+# --- whole-session routing (openspec/changes/distill-route-full-session) -------
+#
+# Made-up client marker and term, as above. "_clientx" is the folder name; the
+# lab twin "_clientxtra" only starts with it and must stay general (C2).
+
+ROUTING_FULL_TOML = """
+[protected]
+model = "claude-haiku-5-5"
+path_markers = ["/_clientx", "/Clientx-Ops"]
+content_terms = ["clientx.example", "BuildThing"]
+"""
+
+LAB = "/Users/ac/_sync/dev/lab"
+
+
+def _msg(*items, role="user", sidechain=False, cwd=..., content=None):
+    m = {"role": role, "is_sidechain": sidechain,
+         "content": content if content is not None else list(items)}
+    if cwd is not ...:
+        m["cwd"] = cwd
+    return m
+
+
+def _text(t):
+    return {"type": "text", "text": t}
+
+
+class RoutingHub:
+    """Per-session messages; records every window it was asked for."""
+
+    def __init__(self, sessions: dict, fail: set | None = None) -> None:
+        self.sessions, self.fail, self.windows = sessions, fail or set(), []
+
+    def session_messages(self, session_id, window=None):
+        self.windows.append((session_id, window))
+        if session_id in self.fail:
+            raise d.requests.ConnectionError("hub read failed")
+        return self.sessions[session_id]
+
+
+def _route(tmp_path, sessions, project=LAB, fail=None):
+    r = _routing(tmp_path, ROUTING_FULL_TOML)
+    hub = RoutingHub(sessions, fail)
+    return d.route_group(hub, r, project, list(sessions)), hub
+
+
+# C2: the segment boundary, one fixture per delimiter, each with a lab twin.
+@pytest.mark.parametrize("after", [" next", "`", "'", '"', ": x", "\nnext", ""])
+def test_folder_name_as_a_segment_protects_and_its_longer_twin_does_not(tmp_path, after) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text(f"look in _clientx{after}"), cwd=None)]})
+    assert hit == "text_marker"
+    twin, _ = _route(tmp_path, {1: [_msg(_text(f"look in _clientxtra{after}"), cwd=None)]})
+    assert twin is None
+
+
+# C3: an absent cwd key protects; a null cwd is no signal.
+def test_a_message_without_the_cwd_key_protects(tmp_path) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"))]})
+    assert hit == "cwd_unavailable"
+
+
+def test_a_null_cwd_is_no_signal(tmp_path) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd=None)]})
+    assert hit is None
+
+
+def test_a_cwd_under_a_marker_protects(tmp_path) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd="/Users/ac/_sync/dev/_clientx/repo")]})
+    assert hit == "cwd"
+    lab, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd="/Users/ac/_sync/dev/lab")]})
+    assert lab is None
+
+
+# C4: every outbound string of a general call passes the gate.
+def test_the_gate_stops_a_marker_in_an_offered_thread_before_any_send(tmp_path, monkeypatch) -> None:
+    sent: list[str] = []
+
+    def record_post(url, json=None, **kw):
+        sent.append(d.json.dumps(json))
+        raise AssertionError("general backend reached")
+
+    def record_run(cmd, input=None, **kw):
+        sent.append(f"{cmd} {input}")
+        out = d.json.dumps({"result": ENTRY_JSON, "modelUsage": {"claude-haiku-5-5": {}}})
+        return d.subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(d.requests, "post", record_post)
+    monkeypatch.setattr(d.subprocess, "run", record_run)
+    llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
+    threads = [{"thread_id": 1, "question": "revisit /Users/ac/_sync/dev/_clientx/repo layout"}]
+    entry, served = d.generate(llm, "2026-10-20", LAB, "neutral day", threads)
+    assert served == "claude-haiku-5-5"
+    assert len(sent) == 1 and "claude-haiku-5-5" in sent[0]
+
+
+def test_a_neutral_general_call_passes_the_gate(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "_claude_generate", lambda *a, **k: pytest.fail("claude was called"))
+    monkeypatch.setattr(d, "_aiproxy_generate", lambda llm, prompt: (ENTRY_JSON, "gpt-6.1-sol"))
+    llm = _llm(_routing(tmp_path, ROUTING_FULL_TOML))
+    _, served = d.generate(llm, "2026-10-20", LAB, "neutral day", [])
+    assert served == "gpt-6.1-sol"
+
+
+# M2, M5, M6: markers in text, tool results, sidechains, other days.
+@pytest.mark.parametrize("message", [
+    _msg(_text("please read /Users/ac/_sync/dev/_clientx/repo/README"), cwd=None),
+    _msg({"type": "tool_result", "content": "x" * 900 + " /Users/ac/_sync/dev/_clientx/r/a.py"}, cwd=None),
+    _msg(_text("Summary: earlier we edited /_clientx/r"), role="assistant", cwd=None),
+    _msg({"type": "tool_use", "name": "Read", "input": {"file_path": "/w/_clientx/r/a.py"}}, sidechain=True, cwd=None),
+])
+def test_a_marker_anywhere_in_the_session_protects(tmp_path, message) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd=None), message]})
+    assert hit in ("text_marker", "tool_input")
+
+
+def test_the_view_reads_the_whole_session_not_the_day(tmp_path) -> None:
+    _, hub = _route(tmp_path, {1: [_msg(_text("neutral"), cwd=None)]})
+    assert hub.windows == [(1, None)]
+
+
+# M8: path shapes without a verbatim marker.
+@pytest.mark.parametrize("tool_input", [
+    {"path": "/Users/ac/_sync/dev", "pattern": "_clientx/**/*.py"},
+    {"command": "curl 'http://hub/v1/search?project=%2FUsers%2Fac%2F_clientx%2Frepo'"},
+    {"file_path": "C:\\\\Users\\\\ac\\\\_clientx\\\\repo\\\\a.py"},
+    {"file_path": "/w/" + "y" * 400 + "/_clientx/r.py"},
+])
+def test_tool_input_shapes_are_normalized_before_matching(tmp_path, tool_input) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg({"type": "tool_use", "name": "Grep", "input": tool_input}, cwd=None)]})
+    assert hit == "tool_input"
+
+
+def test_a_term_only_in_the_cut_middle_protects(tmp_path) -> None:
+    long = "a" * 50_000 + " BuildThing " + "b" * 50_000
+    hit, _ = _route(tmp_path, {1: [_msg(_text(long), cwd=None)]})
+    assert hit == "text_term"
+
+
+# M9, C7: fail closed, and the next group goes on.
+def test_one_unreadable_session_of_two_protects(tmp_path) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd=None)], 2: []}, fail={2})
+    assert hit == "unreadable"
+
+
+def test_a_malformed_content_item_protects(tmp_path) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(content=[42, "stray"], cwd=None)]})
+    assert hit == "unreadable"
+
+
+def test_every_capped_part_is_inside_the_view(tmp_path) -> None:
+    content = [
+        _text("t" * 40), {"type": "thinking", "thinking": "k" * 900},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "c" * 700}},
+        {"type": "tool_result", "content": [{"type": "text", "text": "r" * 900}]},
+        {"type": "tool_result", "content": "s" * 900},
+    ]
+    f = d.flatten(content)
+    assert f.capped and all(any(c in full for full in f.full) for c in f.capped)
+    assert d._content_text(content) == "\n".join(f.capped)
