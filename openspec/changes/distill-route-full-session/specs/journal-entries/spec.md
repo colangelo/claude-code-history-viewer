@@ -36,7 +36,7 @@ The distiller SHALL route each group either to a protected model or to the gener
 
 ### Requirement: Send-time routing gate
 
-On the general route, the distiller SHALL check the exact prompt string it is about to send for every configured marker and term, and SHALL protect the group if any is present.
+Every general-route call SHALL go through one send function, and the distiller SHALL check every outbound string of that call (system and user text, every retry), normalized as the routing view is, for every configured marker and term, and SHALL refuse the send and protect the group if any is present.
 
 #### Scenario: A marker only in an offered thread
 - **WHEN** no session in the group holds a marker but an offered open thread does
@@ -44,7 +44,7 @@ On the general route, the distiller SHALL check the exact prompt string it is ab
 
 ### Requirement: Routing fails closed
 
-The distiller SHALL protect a group, and log the class, when any session in it cannot be read in full, when a message has a content shape the flatten does not know, when an updated hub returns messages without a `cwd` key, or when the routing file is missing, invalid, or below its recorded floor or fingerprint. One failing group SHALL NOT stop the next.
+The distiller SHALL protect a group, and log the class, when any session in it cannot be read in full, when a message has a content shape the flatten does not know, when a message from the hub has no `cwd` key (a `cwd` of null is no signal), or when the routing file is missing, invalid, or below its recorded floor or fingerprint. One failing group SHALL NOT stop the next.
 
 #### Scenario: A routing file below its floor protects everything
 - **WHEN** the routing file parses but holds fewer markers or terms than its recorded floor, or its fingerprint differs
@@ -55,7 +55,7 @@ The distiller SHALL protect a group, and log the class, when any session in it c
 - **THEN** the group is protected with class `unreadable`
 
 #### Scenario: A hub without the cwd key
-- **WHEN** the hub is at or past this release and its messages carry no `cwd` key
+- **WHEN** the hub's messages carry no `cwd` key
 - **THEN** the group is protected with class `cwd_unavailable`, while a `cwd` of null is no signal
 
 ### Requirement: Routing log names the class only

@@ -26,17 +26,29 @@ rows). Review findings M1–M10 refer to the client-side review of revision 1.
    the full text. Before matching, strings are normalized: URL-decoded, `\\` folded to `/`,
    lower-cased; JSON tool inputs are walked value by value (no `json.dumps` text); a Glob/Grep
    `path` is joined with its `pattern`; a marker of the form `/<name>` also matches `<name>` as a
-   path segment with no leading or trailing slash. The encoded storage form and the org URL form
-   are covered by routing-file entries, not by code. Name-only shapes (an alias, `z <repo>`) need
+   path segment with no leading or trailing slash. **Segment boundary (re-test C2):** after
+   normalization, `<name>` matches when the character before it is the start of the string, `/`,
+   `-`, whitespace, a quote (`'` `"`), a backtick, `:` or `=`, and the character after it is the end
+   of the string, `/`, whitespace (space, tab, newline), a quote, a backtick, `:`, `,`, `)` or `]`.
+   A longer name that only starts with `<name>` does not match. The encoded storage form (`/` and
+   `_` become `-`) and the org URL form are covered by routing-file entries, not by code. Name-only shapes (an alias, `z <repo>`) need
    repo identity (#11) or a term; the spec does not claim them.
-5. **Send-time gate (M4).** On the general route, the last step before the call checks the exact
-   prompt string for every marker and term; a hit protects the group (class `prompt`).
+5. **Send-time gate (M4, re-test C4).** Every general-route call goes through one send function,
+   and the gate wraps it: every outbound string of the call (system and user text, every retry,
+   both general backends) is normalized as the view is and checked for every marker and term; a
+   hit refuses the send and protects the group (class `prompt`). No general call bypasses it.
 6. **Fail closed (M9).** Protect the group, with a class, when: a session read raises or returns
    fewer messages than the hub reports (`unreadable`); a message has a content shape the flatten
-   does not know (`unreadable`, and the next group goes on); the hub's messages carry no `cwd` key
-   at all once the hub is at or past this release (`cwd_unavailable`; `null` stays "no signal");
+   does not know (`unreadable`, and the next group goes on); a message from the hub carries no `cwd` key
+   at all (`cwd_unavailable`; a key whose value is `null` stays "no signal", re-test C3);
    the routing file is missing, invalid, or below its recorded floor or fingerprint (`protect_all`,
-   #13). Matching is per message and stops at the first hit.
+   #13). **Where the floor lives (re-test C6):** not in the routing file. A separate record
+   `~/.config/cchv/distill-routing.floor.json` (mode 600) holds the minimum count per kind (plain
+   path markers, encoded path markers, content terms) and the routing file's sha256. A widening edit
+   is made by cchv on the client's manager's word, then re-recorded by one command
+   (`cchv-distill --record-routing-floor`), which refuses to lower any count; the new fingerprint
+   goes to the client's manager. A narrowing edit needs the client's manager's explicit word and is
+   recorded the same way. Matching is per message and stops at the first hit.
 7. **Log classes only.** `path`, `cwd`, `cwd_unavailable`, `tool_input`, `text_marker`,
    `text_term`, `prompt`, `unreadable`, `protect_all`; never the marker, term or matched text.
 8. **The open-threads feed (M7).** Newly protected groups write threads into lab projects. #12's
@@ -53,6 +65,15 @@ rows). Review findings M1–M10 refer to the client-side review of revision 1.
   in the per-class counts. A false positive costs a protected call, not confidentiality.
 
 ## Risks
+
+- **Daemon lag (re-test C8):** until both Macs run the new daemon, their new messages carry no
+  `cwd`; recorded in `docs/residuals.md` until the read-back after both installs.
+- **Codex and Pi** keep the folder at turn level; carrying it is a follow-up issue, and the spec
+  claims `cwd` for Claude only.
+- **Read budget (C8):** the unwindowed routing read is capped per group (messages and bytes); a
+  group over the cap is protected with class `unreadable`, never routed general on a partial view.
+- **Re-runs are not idempotent (C8):** a re-run routes on the routing file as it is at that run, so
+  a group distilled before a widening edit is not re-distilled unless it is dirty again.
 
 - More protected calls (the point), all through the protected `claude -p`; #14's hardening is
   recommended to land with this change.
