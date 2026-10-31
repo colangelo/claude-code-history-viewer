@@ -461,3 +461,440 @@ async fn state_filter_counts_mode_and_auth() {
         .unwrap();
     assert_eq!(anon.status(), 401);
 }
+
+// ---------------------------------------------------------------------------
+// Thread origin (#84 finding #12, openspec/changes/distill-thread-origin-filter)
+// ---------------------------------------------------------------------------
+
+/// POST an entry for day `offset` with an optional `route`.
+async fn post_route(
+    hub: &TestHub,
+    project: &str,
+    sessions: &HashMap<i64, i64>,
+    offset: i64,
+    questions: &[&str],
+    links: Option<Value>,
+    resolved: &[i64],
+    route: Option<&str>,
+) -> reqwest::Response {
+    let mut body = json!({
+        "entry_date": day(offset).to_string(),
+        "project_path": project,
+        "status": "entry",
+        "headline": "h",
+        "summary": "s",
+        "topics": ["one", "two", "three"],
+        "open_questions": questions,
+        "resolved_threads": resolved,
+        "session_ids": [sessions[&offset]],
+        "model": "test-model",
+    });
+    if let Some(l) = links {
+        body["open_question_threads"] = l;
+    }
+    if let Some(r) = route {
+        body["route"] = json!(r);
+    }
+    reqwest::Client::new()
+        .post(format!("{}/v1/journal/entries", hub.base))
+        .bearer_auth(&hub.token)
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The stored route of day `offset`, and whether it was written with the row.
+async fn stored_route(hub: &TestHub, project: &str, offset: i64) -> (Option<String>, bool) {
+    sqlx::query_as::<_, (Option<String>, bool)>(
+        "SELECT route, coalesce(route_at = generated_at, false) FROM journal_entries \
+         WHERE project_path = $1 AND entry_date = $2",
+    )
+    .bind(project)
+    .bind(day(offset))
+    .fetch_one(&hub.pool)
+    .await
+    .unwrap()
+}
+
+/// Set day `offset`'s route as if written with the row (bypasses the POST check).
+async fn force_route(hub: &TestHub, project: &str, offset: i64, route: &str) {
+    sqlx::query(
+        "UPDATE journal_entries SET route = $3, route_at = generated_at \
+         WHERE project_path = $1 AND entry_date = $2",
+    )
+    .bind(project)
+    .bind(day(offset))
+    .bind(route)
+    .execute(&hub.pool)
+    .await
+    .unwrap();
+}
+
+fn origin(report: &Value, id: i64) -> Value {
+    thread(report, id)["origin"].clone()
+}
+
+fn ids_in(report: &Value) -> Vec<i64> {
+    report["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["thread_id"].as_i64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn route_is_stored_with_the_row_and_validated() {
+    let hub = spawn().await;
+    let p = project(&hub, "route");
+    let s = seed(&hub, &p, &[4, 3, 2]).await;
+    let ok = |r: reqwest::Response| r.status();
+
+    assert_eq!(
+        ok(post_route(&hub, &p, &s, 4, &["a"], None, &[], Some("general")).await),
+        200
+    );
+    assert_eq!(
+        stored_route(&hub, &p, 4).await,
+        (Some("general".into()), true)
+    );
+    assert_eq!(
+        ok(post_route(&hub, &p, &s, 3, &["b"], None, &[], Some("protected")).await),
+        200
+    );
+    assert_eq!(
+        stored_route(&hub, &p, 3).await,
+        (Some("protected".into()), true)
+    );
+    assert_eq!(
+        ok(post_route(&hub, &p, &s, 2, &["c"], None, &[], None).await),
+        200
+    );
+    assert_eq!(
+        stored_route(&hub, &p, 2).await.0,
+        None,
+        "absent route stores none"
+    );
+
+    // M8 f: a re-post without a route stores none over an earlier `general`.
+    assert_eq!(
+        ok(post_route(&hub, &p, &s, 4, &["a"], None, &[], None).await),
+        200
+    );
+    assert_eq!(stored_route(&hub, &p, 4).await.0, None);
+
+    let before = stored_threads(&hub, &p, 3).await;
+    let bad = post_route(&hub, &p, &s, 3, &["x"], None, &[], Some("other")).await;
+    assert_eq!(bad.status(), 400);
+    assert_eq!(stored_threads(&hub, &p, 3).await, before, "nothing written");
+}
+
+#[tokio::test]
+async fn origin_is_general_only_when_every_mention_is_general() {
+    let hub = spawn().await;
+    let p = project(&hub, "orig");
+    let s = seed(&hub, &p, &[6, 5, 4, 3, 2]).await;
+    // Thread A: general on day 6 and day 5.
+    post_route(&hub, &p, &s, 6, &["a", "n"], None, &[], Some("general")).await;
+    let six = stored_threads(&hub, &p, 6).await.unwrap().0;
+    let (a, n) = (six[0], six[1]);
+    post_route(
+        &hub,
+        &p,
+        &s,
+        5,
+        &["a again"],
+        Some(json!([a])),
+        &[],
+        Some("general"),
+    )
+    .await;
+    // Thread P: protected on day 4, then a later general wording on day 3 (forced past the POST check).
+    post_route(&hub, &p, &s, 4, &["p"], None, &[], Some("protected")).await;
+    let pid = stored_threads(&hub, &p, 4).await.unwrap().0[0];
+    post_route(
+        &hub,
+        &p,
+        &s,
+        3,
+        &["p general"],
+        Some(json!([pid])),
+        &[],
+        Some("protected"),
+    )
+    .await;
+    force_route(&hub, &p, 3, "general").await;
+    // Thread G: general on day 2, then continued by a protected day... posted as no-route (old distiller).
+    post_route(&hub, &p, &s, 2, &["g"], None, &[], None).await;
+    let g = stored_threads(&hub, &p, 2).await.unwrap().0[0];
+
+    let r = report(&hub, &[("project", &p)]).await;
+    assert_eq!(origin(&r, a), "general");
+    assert_eq!(origin(&r, n), "general");
+    assert_eq!(
+        origin(&r, pid),
+        "protected",
+        "an earlier protected mention keeps it protected"
+    );
+    assert_eq!(
+        origin(&r, g),
+        "protected",
+        "a mention with no route is protected"
+    );
+}
+
+#[tokio::test]
+async fn a_later_protected_mention_and_an_old_one_both_count() {
+    let hub = spawn().await;
+    let p = project(&hub, "late");
+    let s = seed(&hub, &p, &[40, 4, 3, 2]).await;
+    // M8 a: general first, protected later (latest wording protected).
+    post_route(&hub, &p, &s, 4, &["t"], None, &[], Some("general")).await;
+    let t = stored_threads(&hub, &p, 4).await.unwrap().0[0];
+    post_route(
+        &hub,
+        &p,
+        &s,
+        3,
+        &["t protected"],
+        Some(json!([t])),
+        &[],
+        Some("protected"),
+    )
+    .await;
+    // M8 b: a protected mention older than the 30-day window.
+    post_route(&hub, &p, &s, 40, &["old"], None, &[], Some("protected")).await;
+    let old = stored_threads(&hub, &p, 40).await.unwrap().0[0];
+    post_route(
+        &hub,
+        &p,
+        &s,
+        2,
+        &["old again"],
+        Some(json!([old])),
+        &[],
+        Some("protected"),
+    )
+    .await;
+    force_route(&hub, &p, 2, "general").await;
+
+    let r = report(&hub, &[("project", &p), ("days", "30")]).await;
+    assert_eq!(origin(&r, t), "protected");
+    assert_eq!(
+        origin(&r, old),
+        "protected",
+        "the fold reads past the window"
+    );
+}
+
+#[tokio::test]
+async fn a_route_rewritten_without_its_row_counts_as_none() {
+    // M6: an older hub after a rollback rewrites the row but not route/route_at.
+    let hub = spawn().await;
+    let p = project(&hub, "stale");
+    let s = seed(&hub, &p, &[3]).await;
+    post_route(&hub, &p, &s, 3, &["q"], None, &[], Some("general")).await;
+    let q = stored_threads(&hub, &p, 3).await.unwrap().0[0];
+    assert_eq!(
+        origin(&report(&hub, &[("project", &p)]).await, q),
+        "general"
+    );
+    sqlx::query(
+        "UPDATE journal_entries SET generated_at = clock_timestamp() \
+         WHERE project_path = $1 AND entry_date = $2",
+    )
+    .bind(&p)
+    .bind(day(3))
+    .execute(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        origin(&report(&hub, &[("project", &p)]).await, q),
+        "protected"
+    );
+}
+
+#[tokio::test]
+async fn a_session_shared_with_a_protected_day_taints_its_threads() {
+    // M7: day 3 general (thread T), day 2 protected sharing day 3's session.
+    let hub = spawn().await;
+    let p = project(&hub, "sess");
+    let s = seed(&hub, &p, &[3, 2]).await;
+    post_route(&hub, &p, &s, 3, &["t"], None, &[], Some("general")).await;
+    let t = stored_threads(&hub, &p, 3).await.unwrap().0[0];
+    post_route(&hub, &p, &s, 2, &["other"], None, &[], Some("protected")).await;
+    assert_eq!(
+        origin(&report(&hub, &[("project", &p)]).await, t),
+        "general",
+        "twin: a protected day sharing no session leaves T general"
+    );
+    sqlx::query(
+        "UPDATE journal_entries SET session_ids = session_ids || $3 \
+         WHERE project_path = $1 AND entry_date = $2",
+    )
+    .bind(&p)
+    .bind(day(2))
+    .bind(vec![s[&3]])
+    .execute(&hub.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        origin(&report(&hub, &[("project", &p)]).await, t),
+        "protected"
+    );
+}
+
+#[tokio::test]
+async fn origin_filter_echoes_runs_before_the_limit_and_rejects_other_values() {
+    let hub = spawn().await;
+    let p = project(&hub, "filt");
+    let s = seed(&hub, &p, &[5, 4, 3]).await;
+    post_route(
+        &hub,
+        &p,
+        &s,
+        5,
+        &["general one"],
+        None,
+        &[],
+        Some("general"),
+    )
+    .await;
+    let g = stored_threads(&hub, &p, 5).await.unwrap().0[0];
+    // Newer protected threads that would fill a limit of 2 first (M8 c).
+    post_route(&hub, &p, &s, 4, &["p1", "p2"], None, &[], Some("protected")).await;
+    post_route(&hub, &p, &s, 3, &["p3"], None, &[], Some("protected")).await;
+
+    let all = report(&hub, &[("project", &p), ("limit", "2")]).await;
+    assert!(all.get("origin").is_none(), "no echo without the filter");
+    assert!(
+        !ids_in(&all).contains(&g),
+        "unfiltered, the limit takes the newer ones"
+    );
+
+    let r = report(
+        &hub,
+        &[("project", &p), ("origin", "general"), ("limit", "2")],
+    )
+    .await;
+    assert_eq!(r["origin"], "general");
+    assert_eq!(ids_in(&r), vec![g]);
+
+    let bad = reqwest::Client::new()
+        .get(format!("{}/v1/journal/open-questions", hub.base))
+        .query(&[("project", p.as_str()), ("origin", "protected")])
+        .bearer_auth(&hub.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 400);
+}
+
+#[tokio::test]
+async fn a_general_entry_cannot_link_or_resolve_a_protected_thread() {
+    // M5 layer 1.
+    let hub = spawn().await;
+    let p = project(&hub, "post");
+    let s = seed(&hub, &p, &[3, 2]).await;
+    post_route(
+        &hub,
+        &p,
+        &s,
+        3,
+        &["secret-ish"],
+        None,
+        &[],
+        Some("protected"),
+    )
+    .await;
+    let t = stored_threads(&hub, &p, 3).await.unwrap().0[0];
+
+    let r = post_route(
+        &hub,
+        &p,
+        &s,
+        2,
+        &["x"],
+        Some(json!([t])),
+        &[],
+        Some("general"),
+    )
+    .await;
+    assert_eq!(r.status(), 400);
+    assert_eq!(stored_threads(&hub, &p, 2).await, None, "nothing written");
+    let r = post_route(&hub, &p, &s, 2, &["x"], None, &[t], Some("general")).await;
+    assert_eq!(r.status(), 400, "resolving it is refused too");
+    assert_eq!(stored_threads(&hub, &p, 2).await, None);
+
+    let r = post_route(
+        &hub,
+        &p,
+        &s,
+        2,
+        &["x"],
+        Some(json!([t])),
+        &[],
+        Some("protected"),
+    )
+    .await;
+    assert_eq!(r.status(), 200);
+    let r = post_route(&hub, &p, &s, 2, &["x"], Some(json!([t])), &[], None).await;
+    assert_eq!(
+        r.status(),
+        200,
+        "no route: stored, and the thread stays protected"
+    );
+    assert_eq!(
+        origin(&report(&hub, &[("project", &p)]).await, t),
+        "protected"
+    );
+}
+
+#[tokio::test]
+async fn the_read_back_query_finds_a_planted_violation() {
+    // M5 layer 3: the SQL run on pg1 at the read-back, independent of the fold.
+    let hub = spawn().await;
+    let p = project(&hub, "rb");
+    let s = seed(&hub, &p, &[3, 2]).await;
+    let sql = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/sql/journal-thread-origin-readback.sql"),
+    )
+    .expect("read-back query file");
+    let count = |sql: String, p: String| {
+        let pool = hub.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(&format!(
+                "SELECT count(*) FROM ({}) v WHERE v.project_path = $1",
+                sql.trim().trim_end_matches(';')
+            ))
+            .bind(p)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    post_route(&hub, &p, &s, 3, &["q"], None, &[], Some("general")).await;
+    let q = stored_threads(&hub, &p, 3).await.unwrap().0[0];
+    post_route(
+        &hub,
+        &p,
+        &s,
+        2,
+        &["q again"],
+        Some(json!([q])),
+        &[],
+        Some("general"),
+    )
+    .await;
+    assert_eq!(count(sql.clone(), p.clone()).await, 0, "a clean chain");
+
+    force_route(&hub, &p, 3, "protected").await;
+    assert_eq!(
+        count(sql, p).await,
+        1,
+        "a general row linking a protected mention"
+    );
+}
