@@ -4,8 +4,7 @@
 
 The write endpoint SHALL store an entry's optional `route` (`general` or `protected`), reject any
 other value with `400`, and store none when it is absent. The distiller SHALL post the route it
-actually generated on. The migration SHALL mark existing entries from a GPT model `general` and
-leave the rest without a route.
+actually generated on. Existing entries SHALL keep no route.
 
 #### Scenario: Protected entry
 - **WHEN** the distiller writes an entry for a protected group
@@ -19,9 +18,25 @@ leave the rest without a route.
 - **WHEN** an entry is posted without a route
 - **THEN** it is stored with no route, and its open questions count as protected origin
 
+#### Scenario: Existing entries
+- **WHEN** the migration runs over entries written before this change
+- **THEN** every one of them has no route
+
 #### Scenario: Invalid route
 - **WHEN** an entry is posted with route `other`
 - **THEN** the request is rejected with `400` and nothing is written
+
+### Requirement: A general entry cannot link a protected thread
+The write endpoint SHALL reject with `400`, before anything is written, an entry with route
+`general` whose thread links or resolutions name a thread that is not general origin.
+
+#### Scenario: General entry continues a protected thread
+- **WHEN** an entry with route `general` links an open question to a thread whose only mention is a protected entry
+- **THEN** the request is rejected with `400` and nothing is written
+
+#### Scenario: Protected entry continues it
+- **WHEN** an entry with route `protected` links to the same thread
+- **THEN** it is stored
 
 ## MODIFIED Requirements
 
@@ -29,8 +44,9 @@ leave the rest without a route.
 Before writing an entry, the distiller SHALL fetch the project's unresolved threads mentioned
 in the 30 days before the entry date (at most 30), list them in the prompt, and ask for a
 thread link per open question and the list of threads the day resolved. On the general route it
-SHALL fetch only general-origin threads, and SHALL offer none when the hub does not confirm that
-filter; on the protected route it SHALL fetch every thread. It SHALL drop ids it did not offer and
+SHALL fetch only general-origin threads, SHALL offer none when the hub does not confirm that
+filter, and SHALL drop any returned thread whose origin is not `general`; on the protected route it
+SHALL fetch every thread. It SHALL drop ids it did not offer and
 ids both continued and resolved, so a model slip yields a new thread and not a rejected entry. An
 entry without links (older distiller, plain-string questions) SHALL remain valid.
 

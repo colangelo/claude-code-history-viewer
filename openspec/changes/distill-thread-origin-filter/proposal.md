@@ -27,10 +27,19 @@ gate for that change: it ships with it or before.
 - **The distiller asks for general threads on the general route.** A group routed general fetches
   threads with `origin=general` and offers none if the hub does not echo the filter (a hub without
   this change). A protected group still gets every thread.
-- **Existing entries.** The migration marks as `general` the existing entry rows written by a GPT
-  model (`model LIKE 'gpt-%'`): their wording was already produced by the general backend, so
-  offering it to that backend again exposes nothing new. Every other existing row stays null, which
-  is protected origin.
+- **The invariant is held in three places.** The hub refuses a `general` entry that links or
+  resolves a protected-origin thread; the distiller drops any offered thread whose own `origin` is
+  not `general`; an independent SQL read-back must count 0 such links.
+- **Per session, and safe across a hub rollback.** A thread is also protected origin when an entry
+  mentioning it shares a session with a protected day of the project. A route counts only when it was
+  written together with the row, so a row rewritten by an older hub falls back to protected.
+- **No backfill.** Every existing entry keeps no route, which is protected origin (decided by the
+  client's manager in review: rows written under the routing #10 fixes include paraphrases of client
+  material). General days lose thread links for at most 30 days, once.
+
+**Revision 2** follows the client-side review (M1–M9, go): M1 no backfill; M5–M8 as above. M2 and
+M3 (protected entries reaching other readers) are separate follow-ups, M4 is a fix to
+`distill-route-full-session`, M9 joins the distiller's error-log issue.
 
 ## Capabilities
 
@@ -42,13 +51,14 @@ gate for that change: it ships with it or before.
 
 ## Impact
 
-- `migrations/0016_journal_entry_route.sql` (column, check constraint, backfill of GPT rows).
-- `crates/hub/src/journal.rs` (payload and insert), `crates/hub/src/journal_threads.rs` (fold, param,
-  echo).
+- `migrations/0016_journal_entry_route.sql` (`route`, `route_at`, check constraint; no backfill).
+- `scripts/sql/journal-thread-origin-readback.sql` (the read-back).
+- `crates/hub/src/journal.rs` (payload, upsert, the POST origin check), `crates/hub/src/journal_threads.rs`
+  (fold with origin and session taint, param, echo).
 - `scripts/cchv-distill.py` (`generate` reports the route it used; `process_group` posts it and
   fetches threads per route), tests.
 - Release order: hub (with the migration) before the distiller. A new distiller against an old hub
   offers no threads on general days (fail closed); an old distiller against a new hub posts no route,
   so its entries are protected origin.
-- Session-sticky protection (M6, "one mechanism" with this filter in the review) already holds
-  through `distill-route-full-session`: the route is decided on every session's whole history.
+- Session-sticky protection: `distill-route-full-session` decides each group on its sessions' whole
+  history; the per-session origin rule above covers days distilled before a later protected day.

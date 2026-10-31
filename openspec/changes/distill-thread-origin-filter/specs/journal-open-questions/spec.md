@@ -3,8 +3,8 @@
 ### Requirement: Threads carry their origin
 Each thread SHALL carry an `origin`: `general` when every entry that mentions it has route
 `general`, otherwise `protected`. A mention by an entry with route `protected` or with no route SHALL
-make the thread protected origin, whichever entry holds the latest wording. Resolutions SHALL NOT
-change a thread's origin.
+make the thread protected origin, whichever entry holds the latest wording, as SHALL a mention by an
+entry sharing a session with a protected entry of the project. Resolutions SHALL NOT change origin.
 
 #### Scenario: Only general mentions
 - **WHEN** thread 7 is mentioned by two entries, both with route `general`
@@ -12,6 +12,10 @@ change a thread's origin.
 
 #### Scenario: One protected mention
 - **WHEN** thread 7 is mentioned first by a protected entry and later by a general one
+- **THEN** its origin is `protected`
+
+#### Scenario: A session shared with a protected day
+- **WHEN** thread 7 is mentioned only by a general entry whose session also has a protected entry in the project
 - **THEN** its origin is `protected`
 
 #### Scenario: A mention with no route
