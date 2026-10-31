@@ -43,6 +43,51 @@ pub(crate) const DAY_START_HOUR: i32 = 4;
 /// the distiller fixture and the release probe all take it from here.
 pub const PROTECTION_TAG: &str = "[cchv:protected-journal]";
 
+/// `text` with the protection tag in front, once (a field that already starts
+/// with it, e.g. wording the model copied, is returned as is).
+pub fn tag_text(text: String) -> String {
+    if text.starts_with(PROTECTION_TAG) {
+        text
+    } else {
+        format!("{PROTECTION_TAG} {text}")
+    }
+}
+
+/// Tags every text field of a row whose counted route is not `general`.
+#[derive(Clone, Copy)]
+struct Protect(bool);
+
+impl Protect {
+    fn for_route(route: Option<&str>) -> Self {
+        Self(route != Some("general"))
+    }
+    fn one(self, text: String) -> String {
+        if self.0 {
+            tag_text(text)
+        } else {
+            text
+        }
+    }
+    fn opt(self, text: Option<String>) -> Option<String> {
+        text.map(|t| self.one(t))
+    }
+    fn all(self, texts: Vec<String>) -> Vec<String> {
+        texts.into_iter().map(|t| self.one(t)).collect()
+    }
+}
+
+/// `route=general` on a journal read: only rows whose counted route is
+/// `general`. No other value is accepted.
+pub fn parse_route_filter(route: Option<&str>) -> Result<bool, HubError> {
+    match route {
+        None | Some("") => Ok(false),
+        Some("general") => Ok(true),
+        Some(other) => Err(HubError::BadRequest(format!(
+            "unknown route `{other}` (expected general)"
+        ))),
+    }
+}
+
 /// The shared logical-day fold, as a CTE body.
 ///
 /// A session belongs to every logical day on which it has **a message** — not to
@@ -726,6 +771,8 @@ pub struct BrowseParams {
     pub to: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// `general`: only rows whose counted route is `general` (#19, C7 step 1).
+    pub route: Option<String>,
 }
 
 /// A full `entry`-status journal row.
@@ -741,6 +788,43 @@ pub struct JournalEntry {
     pub session_ids: Vec<i64>,
     pub model: Option<String>,
     pub generated_at: DateTime<Utc>,
+    /// The counted route: `route` when written with the row, else null (#19).
+    pub route: Option<String>,
+}
+
+impl JournalEntry {
+    /// The response form: every text field of a non-general row tagged. The
+    /// destructuring names every field, so a new one fails to compile until it
+    /// is placed here (review F4).
+    fn protected(self) -> Self {
+        let Self {
+            entry_date,
+            project_path,
+            status,
+            headline,
+            summary,
+            topics,
+            open_questions,
+            session_ids,
+            model,
+            generated_at,
+            route,
+        } = self;
+        let p = Protect::for_route(route.as_deref());
+        Self {
+            entry_date,
+            project_path,
+            status,
+            headline: p.opt(headline),
+            summary: p.opt(summary),
+            topics: p.all(topics),
+            open_questions: p.all(open_questions),
+            session_ids,
+            model,
+            generated_at,
+            route,
+        }
+    }
 }
 
 /// Browse `entry`-status rows, filterable by project and date range,
@@ -752,6 +836,7 @@ pub async fn browse(
 ) -> Result<Json<Vec<JournalEntry>>, HubError> {
     let from = parse_date(params.from.as_deref(), "from")?;
     let to = parse_date(params.to.as_deref(), "to")?;
+    let general_only = parse_route_filter(params.route.as_deref())?;
     let page = Page::from(params.limit, params.offset);
     let scope = crate::identity_filter::resolve_project_scope(
         &state.pool,
@@ -763,13 +848,15 @@ pub async fn browse(
     let rows = sqlx::query_as::<_, JournalEntry>(
         r"
         SELECT entry_date, project_path, status, headline, summary, topics,
-               open_questions, session_ids, model, generated_at
+               open_questions, session_ids, model, generated_at,
+               CASE WHEN route_at = generated_at THEN route END AS route
         FROM journal_entries
         WHERE status = 'entry'
           AND ($1::text IS NULL OR project_path = $1)
           AND ($6::text[] IS NULL OR project_path = ANY($6))
           AND ($2::date IS NULL OR entry_date >= $2)
           AND ($3::date IS NULL OR entry_date <= $3)
+          AND (NOT $7 OR (route = 'general' AND route_at = generated_at))
         ORDER BY entry_date DESC, project_path DESC, id DESC
         LIMIT $4 OFFSET $5
         ",
@@ -780,10 +867,13 @@ pub async fn browse(
     .bind(page.limit)
     .bind(page.offset)
     .bind(scope.paths.as_deref())
+    .bind(general_only)
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(rows))
+    Ok(Json(
+        rows.into_iter().map(JournalEntry::protected).collect(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -804,6 +894,41 @@ pub struct JournalHit {
     pub model: Option<String>,
     pub generated_at: DateTime<Utc>,
     pub rank: f32,
+    /// The counted route (see [`JournalEntry::route`]).
+    pub route: Option<String>,
+}
+
+impl JournalHit {
+    /// The response form; see [`JournalEntry::protected`].
+    fn protected(self) -> Self {
+        let Self {
+            entry_date,
+            project_path,
+            headline,
+            summary,
+            topics,
+            open_questions,
+            session_ids,
+            model,
+            generated_at,
+            rank,
+            route,
+        } = self;
+        let p = Protect::for_route(route.as_deref());
+        Self {
+            entry_date,
+            project_path,
+            headline: p.opt(headline),
+            summary: p.opt(summary),
+            topics: p.all(topics),
+            open_questions: p.all(open_questions),
+            session_ids,
+            model,
+            generated_at,
+            rank,
+            route,
+        }
+    }
 }
 
 /// Journal retrieval mode for the `/v1/search` journal block. `Keyword` is
@@ -847,6 +972,10 @@ struct RankedRow {
 /// the embedder or embeddings were unavailable (never an error). The project
 /// scope carries either a plain `project_path` match or a pre-resolved
 /// identity path set (see `identity_filter`).
+///
+/// Every hit leaves in its response form: text fields of a non-general row
+/// tagged (#19). `general_only` keeps only rows whose counted route is
+/// `general`, in every mode.
 pub async fn search_journal(
     state: &AppState,
     q: &str,
@@ -854,16 +983,34 @@ pub async fn search_journal(
     limit: i64,
     offset: i64,
     mode: JournalMode,
+    general_only: bool,
+) -> Result<(Vec<JournalHit>, bool), HubError> {
+    let (hits, degraded) =
+        ranked_journal(state, q, scope, limit, offset, mode, general_only).await?;
+    Ok((
+        hits.into_iter().map(JournalHit::protected).collect(),
+        degraded,
+    ))
+}
+
+async fn ranked_journal(
+    state: &AppState,
+    q: &str,
+    scope: &crate::identity_filter::ProjectScope,
+    limit: i64,
+    offset: i64,
+    mode: JournalMode,
+    general_only: bool,
 ) -> Result<(Vec<JournalHit>, bool), HubError> {
     if mode == JournalMode::Keyword {
-        let hits = keyword_hits(state, q, scope, limit, offset).await?;
+        let hits = keyword_hits(state, q, scope, limit, offset, general_only).await?;
         return Ok((hits.into_iter().map(|r| r.hit).collect(), false));
     }
 
     // Semantic ranking over the scoped active-model vectors; `None` = the
     // capability is unavailable right now → keyword results + degraded flag.
-    let Some(ranked) = semantic_ranked(state, q, scope).await? else {
-        let hits = keyword_hits(state, q, scope, limit, offset).await?;
+    let Some(ranked) = semantic_ranked(state, q, scope, general_only).await? else {
+        let hits = keyword_hits(state, q, scope, limit, offset, general_only).await?;
         return Ok((hits.into_iter().map(|r| r.hit).collect(), true));
     };
 
@@ -883,7 +1030,7 @@ pub async fn search_journal(
             Ok((hits_for_ranked(state, &page).await?, false))
         }
         JournalMode::Hybrid => {
-            let keyword = keyword_hits(state, q, scope, top_k, 0).await?;
+            let keyword = keyword_hits(state, q, scope, top_k, 0, general_only).await?;
             let mut scores: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
             let mut hit_by_id: std::collections::HashMap<i64, JournalHit> =
                 std::collections::HashMap::new();
@@ -930,6 +1077,7 @@ async fn keyword_hits(
     scope: &crate::identity_filter::ProjectScope,
     limit: i64,
     offset: i64,
+    general_only: bool,
 ) -> Result<Vec<RankedRow>, HubError> {
     let prefix = crate::fts::prefix_tsquery(q);
     let hits = sqlx::query_as::<_, RankedRow>(
@@ -942,12 +1090,14 @@ async fn keyword_hits(
         )
         SELECT id, entry_date, project_path, headline, summary, topics,
                open_questions, session_ids, model, generated_at,
-               ts_rank(text_search, q.tsq) AS rank
+               ts_rank(text_search, q.tsq) AS rank,
+               CASE WHEN route_at = generated_at THEN route END AS route
         FROM q, journal_entries
         WHERE status = 'entry'
           AND text_search @@ q.tsq
           AND ($2::text IS NULL OR project_path = $2)
           AND ($5::text[] IS NULL OR project_path = ANY($5))
+          AND (NOT $7 OR (route = 'general' AND route_at = generated_at))
         ORDER BY rank DESC, entry_date DESC, id DESC
         LIMIT $3 OFFSET $4
         ",
@@ -958,6 +1108,7 @@ async fn keyword_hits(
     .bind(offset)
     .bind(scope.paths.as_deref())
     .bind(prefix)
+    .bind(general_only)
     .fetch_all(&state.pool)
     .await?;
 
@@ -973,6 +1124,7 @@ async fn semantic_ranked(
     state: &AppState,
     q: &str,
     scope: &crate::identity_filter::ProjectScope,
+    general_only: bool,
 ) -> Result<Option<Vec<(i64, f32)>>, HubError> {
     let Some(embedder) = state.embedder.as_ref() else {
         return Ok(None);
@@ -994,11 +1146,13 @@ async fn semantic_ranked(
           AND je.status = 'entry'
           AND ($2::text IS NULL OR je.project_path = $2)
           AND ($3::text[] IS NULL OR je.project_path = ANY($3))
+          AND (NOT $4 OR (je.route = 'general' AND je.route_at = je.generated_at))
         ",
     )
     .bind(embedder.model_id())
     .bind(&scope.plain)
     .bind(scope.paths.as_deref())
+    .bind(general_only)
     .fetch_all(&state.pool)
     .await?;
 
@@ -1054,7 +1208,8 @@ async fn hits_by_ids(
         r"
         SELECT id, entry_date, project_path, headline, summary, topics,
                open_questions, session_ids, model, generated_at,
-               0.0::float4 AS rank
+               0.0::float4 AS rank,
+               CASE WHEN route_at = generated_at THEN route END AS route
         FROM journal_entries
         WHERE id = ANY($1)
         ",
@@ -1063,4 +1218,200 @@ async fn hits_by_ids(
     .fetch_all(&state.pool)
     .await?;
     Ok(rows.into_iter().map(|r| (r.id, r.hit)).collect())
+}
+
+#[cfg(test)]
+mod protection_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn at() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-10-31T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn entry(route: Option<&str>) -> JournalEntry {
+        JournalEntry {
+            entry_date: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap(),
+            project_path: "/w/p".into(),
+            status: "entry".into(),
+            headline: Some("VAL-headline".into()),
+            summary: Some("VAL-summary".into()),
+            topics: vec!["VAL-t1".into(), "VAL-t2".into(), "VAL-t3".into()],
+            open_questions: vec!["VAL-q".into()],
+            session_ids: vec![1],
+            model: Some("m".into()),
+            generated_at: at(),
+            route: route.map(Into::into),
+        }
+    }
+
+    fn hit(route: Option<&str>) -> JournalHit {
+        let e = entry(route);
+        JournalHit {
+            entry_date: e.entry_date,
+            project_path: e.project_path,
+            headline: e.headline,
+            summary: e.summary,
+            topics: e.topics,
+            open_questions: e.open_questions,
+            session_ids: e.session_ids,
+            model: e.model,
+            generated_at: e.generated_at,
+            rank: 1.0,
+            route: e.route,
+        }
+    }
+
+    /// (key, every string under it) for one serialized row.
+    fn strings(v: &serde_json::Value) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (k, x) in v.as_object().unwrap() {
+            match x {
+                serde_json::Value::String(s) => out.push((k.clone(), s.clone())),
+                serde_json::Value::Array(a) => out.extend(
+                    a.iter()
+                        .filter_map(|y| y.as_str())
+                        .map(|s| (k.clone(), s.to_string())),
+                ),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Review F4: every model-written string of a non-general row starts with
+    /// the tag, and the set of string-valued fields is pinned, so a new field
+    /// fails here until someone decides whether it is tagged.
+    #[test]
+    fn every_text_field_of_a_non_general_row_is_tagged() {
+        let known: BTreeSet<&str> = [
+            "entry_date",
+            "project_path",
+            "status",
+            "headline",
+            "summary",
+            "topics",
+            "open_questions",
+            "model",
+            "generated_at",
+            "route",
+        ]
+        .into();
+        for route in [
+            None,
+            Some("protected"),
+            Some("something-new"),
+            Some("general"),
+        ] {
+            let tagged = route != Some("general");
+            for v in [
+                serde_json::to_value(entry(route).protected()).unwrap(),
+                serde_json::to_value(hit(route).protected()).unwrap(),
+            ] {
+                for (k, s) in strings(&v) {
+                    assert!(
+                        known.contains(k.as_str()),
+                        "new string field `{k}`: tag it or list it"
+                    );
+                    if s.starts_with("VAL-") || s.contains(" VAL-") {
+                        assert_eq!(s.starts_with(PROTECTION_TAG), tagged, "{route:?} {k}: {s}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Review C4: the distiller's routing tests read journal responses that
+    /// this serializer produced, never hand-typed JSON. `CCHV_WRITE_FIXTURES=1`
+    /// rewrites the file; otherwise a drift fails here.
+    #[test]
+    fn the_distiller_fixture_is_what_the_hub_serializes() {
+        use crate::journal_threads::{Origin, Thread, ThreadState};
+        let row = |route: Option<&str>, word: &str| JournalEntry {
+            headline: Some(format!("{word} headline")),
+            summary: Some(format!("{word} summary of the day")),
+            topics: vec![
+                format!("{word} one"),
+                format!("{word} two"),
+                format!("{word} three"),
+            ],
+            open_questions: vec![format!("{word} question")],
+            ..entry(route)
+        };
+        let rows = [
+            (Some("protected"), "protected-entry"),
+            (None, "unrouted-entry"),
+            (Some("something-new"), "unknown-route-entry"),
+            (Some("general"), "general-entry"),
+        ];
+        let browse: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(r, w)| serde_json::to_value(row(*r, w).protected()).unwrap())
+            .collect();
+        let search: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(r, w)| {
+                let e = row(*r, w);
+                let h = JournalHit {
+                    entry_date: e.entry_date,
+                    project_path: e.project_path,
+                    headline: e.headline,
+                    summary: e.summary,
+                    topics: e.topics,
+                    open_questions: e.open_questions,
+                    session_ids: e.session_ids,
+                    model: e.model,
+                    generated_at: e.generated_at,
+                    rank: 0.5,
+                    route: e.route,
+                };
+                serde_json::to_value(h.protected()).unwrap()
+            })
+            .collect();
+        let thread = |id: i64, origin: Origin, word: &str| {
+            Thread {
+                thread_id: id,
+                question: format!("{word} question"),
+                first_seen: NaiveDate::from_ymd_opt(2026, 10, 30).unwrap(),
+                last_seen: NaiveDate::from_ymd_opt(2026, 10, 31).unwrap(),
+                days_mentioned: 2,
+                entry_dates: vec![],
+                state: ThreadState::Open,
+                resolved_on: None,
+                origin,
+            }
+            .response_form()
+        };
+        let fixture = serde_json::json!({
+            "tag": PROTECTION_TAG,
+            "browse": browse,
+            "search": { "journal": search },
+            "report": { "threads": [
+                thread(1, Origin::Protected, "protected-thread"),
+                thread(2, Origin::General, "general-thread"),
+            ]},
+        });
+        let text = serde_json::to_string_pretty(&fixture).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/fixtures/journal-read-shapes.json");
+        if std::env::var_os("CCHV_WRITE_FIXTURES").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &text).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            text,
+            "scripts/fixtures/journal-read-shapes.json drifted from the serializer: \
+             rerun with CCHV_WRITE_FIXTURES=1 and commit it"
+        );
+    }
+
+    #[test]
+    fn tagging_is_idempotent() {
+        let once = tag_text("x".into());
+        assert_eq!(tag_text(once.clone()), once);
+        assert_eq!(once, format!("{PROTECTION_TAG} x"));
+    }
 }

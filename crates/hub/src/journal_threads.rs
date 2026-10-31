@@ -203,6 +203,20 @@ pub struct Thread {
     pub origin: Origin,
 }
 
+impl Thread {
+    /// The report form: protected-origin wording leaves tagged (#19).
+    #[must_use]
+    pub fn response_form(self) -> Self {
+        match self.origin {
+            Origin::General => self,
+            Origin::Protected => Self {
+                question: crate::journal::tag_text(self.question),
+                ..self
+            },
+        }
+    }
+}
+
 /// Fold entries into threads per project. `rows` may come in any order.
 ///
 /// A thread is `resolved` when its latest resolution is dated after its last
@@ -479,7 +493,13 @@ pub async fn open_questions(
         let threads = folded
             .into_iter()
             .next()
-            .map(|(_, ts)| ts.into_iter().filter(|t| wanted(t)).take(limit).collect())
+            .map(|(_, ts)| {
+                ts.into_iter()
+                    .filter(|t| wanted(t))
+                    .take(limit)
+                    .map(Thread::response_form)
+                    .collect()
+            })
             .unwrap_or_default();
         return Ok(Json(OpenQuestionsResponse::Project(ProjectThreads {
             project_path: project,

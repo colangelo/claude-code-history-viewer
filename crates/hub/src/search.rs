@@ -33,6 +33,9 @@ pub struct SearchParams {
     /// Journal retrieval mode: `keyword` (default, byte-compatible) |
     /// `semantic` | `hybrid`. The message leg is unaffected.
     pub mode: Option<String>,
+    /// `general`: the journal leg returns only rows whose counted route is
+    /// `general` (#19, C7 step 1). The message leg is unaffected.
+    pub route: Option<String>,
 }
 
 /// One search hit with its session + project + machine context.
@@ -118,6 +121,7 @@ pub async fn search(
     // Validated regardless of scope: an unknown mode is a client error even
     // when the journal leg is skipped.
     let mode = crate::journal::JournalMode::parse(params.mode.as_deref())?;
+    let general_only = crate::journal::parse_route_filter(params.route.as_deref())?;
 
     // Resolve the project filter once (plain vs `identity:<key>` expansion)
     // and share it between the message and journal legs.
@@ -146,6 +150,7 @@ pub async fn search(
             page.limit,
             page.offset,
             mode,
+            general_only,
         )
         .await?;
         (Some(hits), degraded.then_some(true))
@@ -245,6 +250,25 @@ async fn message_hits(
     .fetch_all(&state.pool)
     .await?;
 
+    // A message whose stored text holds the protection tag (a transcript that
+    // quoted a protected journal read) gets a snippet that starts with it,
+    // whatever the match highlighted or cut (#19, review C1).
+    let ids: Vec<i64> = rows.iter().map(|r| r.message_id).collect();
+    let tagged: std::collections::HashSet<i64> = if ids.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM messages WHERE id = ANY($1) \
+             AND strpos(lower(coalesce(search_text, '')), lower($2)) > 0",
+        )
+        .bind(&ids)
+        .bind(crate::journal::PROTECTION_TAG)
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .collect()
+    };
+
     Ok(rows
         .into_iter()
         .map(|r| SearchHit {
@@ -262,7 +286,11 @@ async fn message_hits(
             message_type: r.message_type,
             role: r.role,
             model: r.model,
-            snippet: r.snippet,
+            snippet: if tagged.contains(&r.message_id) {
+                crate::journal::tag_text(r.snippet)
+            } else {
+                r.snippet
+            },
             rank: r.rank,
             position: r.position,
         })

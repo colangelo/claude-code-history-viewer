@@ -1,0 +1,203 @@
+{
+  "browse": [
+    {
+      "entry_date": "2026-10-31",
+      "generated_at": "2026-10-31T12:00:00Z",
+      "headline": "[cchv:protected-journal] protected-entry headline",
+      "model": "m",
+      "open_questions": [
+        "[cchv:protected-journal] protected-entry question"
+      ],
+      "project_path": "/w/p",
+      "route": "protected",
+      "session_ids": [
+        1
+      ],
+      "status": "entry",
+      "summary": "[cchv:protected-journal] protected-entry summary of the day",
+      "topics": [
+        "[cchv:protected-journal] protected-entry one",
+        "[cchv:protected-journal] protected-entry two",
+        "[cchv:protected-journal] protected-entry three"
+      ]
+    },
+    {
+      "entry_date": "2026-10-31",
+      "generated_at": "2026-10-31T12:00:00Z",
+      "headline": "[cchv:protected-journal] unrouted-entry headline",
+      "model": "m",
+      "open_questions": [
+        "[cchv:protected-journal] unrouted-entry question"
+      ],
+      "project_path": "/w/p",
+      "route": null,
+      "session_ids": [
+        1
+      ],
+      "status": "entry",
+      "summary": "[cchv:protected-journal] unrouted-entry summary of the day",
+      "topics": [
+        "[cchv:protected-journal] unrouted-entry one",
+        "[cchv:protected-journal] unrouted-entry two",
+        "[cchv:protected-journal] unrouted-entry three"
+      ]
+    },
+    {
+      "entry_date": "2026-10-31",
+      "generated_at": "2026-10-31T12:00:00Z",
+      "headline": "[cchv:protected-journal] unknown-route-entry headline",
+      "model": "m",
+      "open_questions": [
+        "[cchv:protected-journal] unknown-route-entry question"
+      ],
+      "project_path": "/w/p",
+      "route": "something-new",
+      "session_ids": [
+        1
+      ],
+      "status": "entry",
+      "summary": "[cchv:protected-journal] unknown-route-entry summary of the day",
+      "topics": [
+        "[cchv:protected-journal] unknown-route-entry one",
+        "[cchv:protected-journal] unknown-route-entry two",
+        "[cchv:protected-journal] unknown-route-entry three"
+      ]
+    },
+    {
+      "entry_date": "2026-10-31",
+      "generated_at": "2026-10-31T12:00:00Z",
+      "headline": "general-entry headline",
+      "model": "m",
+      "open_questions": [
+        "general-entry question"
+      ],
+      "project_path": "/w/p",
+      "route": "general",
+      "session_ids": [
+        1
+      ],
+      "status": "entry",
+      "summary": "general-entry summary of the day",
+      "topics": [
+        "general-entry one",
+        "general-entry two",
+        "general-entry three"
+      ]
+    }
+  ],
+  "report": {
+    "threads": [
+      {
+        "days_mentioned": 2,
+        "entry_dates": [],
+        "first_seen": "2026-10-30",
+        "last_seen": "2026-10-31",
+        "origin": "protected",
+        "question": "[cchv:protected-journal] protected-thread question",
+        "resolved_on": null,
+        "state": "open",
+        "thread_id": 1
+      },
+      {
+        "days_mentioned": 2,
+        "entry_dates": [],
+        "first_seen": "2026-10-30",
+        "last_seen": "2026-10-31",
+        "origin": "general",
+        "question": "general-thread question",
+        "resolved_on": null,
+        "state": "open",
+        "thread_id": 2
+      }
+    ]
+  },
+  "search": {
+    "journal": [
+      {
+        "entry_date": "2026-10-31",
+        "generated_at": "2026-10-31T12:00:00Z",
+        "headline": "[cchv:protected-journal] protected-entry headline",
+        "model": "m",
+        "open_questions": [
+          "[cchv:protected-journal] protected-entry question"
+        ],
+        "project_path": "/w/p",
+        "rank": 0.5,
+        "route": "protected",
+        "session_ids": [
+          1
+        ],
+        "summary": "[cchv:protected-journal] protected-entry summary of the day",
+        "topics": [
+          "[cchv:protected-journal] protected-entry one",
+          "[cchv:protected-journal] protected-entry two",
+          "[cchv:protected-journal] protected-entry three"
+        ]
+      },
+      {
+        "entry_date": "2026-10-31",
+        "generated_at": "2026-10-31T12:00:00Z",
+        "headline": "[cchv:protected-journal] unrouted-entry headline",
+        "model": "m",
+        "open_questions": [
+          "[cchv:protected-journal] unrouted-entry question"
+        ],
+        "project_path": "/w/p",
+        "rank": 0.5,
+        "route": null,
+        "session_ids": [
+          1
+        ],
+        "summary": "[cchv:protected-journal] unrouted-entry summary of the day",
+        "topics": [
+          "[cchv:protected-journal] unrouted-entry one",
+          "[cchv:protected-journal] unrouted-entry two",
+          "[cchv:protected-journal] unrouted-entry three"
+        ]
+      },
+      {
+        "entry_date": "2026-10-31",
+        "generated_at": "2026-10-31T12:00:00Z",
+        "headline": "[cchv:protected-journal] unknown-route-entry headline",
+        "model": "m",
+        "open_questions": [
+          "[cchv:protected-journal] unknown-route-entry question"
+        ],
+        "project_path": "/w/p",
+        "rank": 0.5,
+        "route": "something-new",
+        "session_ids": [
+          1
+        ],
+        "summary": "[cchv:protected-journal] unknown-route-entry summary of the day",
+        "topics": [
+          "[cchv:protected-journal] unknown-route-entry one",
+          "[cchv:protected-journal] unknown-route-entry two",
+          "[cchv:protected-journal] unknown-route-entry three"
+        ]
+      },
+      {
+        "entry_date": "2026-10-31",
+        "generated_at": "2026-10-31T12:00:00Z",
+        "headline": "general-entry headline",
+        "model": "m",
+        "open_questions": [
+          "general-entry question"
+        ],
+        "project_path": "/w/p",
+        "rank": 0.5,
+        "route": "general",
+        "session_ids": [
+          1
+        ],
+        "summary": "general-entry summary of the day",
+        "topics": [
+          "general-entry one",
+          "general-entry two",
+          "general-entry three"
+        ]
+      }
+    ]
+  },
+  "tag": "[cchv:protected-journal]"
+}

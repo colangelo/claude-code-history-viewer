@@ -184,6 +184,8 @@ async fn post(
         "resolved_threads": resolved,
         "session_ids": [sessions[&offset]],
         "model": "test-model",
+        // A general entry, so its text reads back untagged (#19).
+        "route": "general",
     });
     if let Some(l) = links {
         body["open_question_threads"] = l;

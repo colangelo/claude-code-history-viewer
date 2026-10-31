@@ -153,6 +153,18 @@ async fn seed_session(hub: &TestHub, path: &str, session: &str, date: &str) {
 }
 
 async fn post_entry(hub: &TestHub, path: &str, date: &str, headline: &str, summary: &str) {
+    post_entry_routed(hub, path, date, headline, summary, Some("general")).await;
+}
+
+/// [`post_entry`] with an explicit route (`None` = an older distiller).
+async fn post_entry_routed(
+    hub: &TestHub,
+    path: &str,
+    date: &str,
+    headline: &str,
+    summary: &str,
+    route: Option<&str>,
+) {
     let resp = client()
         .get(format!("{}/v1/sessions?project={}", hub.base, enc(path)))
         .bearer_auth(&hub.token)
@@ -187,6 +199,7 @@ async fn post_entry(hub: &TestHub, path: &str, date: &str, headline: &str, summa
             "open_questions": [],
             "session_ids": ids,
             "model": "test-model",
+            "route": route,
         }))
         .send()
         .await
@@ -414,4 +427,78 @@ async fn unknown_mode_is_rejected() {
     let (status, body) = get_raw(&hub, "/v1/search?q=x&mode=cosmic").await;
     assert_eq!(status, 400);
     assert!(body.contains("unknown mode"));
+}
+
+/// #19 (C4): semantic and hybrid hits leave tagged like keyword ones, and
+/// `route=general` filters them in every mode.
+#[tokio::test]
+async fn semantic_and_hybrid_hits_are_tagged_and_filtered_by_route() {
+    let tag = hub::journal::PROTECTION_TAG;
+    let a_text = entry_text(
+        "Zorblat cache warmup",
+        "Warmed the zorblat cache before deploys.",
+    );
+    let b_text = entry_text(
+        "Quibble index rebuild",
+        "Rebuilt the quibble index overnight.",
+    );
+    let query = "zorblat warmup";
+    let stub: Arc<dyn Embedder> = Arc::new(
+        StubEmbedder::new("stub-model", 4)
+            .with(&a_text, vec![1.0, 0.0, 0.0, 0.0])
+            .with(&b_text, vec![0.9, 0.1, 0.0, 0.0])
+            .with(&query_text(query), vec![1.0, 0.0, 0.0, 0.0]),
+    );
+    let hub = spawn(Some(stub.clone())).await;
+    let m = hub.machine_id;
+    let p = format!("/tmp/mode-{m}/tag");
+    seed_session(&hub, &p, &format!("tag1-{m}"), "2026-07-02").await;
+    seed_session(&hub, &p, &format!("tag2-{m}"), "2026-07-03").await;
+    post_entry_routed(
+        &hub,
+        &p,
+        "2026-07-02",
+        "Zorblat cache warmup",
+        "Warmed the zorblat cache before deploys.",
+        None,
+    )
+    .await;
+    post_entry_routed(
+        &hub,
+        &p,
+        "2026-07-03",
+        "Quibble index rebuild",
+        "Rebuilt the quibble index overnight.",
+        Some("general"),
+    )
+    .await;
+    sweep(&hub.pool, stub.as_ref()).await.unwrap();
+
+    for mode in ["semantic", "hybrid"] {
+        let base = format!(
+            "/v1/search?q={}&scope=journal&project={}&mode={mode}",
+            enc(query),
+            enc(&p)
+        );
+        let (status, body) = get_raw(&hub, &base).await;
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let hits = v["journal"].as_array().unwrap();
+        assert_eq!(hits.len(), 2, "{mode}");
+        for h in hits {
+            let general = h["route"] == json!("general");
+            for f in ["headline", "summary"] {
+                assert_eq!(
+                    h[f].as_str().unwrap().starts_with(tag),
+                    !general,
+                    "{mode} {f}"
+                );
+            }
+        }
+        let (_, body) = get_raw(&hub, &format!("{base}&route=general")).await;
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let hits = v["journal"].as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{mode} filtered");
+        assert_eq!(hits[0]["headline"], json!("Quibble index rebuild"));
+    }
 }
