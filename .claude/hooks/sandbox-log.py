@@ -17,6 +17,10 @@ MARKERS = {
     "could not translate host name": "dns-denied",
     "nodename nor servname": "dns-denied",
     "no such host": "dns-denied",
+    # Go tools (gh, bao) verify certificates through trustd, which the sandbox blocks.
+    "OSStatus -26276": "tls-denied",
+    # agent-bell / asks.py reach NATS over raw TCP, which the sandbox cannot proxy.
+    "bus unreachable": "bus-denied",
 }
 
 def main():
