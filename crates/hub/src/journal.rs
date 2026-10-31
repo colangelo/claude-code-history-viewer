@@ -304,6 +304,11 @@ pub struct EntryPayload {
     /// group; when omitted (manual callers, tests) it defaults to POST time.
     #[serde(default)]
     pub as_of: Option<String>,
+    /// The route the entry was generated on, `general` or `protected` (#84
+    /// finding #12). Absent (an older distiller) is stored as none, which the
+    /// thread fold treats as protected origin.
+    #[serde(default)]
+    pub route: Option<String>,
 }
 
 /// Build the flattened FTS text for an entry. Covers the prose (headline,
@@ -368,6 +373,15 @@ pub async fn create(
             return Err(HubError::BadRequest(
                 "entry status requires a non-empty model".into(),
             ));
+        }
+    }
+
+    match payload.route.as_deref() {
+        None | Some("general" | "protected") => {}
+        Some(other) => {
+            return Err(HubError::BadRequest(format!(
+                "unknown route `{other}` (expected `general` or `protected`)"
+            )))
         }
     }
 
@@ -448,6 +462,34 @@ pub async fn create(
             })?;
     }
 
+    // A `general` entry may not continue or resolve a thread that is not of
+    // general origin as of its own date (#84 #12, review M5): that thread's
+    // wording came from a protected entry, and only a protected call may carry
+    // it on. The distiller never offers such a thread; this holds it here too.
+    if !is_skip && payload.route.as_deref() == Some("general") {
+        let referenced: Vec<i64> = payload
+            .open_question_threads
+            .iter()
+            .flatten()
+            .flatten()
+            .chain(payload.resolved_threads.iter())
+            .copied()
+            .collect();
+        let refused = crate::journal_threads::not_general_origin(
+            &state.pool,
+            payload.entry_date,
+            &payload.project_path,
+            &referenced,
+        )
+        .await?;
+        if !refused.is_empty() {
+            return Err(HubError::BadRequest(format!(
+                "a general entry may not continue or resolve {} thread(s) of protected origin: {refused:?}",
+                refused.len()
+            )));
+        }
+    }
+
     // Thread links (#15): validated and given ids before anything is written.
     // Skip rows carry none.
     let (thread_ids, resolved_threads) = if is_skip {
@@ -490,14 +532,18 @@ pub async fn create(
     // transcript), so data committing anywhere in the read-generate-POST window
     // keeps the group dirty; callers that omit it (tests, manual) anchor to
     // POST time. `generated_at` stays as the human-facing timestamp.
+    // `generated_at` and `route_at` come from one `statement_timestamp()`, so
+    // they are equal exactly when the route was written with the row; a hub
+    // that predates `route` rewrites `generated_at` alone (#84 #12, review M6).
     sqlx::query(
         r"
         INSERT INTO journal_entries
             (entry_date, project_path, status, headline, summary, topics,
              open_questions, session_ids, model, generated_at, generated_snapshot,
-             search_text, open_question_threads, resolved_threads)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, clock_timestamp(),
-                coalesce($10::pg_snapshot, pg_current_snapshot()), $11, $12, $13)
+             search_text, open_question_threads, resolved_threads, route, route_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, statement_timestamp(),
+                coalesce($10::pg_snapshot, pg_current_snapshot()), $11, $12, $13,
+                $14, statement_timestamp())
         ON CONFLICT (entry_date, project_path)
         DO UPDATE SET status             = excluded.status,
                       headline           = excluded.headline,
@@ -506,11 +552,13 @@ pub async fn create(
                       open_questions     = excluded.open_questions,
                       session_ids        = excluded.session_ids,
                       model              = excluded.model,
-                      generated_at       = clock_timestamp(),
+                      generated_at       = statement_timestamp(),
                       generated_snapshot = excluded.generated_snapshot,
                       search_text        = excluded.search_text,
                       open_question_threads = excluded.open_question_threads,
-                      resolved_threads   = excluded.resolved_threads
+                      resolved_threads   = excluded.resolved_threads,
+                      route              = excluded.route,
+                      route_at           = statement_timestamp()
         ",
     )
     .bind(payload.entry_date)
@@ -532,6 +580,7 @@ pub async fn create(
     .bind(search_text)
     .bind(&thread_ids)
     .bind(&resolved_threads)
+    .bind(&payload.route)
     .execute(&state.pool)
     .await?;
 

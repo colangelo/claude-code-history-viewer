@@ -122,14 +122,50 @@ pub async fn resolve_links(
 // The fold (pure)
 // ---------------------------------------------------------------------------
 
-/// The thread-relevant columns of one `entry`-status row.
+/// The thread-relevant columns of one row: every `entry` row, plus `skip` rows
+/// with a counted `protected` route (they carry no questions, only taint).
 #[derive(Debug, Clone, FromRow)]
 pub struct EntryThreads {
     pub entry_date: NaiveDate,
     pub project_path: String,
+    pub status: String,
     pub open_questions: Vec<String>,
     pub open_question_threads: Vec<i64>,
     pub resolved_threads: Vec<i64>,
+    pub session_ids: Vec<i64>,
+    /// The route when it was written with the row (`route_at = generated_at`),
+    /// else none.
+    pub route: Option<String>,
+}
+
+impl EntryThreads {
+    fn is_entry(&self) -> bool {
+        self.status == "entry"
+    }
+
+    fn is_general(&self) -> bool {
+        self.route.as_deref() == Some("general")
+    }
+
+    /// A row whose sessions make every thread they mention protected (M7):
+    /// a protected or route-less entry, or a protected skip.
+    fn taints(&self) -> bool {
+        if self.is_entry() {
+            !self.is_general()
+        } else {
+            self.route.as_deref() == Some("protected")
+        }
+    }
+}
+
+/// Where a thread's wording may come from (#84 finding #12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    /// Every entry that mentions it was generated on the general route, and
+    /// none of them shares a session with a protected day of the project.
+    General,
+    Protected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -164,6 +200,7 @@ pub struct Thread {
     pub state: ThreadState,
     /// Latest resolution, when it is after the last mention.
     pub resolved_on: Option<NaiveDate>,
+    pub origin: Origin,
 }
 
 /// Fold entries into threads per project. `rows` may come in any order.
@@ -173,25 +210,44 @@ pub struct Thread {
 /// mention is before the project's `quiet_after` most recent active days;
 /// otherwise `open`. A project with fewer active days than that has no quiet
 /// threads.
+///
+/// A thread's origin is `general` only when every entry mentioning it has route
+/// `general` and shares no session with a tainting row of the project (see
+/// [`EntryThreads::taints`]); otherwise `protected`. Resolutions carry no text
+/// and do not change it.
 pub fn fold_threads(rows: &[EntryThreads], quiet_after: usize) -> BTreeMap<String, Vec<Thread>> {
     #[derive(Default)]
     struct Acc {
         mentions: Vec<(NaiveDate, String)>,
         resolutions: Vec<NaiveDate>,
+        protected_mention: bool,
     }
     let mut sorted: Vec<&EntryThreads> = rows.iter().collect();
     sorted.sort_by_key(|r| r.entry_date);
 
+    let mut tainted: HashMap<&str, BTreeSet<i64>> = HashMap::new();
+    for row in rows.iter().filter(|r| r.taints()) {
+        tainted
+            .entry(&row.project_path)
+            .or_default()
+            .extend(&row.session_ids);
+    }
+
     let mut per_project: BTreeMap<&str, (BTreeSet<NaiveDate>, HashMap<i64, Acc>)> = BTreeMap::new();
     for row in sorted {
         let (active, threads) = per_project.entry(&row.project_path).or_default();
+        if !row.is_entry() {
+            continue;
+        }
         active.insert(row.entry_date);
+        let general = row.is_general()
+            && tainted
+                .get(row.project_path.as_str())
+                .is_none_or(|t| row.session_ids.iter().all(|s| !t.contains(s)));
         for (q, id) in row.open_questions.iter().zip(&row.open_question_threads) {
-            threads
-                .entry(*id)
-                .or_default()
-                .mentions
-                .push((row.entry_date, q.clone()));
+            let acc = threads.entry(*id).or_default();
+            acc.mentions.push((row.entry_date, q.clone()));
+            acc.protected_mention |= !general;
         }
         for id in &row.resolved_threads {
             threads
@@ -240,6 +296,11 @@ pub fn fold_threads(rows: &[EntryThreads], quiet_after: usize) -> BTreeMap<Strin
                         entry_dates,
                         state,
                         resolved_on,
+                        origin: if acc.protected_mention {
+                            Origin::Protected
+                        } else {
+                            Origin::General
+                        },
                     })
                 })
                 .collect();
@@ -269,6 +330,9 @@ pub struct OpenQuestionsParams {
     /// Comma-separated subset of `open,quiet,resolved` (default: all).
     pub state: Option<String>,
     pub limit: Option<usize>,
+    /// `general`: only threads of general origin, echoed in the response so a
+    /// caller can tell this hub applied it (#84 #12). No other value.
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,7 +340,68 @@ pub struct ProjectThreads {
     pub project_path: String,
     pub from: NaiveDate,
     pub before: NaiveDate,
+    /// Present only when the `origin` filter was applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
     pub threads: Vec<Thread>,
+}
+
+/// Every `entry` row, and every `skip` row with a counted `protected` route, of
+/// one project (or all) dated before `before`. The route counts only when it was
+/// written with the row (`route_at = generated_at`, review M6).
+async fn load_rows(
+    pool: &PgPool,
+    project: Option<&str>,
+    before: NaiveDate,
+) -> Result<Vec<EntryThreads>, sqlx::Error> {
+    sqlx::query_as::<_, EntryThreads>(
+        r"
+        SELECT entry_date, project_path, status, open_questions, open_question_threads,
+               resolved_threads, session_ids,
+               CASE WHEN route_at = generated_at THEN route END AS route
+        FROM journal_entries
+        WHERE (status = 'entry'
+               OR (status = 'skip' AND route = 'protected' AND route_at = generated_at))
+          AND ($1::text IS NULL OR project_path = $1)
+          AND entry_date < $2
+        ",
+    )
+    .bind(project)
+    .bind(before)
+    .fetch_all(pool)
+    .await
+}
+
+/// The ids among `ids` that are threads of `project_path` NOT of general origin
+/// as of `entry_date` (folded from the rows before it, as the distiller saw them
+/// when it offered threads for that day). Ids the project does not know are left
+/// to [`resolve_links`].
+pub async fn not_general_origin(
+    pool: &PgPool,
+    entry_date: NaiveDate,
+    project_path: &str,
+    ids: &[i64],
+) -> Result<Vec<i64>, HubError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = load_rows(pool, Some(project_path), entry_date).await?;
+    let folded = fold_threads(&rows, QUIET_AFTER_ACTIVE_DAYS);
+    let protected: BTreeSet<i64> = folded
+        .get(project_path)
+        .into_iter()
+        .flatten()
+        .filter(|t| t.origin != Origin::General)
+        .map(|t| t.thread_id)
+        .collect();
+    let mut out: Vec<i64> = ids
+        .iter()
+        .copied()
+        .filter(|id| protected.contains(id))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -323,8 +448,18 @@ pub async fn open_questions(
             Some(set)
         }
     };
+    let origin = match params.origin.as_deref() {
+        None | Some("") => None,
+        Some("general") => Some(Origin::General),
+        Some(other) => {
+            return Err(HubError::BadRequest(format!(
+                "unknown origin `{other}` (expected general)"
+            )))
+        }
+    };
     let wanted = |t: &Thread| {
         t.last_seen >= from
+            && origin.is_none_or(|o| t.origin == o)
             && match &states {
                 None => true,
                 Some(s) => s
@@ -336,20 +471,7 @@ pub async fn open_questions(
     // One project's entries, or every project's: a few thousand short rows at
     // most, folded in memory. Earlier than `from` still matters: a thread first
     // seen before the window, and the active days that decide `quiet`.
-    let rows = sqlx::query_as::<_, EntryThreads>(
-        r"
-        SELECT entry_date, project_path, open_questions, open_question_threads,
-               resolved_threads
-        FROM journal_entries
-        WHERE status = 'entry'
-          AND ($1::text IS NULL OR project_path = $1)
-          AND entry_date < $2
-        ",
-    )
-    .bind(&params.project)
-    .bind(before)
-    .fetch_all(&state.pool)
-    .await?;
+    let rows = load_rows(&state.pool, params.project.as_deref(), before).await?;
     let folded = fold_threads(&rows, QUIET_AFTER_ACTIVE_DAYS);
 
     if let Some(project) = params.project {
@@ -363,6 +485,7 @@ pub async fn open_questions(
             project_path: project,
             from,
             before,
+            origin,
             threads,
         })));
     }
@@ -408,6 +531,9 @@ mod tests {
             open_questions: qs.iter().map(|(q, _)| (*q).to_string()).collect(),
             open_question_threads: qs.iter().map(|(_, id)| *id).collect(),
             resolved_threads: resolved.to_vec(),
+            status: "entry".into(),
+            session_ids: Vec::new(),
+            route: None,
         }
     }
 
@@ -437,6 +563,40 @@ mod tests {
         assert_eq!(t.last_seen, d("2026-10-03"));
         assert_eq!(t.days_mentioned, 3);
         assert_eq!(t.state, ThreadState::Open);
+    }
+
+    #[test]
+    fn a_protected_skip_taints_its_sessions_and_a_routeless_skip_does_not() {
+        let general = |date: &str, qs: &[(&str, i64)], sessions: &[i64]| EntryThreads {
+            route: Some("general".into()),
+            session_ids: sessions.to_vec(),
+            ..row(date, "/p", qs, &[])
+        };
+        let skip = |date: &str, route: Option<&str>, sessions: &[i64]| EntryThreads {
+            status: "skip".into(),
+            route: route.map(Into::into),
+            session_ids: sessions.to_vec(),
+            ..row(date, "/p", &[], &[])
+        };
+        let base = vec![general("2026-10-01", &[("q", 7)], &[11])];
+        let origin = |rows: &[EntryThreads]| thread(&fold_threads(rows, 3), "/p", 7).origin;
+        assert_eq!(origin(&base), Origin::General);
+
+        let mut rows = base.clone();
+        rows.push(skip("2026-10-02", None, &[11]));
+        assert_eq!(
+            origin(&rows),
+            Origin::General,
+            "a skip with no call taints nothing"
+        );
+
+        rows.push(skip("2026-10-03", Some("protected"), &[11]));
+        assert_eq!(origin(&rows), Origin::Protected);
+        let t = thread(&fold_threads(&rows, 3), "/p", 7);
+        assert_eq!(
+            t.days_mentioned, 1,
+            "skip rows are not active days or mentions"
+        );
     }
 
     #[test]
