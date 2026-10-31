@@ -669,6 +669,21 @@ def test_folder_name_as_a_segment_protects_and_its_longer_twin_does_not(tmp_path
     assert twin is None
 
 
+# M4 (review 3): the boundary is a character class, so prose punctuation and
+# wrappers around the name protect; a longer name still does not.
+@pytest.mark.parametrize("shape", ["_clientx.", "_clientx.git", "_clientx;", "_clientx!", "_clientx?",
+                                   "**_clientx**", "(_clientx)", "<_clientx>", "[_clientx]"])
+def test_a_folder_name_in_prose_punctuation_protects(tmp_path, shape) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text(f"we worked on {shape} today"), cwd=None)]})
+    assert hit == "text_marker"
+
+
+@pytest.mark.parametrize("twin", ["_clientx-lab", "_clientxx", "_clientxtra.", "my_clientx"])
+def test_a_longer_name_stays_general(tmp_path, twin) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text(f"we worked on {twin} today"), cwd=None)]})
+    assert hit is None
+
+
 # C3: an absent cwd key protects; a null cwd is no signal.
 def test_a_message_without_the_cwd_key_protects(tmp_path) -> None:
     hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"))]})
