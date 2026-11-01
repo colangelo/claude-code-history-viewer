@@ -285,9 +285,7 @@ impl HubConfig {
                     .label
                     .clone()
                     .unwrap_or_else(|| format!("machine_id {}", t.machine_id));
-                anyhow::bail!(
-                    "token entry `{who}` sets both read_only and ingest_only; pick one"
-                );
+                anyhow::bail!("token entry `{who}` sets both read_only and ingest_only; pick one");
             }
         }
         Ok(())
@@ -324,7 +322,10 @@ mod tests {
              [[tokens]]\ntoken = \"blog\"\nmachine_id = \"{ID}\"\nread_only = true\n"
         ))
         .unwrap();
-        assert_eq!(config.read_only_tokens(), HashSet::from(["blog".to_string()]));
+        assert_eq!(
+            config.read_only_tokens(),
+            HashSet::from(["blog".to_string()])
+        );
         assert!(config.ingest_only_tokens().is_empty());
         config.validate().unwrap();
     }
@@ -339,7 +340,10 @@ mod tests {
         .unwrap();
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("both"), "{err}");
-        assert!(!err.contains("secret-value"), "the error must not print the token");
+        assert!(
+            !err.contains("secret-value"),
+            "the error must not print the token"
+        );
     }
 
     #[test]

@@ -160,6 +160,12 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
 
     router
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // Inside CORS, so a refused write still carries the CORS headers and a
+        // browser shows the 401 instead of an opaque network error.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::refuse_read_only_writes,
+        ))
         .layer(cors)
         // API responses carry NO freshness metadata of their own, which lets a
         // browser heuristically cache a `/v1/journal/entries` (or search/browse)
@@ -373,6 +379,7 @@ pub async fn run() -> anyhow::Result<()> {
         config.trust_tailscale_identity.clone(),
     )
     .with_ingest_only_tokens(config.ingest_only_tokens())
+    .with_read_only_tokens(config.read_only_tokens())
     .with_redact_rules(redact_rules);
     if let Some(dir) = &config.embed_model_dir {
         tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");

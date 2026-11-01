@@ -359,6 +359,22 @@ label = "m4m"
 > The `machine_id` here must match the id the daemon reports (see step 3 — the
 > daemon prints its id on first run, or you can pre-seed it).
 
+**Token kinds.** An entry with no flag is full scope (reads, ingests, journal
+writes, identity aliases). Two flags narrow it, and an entry may set at most one
+(both fails the hub's config load):
+
+| flag | may | is refused (401) on | m4m launcher source |
+|---|---|---|---|
+| `ingest_only = true` | `POST /v1/ingest` under its own machine id | every read, every other write | `kv/agents/cchv/<guest>` |
+| `read_only = true` | every authenticated GET | any method but GET/HEAD/OPTIONS, on any path | `kv/agents/cchv-readers/<reader>` |
+
+Both launcher sources hold `token` (64 lowercase hex) and `machine_id`
+(lowercase UUID); the entry's label is the child's name. A malformed child is
+skipped and logged, and a machine id is rendered once across both sources. The
+hub's AppRole needs read and list on both paths; each client reads only its own
+leaf. The read-only refusal is a router layer, so a write route added later
+refuses a read-only token with no code of its own (OpenSpec `read-only-tokens`).
+
 Run it (systemd unit, Linux node):
 
 ```ini

@@ -108,10 +108,45 @@ bao_kv_list() {
     "$BAO_ADDR/v1/kv/metadata/$1/" | jq -r '.data.keys[]? // empty'
 }
 
-# guest_token_block <token> <machine_id> <label>  → one ingest-only [[tokens]]
-# entry. Callers validate all three first: these values land in TOML.
-guest_token_block() {
-  printf '\n[[tokens]]\ntoken = "%s"\nmachine_id = "%s"\nlabel = "%s"\ningest_only = true\n' "$1" "$2" "$3"
+# scoped_token_block <token> <machine_id> <label> <flag>  → one [[tokens]] entry
+# with `<flag> = true` (ingest_only or read_only). Callers validate all four
+# first: these values land in TOML.
+scoped_token_block() {
+  printf '\n[[tokens]]\ntoken = "%s"\nmachine_id = "%s"\nlabel = "%s"\n%s = true\n' "$1" "$2" "$3" "$4"
+}
+
+# SCOPED_SEEN: machine ids rendered so far by render_scoped_tokens (one list
+# across guests and readers, so a machine id is never two kinds at once).
+SCOPED_SEEN=" "
+
+# render_scoped_tokens <kv dir> <flag> <kind>  → appends one entry per valid
+# child of kv/<kv dir>/ (fields token, machine_id; label = the child's name) to
+# $content, with `<flag> = true`. Optional by design: an entry that is
+# unreadable or malformed is skipped and logged, and the rest render
+# regardless. The shape checks are what keep a bad value from injecting TOML.
+render_scoped_tokens() {
+  local dir="$1" flag="$2" kind="$3" names name tok id rendered=0
+  names="$(bao_kv_list "$dir")" || { names=""; log "${kind}s: cannot list kv/$dir/ — rendering no $kind tokens from it"; }
+  for name in $names; do
+    if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
+      log "${kind}s: skipped an entry whose name is not a valid $kind name"; continue
+    fi
+    tok="$(bao_kv_path "$dir/$name" token)" || tok=""
+    id="$(bao_kv_path "$dir/$name" machine_id)" || id=""
+    if [[ ! "$tok" =~ ^[0-9a-f]{64}$ ]]; then
+      log "$kind $name: token missing or not 64 lowercase hex — skipped"; continue
+    fi
+    if [[ ! "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+      log "$kind $name: machine_id missing or not a lowercase UUID — skipped"; continue
+    fi
+    if [[ "$SCOPED_SEEN" == *" $id "* ]]; then
+      log "$kind $name: machine_id already rendered — skipped as a duplicate"; continue
+    fi
+    content+="$(scoped_token_block "$tok" "$id" "$name" "$flag")"$'\n'
+    SCOPED_SEEN+="$id "; rendered=$((rendered + 1))
+    log "$kind $name: $flag token rendered"
+  done
+  log "${kind}s: $rendered $flag token(s) rendered"
 }
 
 # bao_kv_path <path under kv/> <field>  → value on stdout, or fail.
@@ -204,34 +239,14 @@ render() {
       content="${content//@AC_MBM5_TOKEN@/$mbm5_token}"
       content="${content//@AC_MBP_TOKEN@/$mbp_token}"
       # Fenced homelab guests: one INGEST-ONLY token each (no read routes, no
-      # journal writes), from kv/agents/cchv/<guest> (fields token, machine_id);
-      # the label is the guest's name, which is also the hostname its daemon
-      # reports. Each guest reads only its own entry, so every value has one
-      # source. Optional by design: a guest that is unreadable or malformed is
-      # skipped and logged, and the others and the Macs render regardless. The
-      # shape checks are what keep a bad value from injecting TOML.
-      local guests guest gtoken gid seen=" " rendered=0
-      guests="$(bao_kv_list agents/cchv)" || { guests=""; log "guests: cannot list kv/agents/cchv/ — rendering no guest tokens from it"; }
-      for guest in $guests; do
-        if [[ ! "$guest" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
-          log "guests: skipped an entry whose name is not a valid guest name"; continue
-        fi
-        gtoken="$(bao_kv_path "agents/cchv/$guest" token)" || gtoken=""
-        gid="$(bao_kv_path "agents/cchv/$guest" machine_id)" || gid=""
-        if [[ ! "$gtoken" =~ ^[0-9a-f]{64}$ ]]; then
-          log "guest $guest: token missing or not 64 lowercase hex — skipped"; continue
-        fi
-        if [[ ! "$gid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-          log "guest $guest: machine_id missing or not a lowercase UUID — skipped"; continue
-        fi
-        if [[ "$seen" == *" $gid "* ]]; then
-          log "guest $guest: machine_id already rendered — skipped as a duplicate"; continue
-        fi
-        content+="$(guest_token_block "$gtoken" "$gid" "$guest")"$'\n'
-        seen+="$gid "; rendered=$((rendered + 1))
-        log "guest $guest: ingest-only token rendered"
-      done
-      log "guests: $rendered ingest-only token(s) rendered"
+      # journal writes), from kv/agents/cchv/<guest>; the label is the guest's
+      # name, which is also the hostname its daemon reports. Each guest reads
+      # only its own entry, so every value has one source.
+      render_scoped_tokens agents/cchv ingest_only guest
+      # Readers (the agents blog): one READ-ONLY token each (every read route,
+      # no write of any kind), from kv/agents/cchv-readers/<reader>. Each
+      # reader's client reads only its own entry.
+      render_scoped_tokens agents/cchv-readers read_only reader
       ;;
   esac
 

@@ -240,7 +240,11 @@ async fn journal_writes_stay_bearer_only() {
             .send()
             .await
             .unwrap();
-        assert_eq!(res.status(), 401, "trusted login, no bearer, on POST {route}");
+        assert_eq!(
+            res.status(),
+            401,
+            "trusted login, no bearer, on POST {route}"
+        );
     }
 }
 
@@ -364,7 +368,10 @@ async fn read_only_token_passes_head_and_options() {
         .unwrap();
     assert_ne!(res.status(), 401, "HEAD /v1/projects");
     let res = client
-        .request(reqwest::Method::OPTIONS, format!("{}/v1/projects", hub.base))
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{}/v1/projects", hub.base),
+        )
         .bearer_auth(&hub.read_only.0)
         .header("origin", "http://example.test")
         .header("access-control-request-method", "GET")
