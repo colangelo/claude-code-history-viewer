@@ -25,7 +25,10 @@ fn load_refuses_a_duplicate_and_accepts_the_fixed_file() {
     std::fs::write(&path, file("secret-guest")).unwrap();
     let err = hub::HubConfig::load().unwrap_err().to_string();
     assert!(err.contains("duplicate"), "{err}");
-    assert!(!err.contains("secret-"), "the error must not print a token: {err}");
+    assert!(
+        !err.contains("secret-"),
+        "the error must not print a token: {err}"
+    );
 
     std::fs::write(&path, file("secret-reader")).unwrap();
     let config = hub::HubConfig::load().expect("the fixed file loads");

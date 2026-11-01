@@ -108,26 +108,33 @@ bao_kv_list() {
     "$BAO_ADDR/v1/kv/metadata/$1/" | jq -r '.data.keys[]? // empty'
 }
 
-# scoped_token_block <token> <machine_id> <label> <flag>  → one [[tokens]] entry
-# with `<flag> = true` (ingest_only or read_only). Callers validate all four
-# first: these values land in TOML.
+# scoped_token_block <table> <token> <machine_id> <label> [flag]  → one TOML
+# entry in [[<table>]] (tokens or readers), with `<flag> = true` when a flag is
+# given. Callers validate every value first: these values land in TOML.
 scoped_token_block() {
-  printf '\n[[tokens]]\ntoken = "%s"\nmachine_id = "%s"\nlabel = "%s"\n%s = true\n' "$1" "$2" "$3" "$4"
+  printf '\n[[%s]]\ntoken = "%s"\nmachine_id = "%s"\nlabel = "%s"\n' "$1" "$2" "$3" "$4"
+  [ -n "${5:-}" ] && printf '%s = true\n' "$5"
+  return 0
 }
 
 # SCOPED_SEEN: machine ids rendered so far by render_scoped_tokens (one list
-# across guests and readers, so a machine id is never two kinds at once).
+# across guests and readers). RENDER_FATAL: set when a render must not start
+# the hub at all — not even from the cached runtime file (security C1).
 SCOPED_SEEN=" "
+RENDER_FATAL=""
 
-# render_scoped_tokens <kv dir> <flag> <kind>  → appends one entry per valid
-# child of kv/<kv dir>/ (fields token, machine_id; label = the child's name) to
-# $content, with `<flag> = true`. Optional by design: an entry that is
-# unreadable or malformed is skipped and logged, and the rest render
-# regardless. The shape checks are what keep a bad value from injecting TOML.
+# render_scoped_tokens <kv dir> <table> <flag or ""> <kind>  → appends one
+# entry per valid child of kv/<kv dir>/ (fields token, machine_id; label = the
+# child's name) to $content. An unreadable or malformed child is skipped and
+# logged, and the rest render regardless; the shape checks keep a bad value
+# from injecting TOML. A machine id seen twice is FATAL, never skipped: a
+# copied leaf (a reader made from a guest) must stop the launch, not quietly
+# keep the first entry's scope.
 render_scoped_tokens() {
-  local dir="$1" flag="$2" kind="$3" names name tok id rendered=0
+  local dir="$1" table="$2" flag="$3" kind="$4" names name tok id rendered=0
   names="$(bao_kv_list "$dir")" || { names=""; log "${kind}s: cannot list kv/$dir/ — rendering no $kind tokens from it"; }
-  for name in $names; do
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
     if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]]; then
       log "${kind}s: skipped an entry whose name is not a valid $kind name"; continue
     fi
@@ -140,13 +147,26 @@ render_scoped_tokens() {
       log "$kind $name: machine_id missing or not a lowercase UUID — skipped"; continue
     fi
     if [[ "$SCOPED_SEEN" == *" $id "* ]]; then
-      log "$kind $name: machine_id already rendered — skipped as a duplicate"; continue
+      log "FATAL: $kind $name: machine_id $id is already rendered — a duplicate entry; the hub will not start"
+      RENDER_FATAL=1; continue
     fi
-    content+="$(scoped_token_block "$tok" "$id" "$name" "$flag")"$'\n'
+    content+="$(scoped_token_block "$table" "$tok" "$id" "$name" "$flag")"$'\n'
     SCOPED_SEEN+="$id "; rendered=$((rendered + 1))
-    log "$kind $name: $flag token rendered"
-  done
-  log "${kind}s: $rendered $flag token(s) rendered"
+    log "$kind $name: [[${table}]]${flag:+ $flag} token rendered"
+  done <<< "$names"
+  log "${kind}s: $rendered token(s) rendered"
+}
+
+# duplicate_values <toml text>  → succeeds (and logs) when a token string or a
+# machine id appears twice anywhere in the rendered file, Mac template entries
+# included. Prints counts and machine ids only, never a token.
+duplicate_values() {
+  local dup_tokens dup_ids
+  dup_tokens="$(printf '%s\n' "$1" | sed -n 's/^token = "\(.*\)"$/\1/p' | sort | uniq -d | wc -l | tr -d ' ')"
+  dup_ids="$(printf '%s\n' "$1" | sed -n 's/^machine_id = "\(.*\)"$/\1/p' | sort | uniq -d | tr '\n' ' ')"
+  [ "$dup_tokens" = 0 ] && [ -z "$dup_ids" ] && return 1
+  log "FATAL: duplicate entries in the rendered config: $dup_tokens repeated token string(s); repeated machine ids: ${dup_ids:-none}"
+  return 0
 }
 
 # bao_kv_path <path under kv/> <field>  → value on stdout, or fail.
@@ -242,11 +262,11 @@ render() {
       # journal writes), from kv/agents/cchv/<guest>; the label is the guest's
       # name, which is also the hostname its daemon reports. Each guest reads
       # only its own entry, so every value has one source.
-      render_scoped_tokens agents/cchv ingest_only guest
+      render_scoped_tokens agents/cchv tokens ingest_only guest
       # Readers (the agents blog): one READ-ONLY token each (every read route,
       # no write of any kind), from kv/agents/cchv-readers/<reader>. Each
       # reader's client reads only its own entry.
-      render_scoped_tokens agents/cchv-readers read_only reader
+      render_scoped_tokens agents/cchv-readers readers "" reader
       ;;
   esac
 
@@ -261,12 +281,21 @@ $content"
   if printf '%s\n' "$content" | grep -q '@[A-Z_]*@'; then
     log "unresolved placeholders remain after render"; return 1
   fi
+  # A duplicate is not a resolution failure: return 2 so the caller exits
+  # instead of falling back to the cached runtime file (security C1).
+  if [ -n "$RENDER_FATAL" ] || duplicate_values "$content"; then
+    return 2
+  fi
   ( umask 077; printf '%s\n' "$content" > "$RUNTIME.tmp" )
   mv -f "$RUNTIME.tmp" "$RUNTIME"
   log "rendered $RUNTIME (bao-first)"
 }
 
-if ! render; then
+rc=0; render || rc=$?   # set -e: capture, do not exit
+if [ "$rc" = 2 ]; then
+  log "FATAL: the rendered config has a duplicate token or machine id — not starting, and NOT reusing the cached $RUNTIME (it may hold the very entry being changed); fix the bao entries and relaunch"
+  exit 1
+elif [ "$rc" != 0 ]; then
   if [ -s "$RUNTIME" ]; then
     log "WARN: secret resolution failed — reusing last-known-good $RUNTIME"
     # The floor stays valid for the hub TOKENS (static values), but a cached DB

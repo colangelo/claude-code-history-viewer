@@ -359,21 +359,36 @@ label = "m4m"
 > The `machine_id` here must match the id the daemon reports (see step 3 — the
 > daemon prints its id on first run, or you can pre-seed it).
 
-**Token kinds.** An entry with no flag is full scope (reads, ingests, journal
-writes, identity aliases). Two flags narrow it, and an entry may set at most one
-(both fails the hub's config load):
+**Token kinds.** Three, in two tables:
 
-| flag | may | is refused (401) on | m4m launcher source |
+| entry | may | is refused (401) on | m4m launcher source |
 |---|---|---|---|
-| `ingest_only = true` | `POST /v1/ingest` under its own machine id | every read, every other write | `kv/agents/cchv/<guest>` |
-| `read_only = true` | every authenticated GET | any method but GET/HEAD/OPTIONS, on any path | `kv/agents/cchv-readers/<reader>` |
+| `[[tokens]]` | everything: reads, ingest under its machine id, journal writes, identity aliases | — | the Mac template + `kv/infra/cchv/hub-tokens` |
+| `[[tokens]]` with `ingest_only = true` | `POST /v1/ingest` under its own machine id | every read, every other write | `kv/agents/cchv/<guest>` |
+| `[[readers]]` (`token`, `machine_id`, `label`) | every authenticated GET | any method but GET/HEAD/OPTIONS, on any path | `kv/agents/cchv-readers/<reader>` |
+
+Readers have their own table on purpose: a hub binary older than cchv-v0.37.0
+does not know it, ignores it, and grants the token nothing (fail closed). Both
+entry types refuse unknown fields, so a stray `read_only = true` under
+`[[tokens]]` (the cchv-v0.36.0 format, never minted) fails the load instead of
+loading as a full token. The read-only refusal is a router layer, so a write
+route added later refuses a reader with no code of its own (OpenSpec
+`read-only-tokens`, security review ac/security 8c52aa9).
 
 Both launcher sources hold `token` (64 lowercase hex) and `machine_id`
 (lowercase UUID); the entry's label is the child's name. A malformed child is
-skipped and logged, and a machine id is rendered once across both sources. The
-hub's AppRole needs read and list on both paths; each client reads only its own
-leaf. The read-only refusal is a router layer, so a write route added later
-refuses a read-only token with no code of its own (OpenSpec `read-only-tokens`).
+skipped and logged. **A duplicate is fatal:** a token string or machine id that
+appears twice anywhere in the rendered file (Mac entries included) stops the
+launch, and the launcher does NOT fall back to the cached runtime file; the hub
+itself refuses the same at load. The hub's AppRole needs read and list on both
+paths; each client reads only its own leaf.
+
+**Revoking a reader (or guest).** Delete its bao leaf, relaunch the hub
+the way §2b does (bootout + bootstrap), then confirm the label is gone from the rendered runtime file:
+`grep -c 'label = "<name>"' ~/.config/cchv/hub.runtime.toml` must print 0. A
+launch that cannot reach bao reuses the cached runtime file, which still holds
+the revoked token, so a revocation is only done when that count is 0 and the
+token answers 401 on `GET /v1/projects`.
 
 Run it (systemd unit, Linux node):
 

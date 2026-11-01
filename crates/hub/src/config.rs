@@ -180,7 +180,10 @@ impl MirrorConfig {
     }
 }
 
+/// `deny_unknown_fields`: a field this binary does not know (`read_only`
+/// from revision 1, or a typo) must not load as a full-scope token.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenEntry {
     pub token: String,
     pub machine_id: Uuid,
@@ -190,15 +193,16 @@ pub struct TokenEntry {
     /// For fenced guests that archive their own sessions (Macs leave it unset).
     #[serde(default)]
     pub ingest_only: bool,
-    /// Limit this token to reading: every read route answers as for a full
-    /// token, every write (any method but GET/HEAD/OPTIONS) answers 401. For
-    /// agents that read the archive and must not write it (the agents blog).
-    #[serde(default)]
-    pub read_only: bool,
 }
 
-/// A read-only token: every authenticated GET, no write of any kind.
+/// A read-only token: every authenticated GET answers as for a full token,
+/// every other method answers 401 (see `auth`). For agents that read the
+/// archive and must not write it (the agents blog). A table of its own, not a
+/// flag on `TokenEntry`: a hub binary that predates readers ignores the table
+/// and grants the token nothing, where an unknown flag would have been ignored
+/// and left a FULL token (security C2).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReaderEntry {
     pub token: String,
     pub machine_id: Uuid,
@@ -238,7 +242,6 @@ impl HubConfig {
                 machine_id: machine_id.parse()?,
                 label: None,
                 ingest_only: false,
-                read_only: false,
             });
         }
         let static_dir = std::env::var("HUB_STATIC_DIR").ok().map(PathBuf::from);
@@ -280,25 +283,41 @@ impl HubConfig {
 
     /// The tokens limited to reading (see `TokenEntry::read_only`).
     pub fn read_only_tokens(&self) -> HashSet<String> {
-        self.tokens
-            .iter()
-            .filter(|t| t.read_only)
-            .map(|t| t.token.clone())
-            .collect()
+        self.readers.iter().map(|r| r.token.clone()).collect()
     }
 
-    /// Refuse a token entry that is both `read_only` and `ingest_only`: that
-    /// pair grants nothing, so it can only be a mistake, and guessing which
-    /// flag was meant would hand out a scope nobody chose. The error names the
-    /// entry by label, else machine id — never by token.
+    /// Refuse a token string or a machine id that appears twice across
+    /// `[[tokens]]` and `[[readers]]` (security C1). A token string twice
+    /// would carry whichever scopes its entries add up to — a reader leaf
+    /// copied from a guest leaf kept the guest's ingest — and a machine id
+    /// twice makes the audit principal ambiguous. The error names entries by
+    /// label (else machine id), never by token.
     pub fn validate(&self) -> anyhow::Result<()> {
-        for t in &self.tokens {
-            if t.read_only && t.ingest_only {
+        let entries = self
+            .tokens
+            .iter()
+            .map(|t| {
                 let who = t
                     .label
                     .clone()
                     .unwrap_or_else(|| format!("machine_id {}", t.machine_id));
-                anyhow::bail!("token entry `{who}` sets both read_only and ingest_only; pick one");
+                (t.token.as_str(), t.machine_id, format!("token `{who}`"))
+            })
+            .chain(self.readers.iter().map(|r| {
+                (
+                    r.token.as_str(),
+                    r.machine_id,
+                    format!("reader `{}`", r.label),
+                )
+            }));
+        let mut by_token: HashMap<&str, String> = HashMap::new();
+        let mut by_machine: HashMap<Uuid, String> = HashMap::new();
+        for (token, machine_id, who) in entries {
+            if let Some(first) = by_token.insert(token, who.clone()) {
+                anyhow::bail!("duplicate token string: {first} and {who} share one");
+            }
+            if let Some(first) = by_machine.insert(machine_id, who.clone()) {
+                anyhow::bail!("duplicate machine_id {machine_id}: {first} and {who}");
             }
         }
         Ok(())
@@ -309,6 +328,7 @@ impl HubConfig {
         self.tokens
             .iter()
             .map(|t| (t.token.clone(), t.machine_id))
+            .chain(self.readers.iter().map(|r| (r.token.clone(), r.machine_id)))
             .collect()
     }
 }
@@ -396,7 +416,10 @@ mod tests {
         for case in cases {
             let err = parse(&case).unwrap().validate().unwrap_err().to_string();
             assert!(err.contains("duplicate"), "{err}");
-            assert!(!err.contains("secret-"), "the error must not print a token: {err}");
+            assert!(
+                !err.contains("secret-"),
+                "the error must not print a token: {err}"
+            );
         }
     }
 

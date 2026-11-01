@@ -15,7 +15,7 @@
 //! sessions without reading the archive. The default is deny: a new route that
 //! takes `AuthedMachine` or `Authenticated` refuses them without extra code.
 //!
-//! Read-only tokens (`read_only = true`) are the mirror image: accepted by
+//! Reader tokens (`[[readers]]` in `hub.toml`) are the mirror image: accepted by
 //! [`Authenticated`], refused by [`IngestMachine`] and [`AuthedMachine`], and
 //! refused by [`refuse_read_only_writes`] on every method but GET, HEAD and
 //! OPTIONS. That router layer is the default deny for writes: the identity

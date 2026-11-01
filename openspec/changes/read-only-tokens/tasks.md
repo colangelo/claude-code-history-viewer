@@ -38,13 +38,17 @@
       `/v1/projects` 200; POST `/v1/ingest` and `/v1/journal/entries` 401; a Mac token unchanged.
 
 ## 4. Revision 2 (C1-C3, before any mint)
-- [ ] 4.1 Tests first (red): `[[readers]]` parse + reader scope through `AppState::from_config`;
+- [x] 4.1 Tests first (red): `[[readers]]` parse + reader scope through `AppState::from_config`;
       `read_only` under `[[tokens]]` and unknown reader fields fail; duplicate token / machine id
-      across tables fail (`validate` and `HubConfig::load`); static_dir layer test.
-- [ ] 4.2 Hub: `ReaderEntry` + `readers` table, `deny_unknown_fields` on both entry types, drop
+      across tables fail (`validate` and `HubConfig::load`); static_dir layer test. Red 90253402;
+      green after; mutation-checked: from_config drops readers, load skips validate, TokenEntry
+      accepts unknown fields, no token-duplicate check: each fails a test.
+- [x] 4.2 Hub: `ReaderEntry` + `readers` table, `deny_unknown_fields` on both entry types, drop
       `TokenEntry.read_only`, duplicate check in `validate`, `AppState::from_config` used by `run()`.
-- [ ] 4.3 Launcher: readers render as `[[readers]]`; duplicates (machine id in the loops, token or
+- [x] 4.3 Launcher: readers render as `[[readers]]`; duplicates (machine id in the loops, token or
       machine id over the whole file) exit without the cached-file fallback; names read line by line.
-      Sandbox-tested with stubbed bao.
-- [ ] 4.4 deployment.md: `[[readers]]`, the duplicate rule, the revocation note.
-- [ ] 4.5 Gate; security reads the commit (C1-C3); release; then the mint (infra, on ac's yes).
+      Tested end to end (real script, fake bao on localhost, scratch HOME, --render-only): valid,
+      none, odd names, copied leaf, same token new id, reader with a Mac token, copied leaf with a
+      cached runtime (exit 1, cache untouched). Control: the 0.36.0 launcher starts on both duplicates.
+- [x] 4.4 deployment.md: `[[readers]]`, the duplicate rule, the revocation note.
+- [ ] 4.5 Gate (GREEN: 1235 passed, 0 failed, 7 ignored); security reads the commit (C1-C3); release; then the mint (infra, on ac's yes).
