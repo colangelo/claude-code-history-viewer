@@ -19,4 +19,6 @@
       mixed-case strong over hex, non-hex negatives for new keys, CHANGE_ME edges, exact output,
       both ack classes on one message), two stale comments in findings.rs.
 - [ ] 1.9 Follow-ups F1 (bearer-hex subset) and F2 (bare values end at `&`): separate changes.
-- [ ] 1.7 Gate; security review; release; infra runs the dry-run count; security says redact or not.
+- [x] 1.7a Gate (1252 passed); security: E1-E4 met, OK to release cchv-v0.38.0 flag-only, assign
+      kept out of redact (ac/security, bell 1bd179ec).
+- [ ] 1.7 Release; infra runs the dry-run count; security says redact or not.
