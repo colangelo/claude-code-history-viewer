@@ -101,6 +101,15 @@ machine, incl. retired ones via their TM disk): `docs/archive/timemachine-backfi
 
 ### Agent relay
 
+<!-- relay:session-start v2 (canonical: CONTEXT PATTERNS/agent-relay.md) -->
+**Session start: run `/check-relay` first, every time.** At the start of every session, again after a `/clear`
+or a resume, before other work, and never deferred. Interactive relay messages are no reason to wait: in a
+repo a gestore runs, the gestore acts for ac while he is away or busy (one ask desk), so drain them, handle
+what you can, and send any decision to your gestore's desk as an `ASK:`. Only a `--headless` or poller run,
+or a helper your repo's main session briefed, leaves interactive messages on the queue. (ac, 2026-10-29 and
+2026-11-01: RULES/relay-check-at-every-start-v3.)
+<!-- /relay:session-start -->
+
 Moved to [`docs/agents/agent-relay.md`](docs/agents/agent-relay.md): the `nats` relay participation, how to message another repo's agent (Channel 0, Gitea issue, `relay-send`; `auto` vs `interactive`). The criterion for picking a channel: **Channel 0 addresses a context; the relay addresses a role** (relay spec v2.34 § TL;DR). Two rules stay binding here: **run `/check-relay` first at every session start, after `/clear` and after a resume**, and **checkpoint by committing** (uncommitted work in this Syncthing-shared tree is unwritten).
 
 ## Repo rules
