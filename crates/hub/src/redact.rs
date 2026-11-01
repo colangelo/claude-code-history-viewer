@@ -89,17 +89,30 @@ pub struct Finding {
     pub origin: Option<&'static str>,
 }
 
-const RULES: [Rule; 4] = [Rule::Pem, Rule::Prefix, Rule::Bearer, Rule::Assign];
-const PATTERNS: [&str; 4] = [
+const RULES: [Rule; 5] = [
+    Rule::Pem,
+    Rule::Prefix,
+    Rule::Bearer,
+    Rule::Assign,
+    Rule::Assign,
+];
+/// Index of the second-pass `assign` pattern (see the comment on it).
+const EXTRA_ASSIGN: usize = 4;
+const PATTERNS: [&str; 5] = [
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
     r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|(?:sk-(?:bf|mw)|aiproxy-(?:ws|pi))-[A-Za-z0-9_:\-]{30,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,}|gl(?:pat|rt)-[A-Za-z0-9_\-]{20,}(?:\.[A-Za-z0-9_\-]+)*)",
     r"\b(?i:Bearer)[ \t]+(?P<value>[A-Za-z0-9._~+/=\-]{20,})",
-    r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|PASSW|SECRET|TOKEN|API_KEY|API-KEY|APIKEY|PRIVATE_KEY|CREDENTIAL|BEARER)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
+    r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
+    // The key forms only `assign-hex-secret` admits, in a pass of their own:
+    // widening the pattern above made new outer candidates that swallowed an
+    // inner live `assign-strong` hit (security E1). Spans from this pass that
+    // overlap any other span are dropped, so the live rules' output is unchanged.
+    r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSW|API-KEY|BEARER)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
 ];
 
 struct Detector {
     prefilter: RegexSet,
-    patterns: [Regex; 4],
+    patterns: [Regex; 5],
 }
 
 static DETECTOR: LazyLock<Detector> = LazyLock::new(|| Detector {
@@ -155,9 +168,11 @@ fn placeholder_word(value: &str) -> bool {
 }
 
 pub(crate) fn placeholder(value: &str) -> bool {
+    // On the untrimmed value: a spaced value is not the exact word (security E2).
+    let word = placeholder_word(value);
     let value = value.trim();
     if value.starts_with("[REDACTED:")
-        || placeholder_word(value)
+        || word
         || value.starts_with("${{") // CI template: `${{ secrets.GITHUB_TOKEN }}`
         || value.starts_with("***")
         || value
@@ -264,9 +279,11 @@ fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
     let not_a_secret =
         placeholder(value) || password_hash(value) || (bare && code_expression(value));
     let hex_secret = hex_secret_key(key) && hex_value(value);
+    // All-digit values are numbers, not secrets, except a 32+ hex run under a
+    // secret key: hex can be all digits (security E3).
     ((secret_key(key) || hex_secret)
         && value.chars().count() >= 8
-        && !value.chars().all(|c| c.is_ascii_digit())
+        && (hex_secret || !value.chars().all(|c| c.is_ascii_digit()))
         && !not_a_secret)
         .then(|| {
             let hit = finding(Rule::Assign, Some(key), value);
@@ -432,6 +449,7 @@ fn mask_or_placeholder(value: &str) -> bool {
 
 fn spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
+    let mut extra: Vec<Span> = Vec::new();
     for index in DETECTOR.prefilter.matches(text) {
         let rule = RULES[index];
         for captures in DETECTOR.patterns[index].captures_iter(text) {
@@ -485,15 +503,25 @@ fn spans(text: &str) -> Vec<Span> {
                     (value, hit)
                 }
             };
-            spans.push(Span {
+            let span = Span {
                 start: value.start(),
                 end: value.end(),
                 finding: hit,
                 counted: true,
-            });
+            };
+            if index == EXTRA_ASSIGN {
+                extra.push(span);
+            } else {
+                spans.push(span);
+            }
         }
     }
     pair_spans(text, &mut spans);
+    // Second pass: keep a hit from the extra key forms only where no other
+    // span touches it, so it can add an assign-hex-secret but never change
+    // what the live rules redact.
+    extra.retain(|e| !spans.iter().any(|s| s.start < e.end && e.start < s.end));
+    spans.extend(extra);
     // Enclosing spans first; ties retain pem/prefix/bearer/assign precedence.
     spans.sort_by_key(|span| (span.start, std::cmp::Reverse(span.end)));
     spans
@@ -2123,5 +2151,81 @@ mod tests {
         ] {
             assert!(!rules_in(text).contains(&Rule::AssignStrong), "{text}");
         }
+    }
+
+    // security review fa3c806 (E1-E4).
+    #[test]
+    fn a_rejected_new_key_form_does_not_hide_an_inner_strong_secret() {
+        // E1: `passw_hint` is a new outer candidate whose value is rejected;
+        // the inner TOKEN= must still be found and redacted, exactly as before.
+        let strong = alnum32();
+        for text in [
+            format!("passw_hint=TOKEN={strong} next"),
+            format!("x-api-key-note: GITHUB_TOKEN={strong} next"),
+            format!("bearer_doc=NATS_PASSWORD={strong} next"),
+        ] {
+            let (out, rules) = strong_rule(&text);
+            assert!(
+                out.contains("[REDACTED:assign-strong]") && !out.contains(&strong),
+                "{text} -> {out}"
+            );
+            assert_eq!(rules, vec![Rule::AssignStrong], "{text}");
+        }
+    }
+
+    #[test]
+    fn the_new_key_forms_add_nothing_but_hex_secrets() {
+        // E4: non-hex values under the new-only key forms are not findings.
+        for text in [
+            format!("x-api-key: {}", alnum32()),
+            "bearer = some-plain-words-not-a-secret".to_owned(),
+            format!("db_passw = {}", synthetic(40, b"ghijklmnopqrstuvwxyz")),
+        ] {
+            assert!(rules_in(&text).is_empty(), "{text}: {:?}", rules_in(&text));
+        }
+    }
+
+    #[test]
+    fn hex_secret_shapes() {
+        // E4: PASSW positive, uppercase hex, more than 64 chars, all digits (E3).
+        let upper = hex(40).to_ascii_uppercase();
+        let digits = synthetic(40, b"0123456789");
+        for text in [
+            format!("db_passw = {}", hex(32)),
+            format!("HUB_TOKEN={upper}"),
+            format!("hub_token = \"{}\"", hex(80)),
+            format!("hub_token = \"{digits}\""),
+        ] {
+            assert_eq!(rules_in(&text), vec![Rule::AssignHexSecret], "{text}");
+        }
+    }
+
+    #[test]
+    fn mixed_case_hex_is_strong_not_hex_secret() {
+        // E4: three classes in the 32-63 band under a word-final key: strong wins.
+        let mixed = format!("aB{}", synthetic(38, b"0123456789abcdefABCDEF"));
+        let text = format!("GITHUB_TOKEN={mixed}");
+        assert_eq!(rules_in(&text), vec![Rule::AssignStrong]);
+    }
+
+    #[test]
+    fn hex_secret_redacts_to_the_exact_marker() {
+        // E4: exact output.
+        let text = format!("hub_token = \"{}\" next", hex(64));
+        let (out, _) = redact(&text, &[Rule::AssignHexSecret]);
+        assert_eq!(out, "hub_token = \"[REDACTED:assign-hex-secret]\" next");
+    }
+
+    #[test]
+    fn placeholder_word_edges() {
+        // E2: a spaced value is not the exact word, so it still fires.
+        let spaced = "token = \" GENERATE_A_LONG_RANDOM_SECRET_FOR_M4M \"";
+        assert!(rules_in(spaced).contains(&Rule::AssignStrong), "{spaced}");
+        // E4: CHANGE_ME followed by more caps is a placeholder (starts with it);
+        // CHANGEME_ (no underscore inside) is not one of the prefixes.
+        let ok = "token = \"CHANGE_MEPLEASE_TO_A_REAL_SECRET_0123456789\"";
+        assert!(!rules_in(ok).contains(&Rule::AssignStrong), "{ok}");
+        let not = "token = \"CHANGEME_TO_A_REAL_SECRET_0123456789_ABCDE\"";
+        assert!(rules_in(not).contains(&Rule::AssignStrong), "{not}");
     }
 }

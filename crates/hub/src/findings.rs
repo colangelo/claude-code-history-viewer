@@ -53,14 +53,17 @@ pub struct FindingsSummary {
     /// Finding rows (message × field × rule) recorded in the window.
     pub total: i64,
     pub by_rule: BTreeMap<String, i64>,
-    /// Distinct messages with a finding, per rule, not counting
-    /// `api-request-blob` copies: the per-day count monitoring alerts on.
+    /// Distinct messages with an UNACKED finding, per rule, not counting
+    /// `api-request-blob` copies: the presence map the paging check reads, so
+    /// acking a finding (either class) clears the page.
     #[serde(default)]
     pub messages_by_rule: BTreeMap<String, i64>,
-    /// `messages_by_rule` with every detector rule present, `0` when it has
-    /// none, so a per-rule threshold always reads a number (ac/security#14).
-    /// The field above keeps leaving zero rules out: monitoring pages on a
-    /// rule being present there.
+    /// The volume count (cchv-findings-volume, 10 per 6 h): distinct messages
+    /// per rule whose findings are not ALL acked `false_positive`, so rows
+    /// acked `handled` still count (security, #65 comment 26620). Every
+    /// detector rule present, `0` when it has none, so a per-rule threshold
+    /// always reads a number (ac/security#14). Not the same set as
+    /// `messages_by_rule`, which leaves out every acked row and omits zeros.
     #[serde(default)]
     pub messages_by_rule_all: BTreeMap<String, i64>,
     /// Of `messages_by_rule`, per rule, the messages with at least one

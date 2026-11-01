@@ -1544,3 +1544,70 @@ async fn volume_count_leaves_out_false_positives_only() {
         );
     }
 }
+
+/// security E4: one message, its findings acked with BOTH classes. It still
+/// counts in the volume while any of its findings is not `false_positive`.
+#[tokio::test]
+async fn volume_count_with_both_ack_classes_on_one_message() {
+    let hub = spawn(Vec::new()).await;
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let start = std::time::Instant::now();
+    let now = Utc::now().to_rfc3339();
+    let session = format!("s-vol2-{}", Uuid::new_v4());
+    let key = format!("k-vol2-{session}");
+    let text = format!("pushed {} now", synthetic_token());
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            &session,
+            vec![msg(&session, &key, &now, &text)],
+        ),
+    )
+    .await;
+    let (row, ..) = stored(&hub, &key).await;
+    let ids: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM credential_findings WHERE message_ref = $1 ORDER BY id")
+            .bind(row)
+            .fetch_all(&hub.pool)
+            .await
+            .unwrap();
+    assert_eq!(ids.len(), 3, "content, raw, search_text");
+    let count = || async {
+        let since = start.elapsed().as_secs() + 1;
+        let body: serde_json::Value = reqwest::Client::new()
+            .get(format!("{}/v1/healthz/findings?since={since}s", hub.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        body["messages_by_rule_all"]["prefix"].as_i64().unwrap()
+    };
+    let ack = |id: i64, class: &'static str| {
+        let pool = hub.pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO finding_acks (finding_id, classification, acked_by)
+                 VALUES ($1, $2, 'test')
+                 ON CONFLICT (finding_id) DO UPDATE SET classification = excluded.classification",
+            )
+            .bind(id)
+            .bind(class)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    ack(ids[0], "false_positive").await;
+    ack(ids[1], "false_positive").await;
+    ack(ids[2], "handled").await;
+    assert_eq!(
+        count().await,
+        1,
+        "one field acked handled keeps the message in"
+    );
+    ack(ids[2], "false_positive").await;
+    assert_eq!(count().await, 0, "all three false_positive: out");
+}

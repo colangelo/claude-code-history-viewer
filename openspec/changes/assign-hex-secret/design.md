@@ -28,3 +28,22 @@ with `has()`), so acking still clears the cchv-findings check.
 `GENERATE_…`/`EXAMPLE_…`/`YOUR_…`/`CHANGE_ME…` as one ALL_CAPS word (`^[A-Z0-9_]+$`) only.
 Regex lines and format strings are not exempted (security): they are acked.
 A value starting with the hub's marker is already a placeholder; re-quoted marker shapes are pinned by a test.
+
+## Revision 2 (security review ac/security fa3c806, E1-E4)
+
+- **E1, two passes.** Adding PASSW, API-KEY and BEARER to the shared `assign` pattern made new outer
+  candidates (`passw_hint=TOKEN=<strong>`); the outer one is rejected and, matches not overlapping,
+  the inner live `assign-strong` secret was never visited. The original pattern is restored
+  unchanged; the new key forms are a second `assign` pattern whose spans are kept only where no
+  other span overlaps them. So the second pass can only ADD an `assign-hex-secret`; it cannot
+  change what the live rules find or redact. Pinned by a test that fails on 80904182.
+- **What the new key forms yield.** Under a key that only the second pattern matches (`x-api-key`,
+  `bearer`, `db_passw`), only a hex value of 32+ is a finding (`assign-hex-secret`); any other
+  value, strong or not, yields nothing, because plain `assign` stays gated by `secret_key()`. The
+  review's note that assign-strong "now also redacts strong values under the new keys" does not
+  hold with this design: those keys add hex secrets only. `assign` stays out of `redact`.
+- **E2.** The placeholder word is checked on the untrimmed value: a spaced value still fires.
+- **E3.** The "all digits is a number" exclusion does not apply to a hex secret: 32+ digits under a
+  hex-secret key fire.
+- **Follow-ups (not in this change).** F1: a redact-listed bearer-hex subset for
+  `Authorization: Bearer <32+ hex>`. F2: bare values end at `&` in query strings.

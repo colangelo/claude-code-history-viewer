@@ -14,4 +14,9 @@
 - [x] 1.6 DROPPED: the marker re-quote shapes I could reconstruct already pass (a pin test stays);
       the live hits' exact text is not reproducible from the redacted rows, so no change without a
       failing case.
+- [x] 1.8 Revision 2 (review fa3c806): E1 two-pass pattern (regression pinned, fails on 80904182),
+      E2 untrimmed placeholder word, E3 digit-only hex fires, E4 tests (PASSW, uppercase, >64,
+      mixed-case strong over hex, non-hex negatives for new keys, CHANGE_ME edges, exact output,
+      both ack classes on one message), two stale comments in findings.rs.
+- [ ] 1.9 Follow-ups F1 (bearer-hex subset) and F2 (bare values end at `&`): separate changes.
 - [ ] 1.7 Gate; security review; release; infra runs the dry-run count; security says redact or not.
