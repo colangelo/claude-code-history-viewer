@@ -18,6 +18,9 @@ fn test_db_url() -> String {
         .expect("TEST_DATABASE_URL or DATABASE_URL must be set")
 }
 
+/// The Tailscale login the test hub trusts for READ scope.
+const TRUSTED_LOGIN: &str = "reader@example.test";
+
 struct TestHub {
     base: String,
     full: (String, Uuid),
@@ -38,7 +41,7 @@ async fn spawn() -> TestHub {
     tokens.insert(full.0.clone(), full.1);
     tokens.insert(ingest_only.0.clone(), ingest_only.1);
 
-    let state = hub::AppState::new(pool, tokens, Vec::new())
+    let state = hub::AppState::new(pool, tokens, vec![TRUSTED_LOGIN.to_string()])
         .with_ingest_only_tokens(HashSet::from([ingest_only.0.clone()]));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -205,4 +208,33 @@ async fn unknown_token_is_still_401_on_ingest() {
         .await
         .unwrap();
     assert_eq!(res.status(), 401);
+}
+
+/// The machine-token writes: they bind a machine id, so a Tailscale identity
+/// (READ scope only) must never satisfy them.
+const BEARER_ONLY_WRITES: [&str; 3] = ["/v1/journal/entries", "/v1/journal/ticks", "/v1/ingest"];
+
+#[tokio::test]
+async fn journal_writes_stay_bearer_only() {
+    let hub = spawn().await;
+    let client = reqwest::Client::new();
+    // Control: the header is trusted by this hub, so a 401 below is the write
+    // routes refusing it, not an unconfigured identity list.
+    let res = client
+        .get(format!("{}/v1/projects", hub.base))
+        .header("tailscale-user-login", TRUSTED_LOGIN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "trusted login on GET /v1/projects");
+    for route in BEARER_ONLY_WRITES {
+        let res = client
+            .post(format!("{}{route}", hub.base))
+            .header("tailscale-user-login", TRUSTED_LOGIN)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 401, "trusted login, no bearer, on POST {route}");
+    }
 }
