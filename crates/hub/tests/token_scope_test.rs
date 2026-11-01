@@ -25,6 +25,7 @@ struct TestHub {
     base: String,
     full: (String, Uuid),
     ingest_only: (String, Uuid),
+    read_only: (String, Uuid),
 }
 
 async fn spawn() -> TestHub {
@@ -40,9 +41,12 @@ async fn spawn() -> TestHub {
     let mut tokens = HashMap::new();
     tokens.insert(full.0.clone(), full.1);
     tokens.insert(ingest_only.0.clone(), ingest_only.1);
+    let read_only = (format!("tok-read-{}", Uuid::new_v4()), Uuid::new_v4());
+    tokens.insert(read_only.0.clone(), read_only.1);
 
     let state = hub::AppState::new(pool, tokens, vec![TRUSTED_LOGIN.to_string()])
-        .with_ingest_only_tokens(HashSet::from([ingest_only.0.clone()]));
+        .with_ingest_only_tokens(HashSet::from([ingest_only.0.clone()]))
+        .with_read_only_tokens(HashSet::from([read_only.0.clone()]));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -54,6 +58,7 @@ async fn spawn() -> TestHub {
         base: format!("http://{addr}"),
         full,
         ingest_only,
+        read_only,
     }
 }
 
@@ -237,4 +242,134 @@ async fn journal_writes_stay_bearer_only() {
             .unwrap();
         assert_eq!(res.status(), 401, "trusted login, no bearer, on POST {route}");
     }
+}
+
+// --- read-only tokens (openspec/changes/read-only-tokens) -------------------
+
+/// Every authenticated GET the hub registers. A read-only token must get the
+/// same answer a full-scope token gets on each (stats answer 503 here: the
+/// test hub has no mirror — the point is the token is not refused).
+const ALL_READ_ROUTES: [&str; 11] = [
+    "/v1/projects",
+    "/v1/sessions",
+    "/v1/sessions/00000000-0000-0000-0000-000000000000/messages",
+    "/v1/search?q=hello",
+    "/v1/findings/summary",
+    "/v1/journal/pending",
+    "/v1/journal/entries",
+    "/v1/journal/open-questions",
+    "/v1/stats/global",
+    "/v1/identities",
+    "/v1/stats/sessions/00000000-0000-0000-0000-000000000000",
+];
+
+#[tokio::test]
+async fn read_only_token_reads_like_a_full_token() {
+    let hub = spawn().await;
+    let client = reqwest::Client::new();
+    for route in ALL_READ_ROUTES {
+        let full = client
+            .get(format!("{}{route}", hub.base))
+            .bearer_auth(&hub.full.0)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        let read = client
+            .get(format!("{}{route}", hub.base))
+            .bearer_auth(&hub.read_only.0)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_ne!(read, 401, "read-only token refused on GET {route}");
+        assert_eq!(read, full, "read-only vs full token on GET {route}");
+    }
+}
+
+/// Every write the hub registers, plus writes it does not register: the
+/// refusal must not depend on the route existing.
+fn writes() -> Vec<(reqwest::Method, &'static str)> {
+    use reqwest::Method;
+    vec![
+        (Method::POST, "/v1/ingest"),
+        (Method::POST, "/v1/journal/entries"),
+        (Method::POST, "/v1/journal/ticks"),
+        (Method::POST, "/v1/identities/aliases"),
+        (Method::DELETE, "/v1/identities/aliases/1"),
+        (Method::POST, "/v1/not-a-route-yet"),
+        (Method::PUT, "/v1/projects"),
+        (Method::PATCH, "/v1/sessions"),
+    ]
+}
+
+#[tokio::test]
+async fn read_only_token_is_refused_on_every_write() {
+    let hub = spawn().await;
+    let client = reqwest::Client::new();
+    for (method, route) in writes() {
+        let res = client
+            .request(method.clone(), format!("{}{route}", hub.base))
+            .bearer_auth(&hub.read_only.0)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 401, "read-only token on {method} {route}");
+    }
+}
+
+#[tokio::test]
+async fn read_only_token_cannot_ingest_even_a_valid_batch() {
+    let hub = spawn().await;
+    let res = reqwest::Client::new()
+        .post(format!("{}/v1/ingest", hub.base))
+        .bearer_auth(&hub.read_only.0)
+        .json(&batch(hub.read_only.1, "reader"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+/// Control for the write test: a full-scope token is NOT refused on the
+/// registered writes (an empty body fails validation instead), so the 401s
+/// above are the token kind, not the routes.
+#[tokio::test]
+async fn full_token_is_not_refused_on_the_registered_writes() {
+    let hub = spawn().await;
+    let client = reqwest::Client::new();
+    for (method, route) in writes().into_iter().take(5) {
+        let res = client
+            .request(method.clone(), format!("{}{route}", hub.base))
+            .bearer_auth(&hub.full.0)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(res.status(), 401, "full token on {method} {route}");
+    }
+}
+
+/// CORS preflights carry no credentials, but one that does must still pass.
+#[tokio::test]
+async fn read_only_token_passes_head_and_options() {
+    let hub = spawn().await;
+    let client = reqwest::Client::new();
+    let res = client
+        .head(format!("{}/v1/projects", hub.base))
+        .bearer_auth(&hub.read_only.0)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(res.status(), 401, "HEAD /v1/projects");
+    let res = client
+        .request(reqwest::Method::OPTIONS, format!("{}/v1/projects", hub.base))
+        .bearer_auth(&hub.read_only.0)
+        .header("origin", "http://example.test")
+        .header("access-control-request-method", "GET")
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(res.status(), 401, "OPTIONS /v1/projects");
 }

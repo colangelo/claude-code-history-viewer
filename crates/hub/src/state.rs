@@ -20,6 +20,9 @@ pub struct AppState {
     /// read route and every other machine-token write. For fenced guests that
     /// archive their own sessions but must not read the archive.
     pub ingest_only: Arc<HashSet<String>>,
+    /// Tokens (a subset of `tokens`) limited to reading: accepted by
+    /// `Authenticated`, refused by every write (see `auth`).
+    pub read_only: Arc<HashSet<String>>,
     /// Tailscale logins granted READ scope via the `Tailscale-User-Login`
     /// header (see `HubConfig::trust_tailscale_identity`). Empty = disabled.
     pub trusted_identities: Arc<Vec<String>>,
@@ -50,6 +53,7 @@ impl AppState {
             pool,
             tokens: Arc::new(tokens),
             ingest_only: Arc::new(HashSet::new()),
+            read_only: Arc::new(HashSet::new()),
             trusted_identities: Arc::new(trusted_identities),
             embedder: None,
             embed_nudge: Arc::new(Notify::new()),
@@ -61,6 +65,12 @@ impl AppState {
     /// Limit these tokens to `/v1/ingest` (builder-style, same reason).
     pub fn with_ingest_only_tokens(mut self, tokens: HashSet<String>) -> Self {
         self.ingest_only = Arc::new(tokens);
+        self
+    }
+
+    /// Limit these tokens to reading (builder-style, same reason).
+    pub fn with_read_only_tokens(mut self, tokens: HashSet<String>) -> Self {
+        self.read_only = Arc::new(tokens);
         self
     }
 

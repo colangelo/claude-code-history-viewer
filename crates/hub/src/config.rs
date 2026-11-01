@@ -186,6 +186,11 @@ pub struct TokenEntry {
     /// For fenced guests that archive their own sessions (Macs leave it unset).
     #[serde(default)]
     pub ingest_only: bool,
+    /// Limit this token to reading: every read route answers as for a full
+    /// token, every write (any method but GET/HEAD/OPTIONS) answers 401. For
+    /// agents that read the archive and must not write it (the agents blog).
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 fn default_bind_addr() -> String {
@@ -204,6 +209,8 @@ impl HubConfig {
                 .map_err(|e| anyhow::anyhow!("reading HUB_CONFIG {path}: {e}"))?;
             let cfg: HubConfig = toml::from_str(&text)
                 .map_err(|e| anyhow::anyhow!("parsing HUB_CONFIG {path}: {e}"))?;
+            cfg.validate()
+                .map_err(|e| anyhow::anyhow!("HUB_CONFIG {path}: {e}"))?;
             return Ok(cfg);
         }
 
@@ -219,6 +226,7 @@ impl HubConfig {
                 machine_id: machine_id.parse()?,
                 label: None,
                 ingest_only: false,
+                read_only: false,
             });
         }
         let static_dir = std::env::var("HUB_STATIC_DIR").ok().map(PathBuf::from);
@@ -257,6 +265,34 @@ impl HubConfig {
             .collect()
     }
 
+    /// The tokens limited to reading (see `TokenEntry::read_only`).
+    pub fn read_only_tokens(&self) -> HashSet<String> {
+        self.tokens
+            .iter()
+            .filter(|t| t.read_only)
+            .map(|t| t.token.clone())
+            .collect()
+    }
+
+    /// Refuse a token entry that is both `read_only` and `ingest_only`: that
+    /// pair grants nothing, so it can only be a mistake, and guessing which
+    /// flag was meant would hand out a scope nobody chose. The error names the
+    /// entry by label, else machine id — never by token.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for t in &self.tokens {
+            if t.read_only && t.ingest_only {
+                let who = t
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| format!("machine_id {}", t.machine_id));
+                anyhow::bail!(
+                    "token entry `{who}` sets both read_only and ingest_only; pick one"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Build the token → machine-id lookup used by the auth layer.
     pub fn token_map(&self) -> HashMap<String, Uuid> {
         self.tokens
@@ -277,6 +313,33 @@ mod tests {
         let entry: TokenEntry =
             toml::from_str(&format!("token = \"t\"\nmachine_id = \"{ID}\"")).unwrap();
         assert!(!entry.ingest_only);
+        assert!(!entry.read_only);
+    }
+
+    #[test]
+    fn read_only_tokens_are_collected() {
+        let config: HubConfig = toml::from_str(&format!(
+            "database_url = \"postgres://x\"\n\
+             [[tokens]]\ntoken = \"mac\"\nmachine_id = \"{ID}\"\n\
+             [[tokens]]\ntoken = \"blog\"\nmachine_id = \"{ID}\"\nread_only = true\n"
+        ))
+        .unwrap();
+        assert_eq!(config.read_only_tokens(), HashSet::from(["blog".to_string()]));
+        assert!(config.ingest_only_tokens().is_empty());
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn read_only_and_ingest_only_together_fail_validation() {
+        let config: HubConfig = toml::from_str(&format!(
+            "database_url = \"postgres://x\"\n\
+             [[tokens]]\ntoken = \"secret-value\"\nmachine_id = \"{ID}\"\nlabel = \"both\"\n\
+             read_only = true\ningest_only = true\n"
+        ))
+        .unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("both"), "{err}");
+        assert!(!err.contains("secret-value"), "the error must not print the token");
     }
 
     #[test]
