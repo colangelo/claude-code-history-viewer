@@ -14,6 +14,10 @@ pub struct HubConfig {
     pub bind_addr: String,
     #[serde(default)]
     pub tokens: Vec<TokenEntry>,
+    /// Read-only tokens (the agents blog), in their own table so that a hub
+    /// binary that predates them ignores the table and grants nothing.
+    #[serde(default)]
+    pub readers: Vec<ReaderEntry>,
     /// When set, serve this directory's files at `/` (static archive webapp).
     /// `/v1/*` routes always win; unset keeps the plain-404 fallback.
     #[serde(default)]
@@ -193,6 +197,14 @@ pub struct TokenEntry {
     pub read_only: bool,
 }
 
+/// A read-only token: every authenticated GET, no write of any kind.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReaderEntry {
+    pub token: String,
+    pub machine_id: Uuid,
+    pub label: String,
+}
+
 fn default_bind_addr() -> String {
     "0.0.0.0:8787".to_string()
 }
@@ -244,6 +256,7 @@ impl HubConfig {
             database_url,
             bind_addr,
             tokens,
+            readers: Vec::new(),
             static_dir,
             trust_tailscale_identity,
             embed_model_dir,
@@ -311,17 +324,24 @@ mod tests {
         let entry: TokenEntry =
             toml::from_str(&format!("token = \"t\"\nmachine_id = \"{ID}\"")).unwrap();
         assert!(!entry.ingest_only);
-        assert!(!entry.read_only);
+    }
+
+    const ID2: &str = "2b1b6f0e-3d5c-4f39-8a0b-6c1e9b0a7d42";
+
+    fn parse(toml_text: &str) -> anyhow::Result<HubConfig> {
+        Ok(toml::from_str(&format!(
+            "database_url = \"postgres://x\"\n{toml_text}"
+        ))?)
     }
 
     #[test]
-    fn read_only_tokens_are_collected() {
-        let config: HubConfig = toml::from_str(&format!(
-            "database_url = \"postgres://x\"\n\
-             [[tokens]]\ntoken = \"mac\"\nmachine_id = \"{ID}\"\n\
-             [[tokens]]\ntoken = \"blog\"\nmachine_id = \"{ID}\"\nread_only = true\n"
+    fn readers_are_collected_into_the_token_map_and_the_reader_set() {
+        let config = parse(&format!(
+            "[[tokens]]\ntoken = \"mac\"\nmachine_id = \"{ID}\"\n\
+             [[readers]]\ntoken = \"blog\"\nmachine_id = \"{ID2}\"\nlabel = \"agents-blog\"\n"
         ))
         .unwrap();
+        assert_eq!(config.token_map().len(), 2);
         assert_eq!(
             config.read_only_tokens(),
             HashSet::from(["blog".to_string()])
@@ -330,20 +350,54 @@ mod tests {
         config.validate().unwrap();
     }
 
+    /// C2: under `[[tokens]]` a `read_only` flag must not load. An older
+    /// binary would ignore it and serve a FULL token, so the format must
+    /// never be written; this binary refuses it outright.
     #[test]
-    fn read_only_and_ingest_only_together_fail_validation() {
-        let config: HubConfig = toml::from_str(&format!(
-            "database_url = \"postgres://x\"\n\
-             [[tokens]]\ntoken = \"secret-value\"\nmachine_id = \"{ID}\"\nlabel = \"both\"\n\
-             read_only = true\ningest_only = true\n"
+    fn read_only_under_tokens_does_not_load() {
+        let err = parse(&format!(
+            "[[tokens]]\ntoken = \"t\"\nmachine_id = \"{ID}\"\nread_only = true\n"
         ))
-        .unwrap();
-        let err = config.validate().unwrap_err().to_string();
-        assert!(err.contains("both"), "{err}");
-        assert!(
-            !err.contains("secret-value"),
-            "the error must not print the token"
-        );
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("read_only"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_reader_field_does_not_load() {
+        assert!(parse(&format!(
+            "[[readers]]\ntoken = \"t\"\nmachine_id = \"{ID}\"\nlabel = \"r\"\ningest_only = true\n"
+        ))
+        .is_err());
+    }
+
+    /// C1: a reader leaf copied from a guest leaf (same token) or any repeat
+    /// of a token string or machine id across both tables is refused, and
+    /// the error never prints the token.
+    #[test]
+    fn duplicates_across_tables_fail_validation() {
+        let cases = [
+            // same token, different machine ids (guest leaf copied to reader)
+            format!(
+                "[[tokens]]\ntoken = \"secret-value\"\nmachine_id = \"{ID}\"\nlabel = \"guest\"\ningest_only = true\n\
+                 [[readers]]\ntoken = \"secret-value\"\nmachine_id = \"{ID2}\"\nlabel = \"blog\"\n"
+            ),
+            // same machine id, different tokens
+            format!(
+                "[[tokens]]\ntoken = \"secret-a\"\nmachine_id = \"{ID}\"\nlabel = \"m4m\"\n\
+                 [[readers]]\ntoken = \"secret-b\"\nmachine_id = \"{ID}\"\nlabel = \"blog\"\n"
+            ),
+            // two Mac tokens sharing a string
+            format!(
+                "[[tokens]]\ntoken = \"secret-value\"\nmachine_id = \"{ID}\"\nlabel = \"m4m\"\n\
+                 [[tokens]]\ntoken = \"secret-value\"\nmachine_id = \"{ID2}\"\nlabel = \"mbp\"\n"
+            ),
+        ];
+        for case in cases {
+            let err = parse(&case).unwrap().validate().unwrap_err().to_string();
+            assert!(err.contains("duplicate"), "{err}");
+            assert!(!err.contains("secret-"), "the error must not print a token: {err}");
+        }
     }
 
     #[test]

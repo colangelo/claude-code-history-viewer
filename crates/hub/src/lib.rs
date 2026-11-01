@@ -368,19 +368,11 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let redact_rules = config.redaction.rules()?;
+    let mut state = AppState::from_config(pool, &config)?;
     tracing::info!(
-        redact = ?redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
+        redact = ?state.redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
         "credential detection: every rule flags; listed rules also redact"
     );
-    let mut state = AppState::new(
-        pool,
-        config.token_map(),
-        config.trust_tailscale_identity.clone(),
-    )
-    .with_ingest_only_tokens(config.ingest_only_tokens())
-    .with_read_only_tokens(config.read_only_tokens())
-    .with_redact_rules(redact_rules);
     if let Some(dir) = &config.embed_model_dir {
         tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");
         state = state.with_embedder(std::sync::Arc::new(embed::CandleEmbedder::new(dir.clone())));

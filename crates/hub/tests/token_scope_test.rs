@@ -8,7 +8,6 @@
 use archive_protocol::{IngestBatch, IngestMessage, IngestProject, IngestSession, MachineInfo};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
-use std::collections::{HashMap, HashSet};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
@@ -29,6 +28,13 @@ struct TestHub {
 }
 
 async fn spawn() -> TestHub {
+    spawn_with(None).await
+}
+
+/// The hub as `run()` builds it: `HubConfig` from TOML text, then
+/// `AppState::from_config` (security C3) — a scope that the config knows but
+/// the state drops fails these tests.
+async fn spawn_with(static_dir: Option<&std::path::Path>) -> TestHub {
     let pool = PgPoolOptions::new()
         .max_connections(3)
         .connect(&test_db_url())
@@ -38,21 +44,23 @@ async fn spawn() -> TestHub {
 
     let full = (format!("tok-full-{}", Uuid::new_v4()), Uuid::new_v4());
     let ingest_only = (format!("tok-ingest-{}", Uuid::new_v4()), Uuid::new_v4());
-    let mut tokens = HashMap::new();
-    tokens.insert(full.0.clone(), full.1);
-    tokens.insert(ingest_only.0.clone(), ingest_only.1);
     let read_only = (format!("tok-read-{}", Uuid::new_v4()), Uuid::new_v4());
-    tokens.insert(read_only.0.clone(), read_only.1);
-
-    let state = hub::AppState::new(pool, tokens, vec![TRUSTED_LOGIN.to_string()])
-        .with_ingest_only_tokens(HashSet::from([ingest_only.0.clone()]))
-        .with_read_only_tokens(HashSet::from([read_only.0.clone()]));
+    let config: hub::HubConfig = toml::from_str(&format!(
+        "database_url = \"unused\"\n\
+         trust_tailscale_identity = [\"{TRUSTED_LOGIN}\"]\n\
+         [[tokens]]\ntoken = \"{}\"\nmachine_id = \"{}\"\nlabel = \"full\"\n\
+         [[tokens]]\ntoken = \"{}\"\nmachine_id = \"{}\"\nlabel = \"guest\"\ningest_only = true\n\
+         [[readers]]\ntoken = \"{}\"\nmachine_id = \"{}\"\nlabel = \"blog\"\n",
+        full.0, full.1, ingest_only.0, ingest_only.1, read_only.0, read_only.1
+    ))
+    .expect("config");
+    config.validate().expect("valid config");
+    let state = hub::AppState::from_config(pool, &config).expect("state");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let router = hub::router(state, static_dir);
     tokio::spawn(async move {
-        axum::serve(listener, hub::router(state, None))
-            .await
-            .unwrap();
+        axum::serve(listener, router).await.unwrap();
     });
     TestHub {
         base: format!("http://{addr}"),
@@ -379,4 +387,33 @@ async fn read_only_token_passes_head_and_options() {
         .await
         .unwrap();
     assert_ne!(res.status(), 401, "OPTIONS /v1/projects");
+}
+
+/// P3: with the static webapp mounted, the router fallback answers an
+/// unknown POST itself (405 for a full token); a reader still gets 401.
+#[tokio::test]
+async fn read_only_token_is_refused_on_writes_with_the_webapp_mounted() {
+    let dir = std::env::temp_dir().join(format!("cchv-static-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.html"), "<html></html>").unwrap();
+    let hub = spawn_with(Some(&dir)).await;
+    let client = reqwest::Client::new();
+    let full = client
+        .post(format!("{}/v1/not-a-route-yet", hub.base))
+        .bearer_auth(&hub.full.0)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_ne!(full, 401, "control: a full token reaches the fallback");
+    for path in ["/v1/not-a-route-yet", "/index.html", "/"] {
+        let res = client
+            .post(format!("{}{path}", hub.base))
+            .bearer_auth(&hub.read_only.0)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 401, "reader POST {path} with static_dir");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

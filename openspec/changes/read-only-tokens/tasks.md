@@ -36,3 +36,15 @@
 - [ ] 3.3 infra mints `kv/agents/cchv-readers/agents-blog`, grants the hub AppRole read on
       `kv/agents/cchv-readers/*` and the blog sink read on its own leaf. Read-back: blog token GET
       `/v1/projects` 200; POST `/v1/ingest` and `/v1/journal/entries` 401; a Mac token unchanged.
+
+## 4. Revision 2 (C1-C3, before any mint)
+- [ ] 4.1 Tests first (red): `[[readers]]` parse + reader scope through `AppState::from_config`;
+      `read_only` under `[[tokens]]` and unknown reader fields fail; duplicate token / machine id
+      across tables fail (`validate` and `HubConfig::load`); static_dir layer test.
+- [ ] 4.2 Hub: `ReaderEntry` + `readers` table, `deny_unknown_fields` on both entry types, drop
+      `TokenEntry.read_only`, duplicate check in `validate`, `AppState::from_config` used by `run()`.
+- [ ] 4.3 Launcher: readers render as `[[readers]]`; duplicates (machine id in the loops, token or
+      machine id over the whole file) exit without the cached-file fallback; names read line by line.
+      Sandbox-tested with stubbed bao.
+- [ ] 4.4 deployment.md: `[[readers]]`, the duplicate rule, the revocation note.
+- [ ] 4.5 Gate; security reads the commit (C1-C3); release; then the mint (infra, on ac's yes).

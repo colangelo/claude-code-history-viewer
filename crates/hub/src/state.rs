@@ -62,6 +62,22 @@ impl AppState {
         }
     }
 
+    /// The state `run()` serves from, minus the embedder and the mirror: the
+    /// token map, the trusted identities, the ingest-only and reader sets and
+    /// the redaction rules, all from one `HubConfig`. Tests build their state
+    /// here too, so a scope wired in the config but dropped on the way to the
+    /// state fails a test (security C3).
+    pub fn from_config(pool: PgPool, config: &crate::config::HubConfig) -> anyhow::Result<Self> {
+        Ok(Self::new(
+            pool,
+            config.token_map(),
+            config.trust_tailscale_identity.clone(),
+        )
+        .with_ingest_only_tokens(config.ingest_only_tokens())
+        .with_read_only_tokens(config.read_only_tokens())
+        .with_redact_rules(config.redaction.rules()?))
+    }
+
     /// Limit these tokens to `/v1/ingest` (builder-style, same reason).
     pub fn with_ingest_only_tokens(mut self, tokens: HashSet<String>) -> Self {
         self.ingest_only = Arc::new(tokens);
