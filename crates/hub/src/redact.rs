@@ -258,12 +258,22 @@ fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
         })
 }
 
+/// Key names whose LAST word marks the value itself as the secret
+/// (`NATS_PASSWORD`, `api_key`, `apiKey`), unlike `password_reset_url`.
+const STRONG_KEY_ENDINGS: [&str; 5] = ["PASSWORD", "PASSWD", "TOKEN", "SECRET", "KEY"];
+
 /// 32+ characters from all four classes, or 64+ from at least three: the shape
-/// a random secret takes and code, paths and digests rarely do.
+/// a random secret takes and code, paths and digests rarely do. From 32 to 63
+/// characters, three classes also count under a key that ENDS in a secret word:
+/// a generated alphanumeric password has no symbol (ac/security 42, option a').
 fn strong(hit: &Finding) -> bool {
     let classes = hit.value_classes.count_ones();
+    let word_final_key = hit.key.as_deref().is_some_and(|k| {
+        let upper = k.to_ascii_uppercase();
+        STRONG_KEY_ENDINGS.iter().any(|w| upper.ends_with(w))
+    });
     match hit.value_len_bucket {
-        "32-63" => classes == 4,
+        "32-63" => classes == 4 || (classes == 3 && word_final_key),
         "64+" => classes >= 3,
         _ => false,
     }

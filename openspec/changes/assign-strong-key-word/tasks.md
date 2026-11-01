@@ -7,8 +7,8 @@
 
 ## 2. Code (green)
 
-- [ ] 2.1 `strong()`: the 32-63 band accepts 3 classes when the key ends in a strong word
-- [ ] 2.2 Full hub tests, clippy, fmt
+- [x] 2.1 `strong()`: the 32-63 band accepts 3 classes when the key ends in a strong word
+- [x] 2.2 Full hub tests, clippy, fmt: 914 passed, 0 failed (hub, history-core, archive-protocol, sync-daemon), clippy and fmt clean
 
 ## 3. Release
 
