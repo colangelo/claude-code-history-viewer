@@ -1153,6 +1153,93 @@ mod tests {
         assert_eq!(redact(short, &[Rule::AssignStrong]).0, short);
     }
 
+    // ac/security 42 (option a', 2026-11-01): from 32 to 63 chars, three
+    // classes are strong when the key ENDS in PASSWORD, PASSWD, TOKEN, SECRET
+    // or KEY. The leaked relay password was 32 random letters and digits.
+    fn alnum32() -> String {
+        let v = synthetic(32, ALPHABET);
+        assert!(
+            v.chars().any(|c| c.is_ascii_lowercase())
+                && v.chars().any(|c| c.is_ascii_uppercase())
+                && v.chars().any(|c| c.is_ascii_digit()),
+            "fixture must hold exactly three classes"
+        );
+        v
+    }
+
+    fn strong_rule(text: &str) -> (String, Vec<Rule>) {
+        let (out, hits) = redact(text, &[Rule::AssignStrong]);
+        (out, hits.iter().map(|h| h.rule).collect())
+    }
+
+    #[test]
+    fn three_classes_under_a_word_final_secret_key_are_strong() {
+        for key in [
+            "NATS_PASSWORD",
+            "db_passwd",
+            "GITHUB_TOKEN",
+            "client_secret",
+            "api_key",
+            "apiKey",
+        ] {
+            let text = format!("{key}={} next", alnum32());
+            let (out, rules) = strong_rule(&text);
+            assert_eq!(out, format!("{key}=[REDACTED:assign-strong] next"), "{key}");
+            assert_eq!(rules, vec![Rule::AssignStrong], "{key}");
+        }
+    }
+
+    #[test]
+    fn three_classes_in_json_under_a_camel_case_key_are_strong() {
+        let mut v = serde_json::json!({ "apiKey": synthetic(40, ALPHABET) });
+        let hits = redact_json(&mut v, &[Rule::AssignStrong]);
+        assert_eq!(v["apiKey"], "[REDACTED:assign-strong]");
+        assert_eq!(
+            hits.iter().map(|h| h.rule).collect::<Vec<_>>(),
+            vec![Rule::AssignStrong]
+        );
+    }
+
+    #[test]
+    fn key_word_not_at_the_end_keeps_the_four_class_rule() {
+        let text = format!("password_reset_url={} next", synthetic(40, ALPHABET));
+        let (out, rules) = strong_rule(&text);
+        assert_eq!(out, text);
+        assert_eq!(rules, vec![Rule::Assign]);
+    }
+
+    #[test]
+    fn word_final_key_controls_are_untouched() {
+        // A 40-char hex digest has two classes.
+        let sha = format!("NATS_PASSWORD={}", hex_sha());
+        assert_eq!(strong_rule(&sha), (sha.clone(), vec![Rule::Assign]));
+        // 31 chars is below the band.
+        let short = format!("NATS_PASSWORD={} next", synthetic(31, ALPHABET));
+        assert_eq!(strong_rule(&short).0, short);
+        // Code: a call and a dotted path are expressions, not literals.
+        for code in [
+            "ACCESS_TOKEN=loadAccessTokenFromKeychainOrRefreshNow2()",
+            "ACCESS_TOKEN=config.secrets.signingPrivateKeyForRelease2",
+        ] {
+            assert_eq!(strong_rule(code).0, code, "{code}");
+        }
+        // A reference is never strong.
+        let reference = "NATS_PASSWORD=${RELAY_PASSWORD_FROM_BAO_V5_ROTATION}x";
+        assert_eq!(strong_rule(reference).0, reference);
+    }
+
+    #[test]
+    fn a_snake_case_identifier_with_a_digit_is_the_accepted_cost() {
+        // Three classes (lower, digit, `_`), 34 chars, bare, under a word-final
+        // key: redacted. Accepted by security (ac/security 42); pinned so a
+        // later change sees it.
+        let text = "ACCESS_TOKEN=refresh_access_token_from_cache_v2 next";
+        assert_eq!(
+            strong_rule(text).0,
+            "ACCESS_TOKEN=[REDACTED:assign-strong] next"
+        );
+    }
+
     #[test]
     fn selecting_assign_covers_assign_strong() {
         let text = format!("API_TOKEN={} next", strong_value());
