@@ -179,7 +179,8 @@ The `GET /v1/search` endpoint SHALL accept a `scope` parameter with values
 `all` (default), `messages`, and `journal`. When scope includes journal, the
 response SHALL carry a `journal` array — ranked full-text matches over journal
 entries (headline, summary, topics, open_questions), each with its entry date,
-project, and session ids — **alongside**, not mixed into, the existing
+project, session ids and counted route, its text fields tagged as journal reads
+require — **alongside**, not mixed into, the existing
 message `results` array. When `scope=messages`, the response MUST be exactly
 the pre-journal response shape: no `journal` key, message hits unchanged.
 Existing consumers that ignore unknown response fields MUST continue to work
@@ -208,6 +209,21 @@ without modification at any scope.
 
 - **WHEN** any search matches text associated with a `skip`-status journal row
 - **THEN** that row does not appear in results
+
+#### Scenario: A message snippet from tagged text
+
+- **WHEN** a message hit's stored text holds the protection tag, whatever word matched
+- **THEN** its snippet starts with the tag
+
+#### Scenario: General-only journal leg
+
+- **WHEN** a search carries `route=general`
+- **THEN** the journal block holds only entries whose counted route is `general`, in every mode, and any other value is rejected with `400`
+
+#### Scenario: Protected journal hit
+
+- **WHEN** a journal hit comes from an entry whose counted route is not `general`, in any search mode
+- **THEN** the hit carries that route and each of its text fields starts with the protection tag
 
 ### Requirement: Identity fields on projects listing
 
@@ -305,3 +321,15 @@ additive and MUST NOT change how `message_count` is produced or defined.
 
 - **WHEN** a session stores N rows with content and M content-less rows (at least one of type `attachment`) and `/v1/sessions` is queried
 - **THEN** that session's row reports `conversation_count == N`
+
+### Requirement: Message working folder
+
+`GET /v1/sessions/:id/messages` SHALL return, for each message, a `cwd` field holding the working folder in the message's stored normalized record, or null when the record has none. The key SHALL always be present.
+
+#### Scenario: A message with a working folder
+- **WHEN** a message was ingested from a Claude Code record carrying `cwd` by a daemon with this change
+- **THEN** the messages endpoint returns that value in `cwd`
+
+#### Scenario: A message without one
+- **WHEN** a message's stored record has no working folder (older ingests, other providers)
+- **THEN** the messages endpoint returns `cwd: null` and every other field unchanged

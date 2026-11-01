@@ -205,14 +205,20 @@ Invalid payloads are rejected with a `4xx` and a reason, without partial writes.
 The hub SHALL expose `GET /v1/journal/entries` (read-auth) listing entries
 filterable by project and date range, newest-first, paginated, returning full
 entry content including session ids so a caller can drill into the underlying
-transcripts.
+transcripts, and each entry's counted `route` (`general`, `protected` or null). With
+`route=general` it SHALL return only entries whose counted route is `general`.
+
+#### Scenario: General-only browse
+
+- **WHEN** a client browses with `route=general`
+- **THEN** only entries whose counted route is `general` are returned
 
 #### Scenario: Browse a project's journal
 
 - **WHEN** an authenticated client lists journal entries filtered to one
   project over a date range
 - **THEN** matching `entry`-status rows are returned newest-first with
-  headline, summary, topics, open_questions, and session ids
+  headline, summary, topics, open_questions, session ids and route
 
 ### Requirement: Distiller job
 
@@ -482,24 +488,32 @@ array whose length differs from `open_questions`.
 ### Requirement: The distiller links and resolves threads
 Before writing an entry, the distiller SHALL fetch the project's unresolved threads mentioned
 in the 30 days before the entry date (at most 30), list them in the prompt, and ask for a
-thread link per open question and the list of threads the day resolved. It SHALL drop ids it
-did not offer and ids both continued and resolved, so a model slip yields a new thread and not
-a rejected entry. An entry without links (older distiller, plain-string questions) SHALL
-remain valid.
+thread link per open question and the list of threads the day resolved. On the general route it
+SHALL fetch only general-origin threads, SHALL offer none when the hub does not confirm that
+filter, and SHALL drop any returned thread whose origin is not `general`; on the protected route it
+SHALL fetch every thread. It SHALL drop ids it did not offer and
+ids both continued and resolved, so a model slip yields a new thread and not a rejected entry. An
+entry without links (older distiller, plain-string questions) SHALL remain valid.
 
 #### Scenario: Model returns an id it was not given
 - **WHEN** the model links an open question to an id that was not in the prompt
 - **THEN** the distiller posts that question as a new thread
 
+#### Scenario: A general day after a protected day
+- **WHEN** a project has a protected entry with open questions on day 1 and its day-2 group routes general
+- **THEN** the day-2 prompt offers none of the day-1 threads
+
+#### Scenario: Two general days
+- **WHEN** a project has a general entry with open questions on day 1 and its day-2 group routes general
+- **THEN** the day-2 prompt offers the day-1 threads
+
+#### Scenario: A hub without the filter
+- **WHEN** the hub's report does not confirm the `origin=general` filter
+- **THEN** a general call is offered no threads and the run logs a warning
+
 ### Requirement: Protected routing for client projects
 
-The distiller SHALL route each group either to a protected model or to the general backend. A
-group is protected when its `project_path` contains a configured path marker, or when the prompt
-about to be sent contains a configured content term (both case-insensitive). The markers, terms
-and the protected model id SHALL live in a routing file outside the repository. A protected call
-SHALL use `claude -p` with the exact configured id and without any `ANTHROPIC_BASE_URL` or
-`ANTHROPIC_AUTH_TOKEN` in its environment. If the routing file is missing or invalid, every group
-SHALL be protected.
+The distiller SHALL route each group either to a protected model or to the general backend, deciding from a routing view of every session in the group, read across all of the session's days and including sidechain messages, built from the same flatten pass as the prompt so that the prompt is a subset of the view. A group is protected when a configured path marker appears in its `project_path`, in any message's `cwd`, in any tool-input value or in the full text of any message, or when a configured content term appears in the full text, all case-insensitive and after normalizing URL-encoding, backslashes and split path fields. The markers, terms and the protected model id SHALL live in a routing file outside the repository. A protected call SHALL use `claude -p` with the exact configured id and without any `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` in its environment.
 
 #### Scenario: Path marker routes to the protected model
 - **WHEN** a group's path contains a configured marker
@@ -513,6 +527,22 @@ SHALL be protected.
 - **WHEN** the routing file is absent or does not parse
 - **THEN** every group is protected and the run logs why
 
+#### Scenario: A working folder under a marker protects
+- **WHEN** a Claude message ingested with this change has a `cwd` containing a marker and the project path has none
+- **THEN** the group is protected
+
+#### Scenario: A marker in text or a tool result protects
+- **WHEN** a marker appears only in a user prompt, a compaction summary, a peer message or a tool result
+- **THEN** the group is protected
+
+#### Scenario: A sidechain or another day of the same session protects
+- **WHEN** a marker appears only in a sidechain tool input, or only on another day of a session in the group
+- **THEN** the group is protected, and the prompt is the same as without the marker
+
+#### Scenario: A term cut from the prompt still protects
+- **WHEN** a content term appears only in the part of a long session that truncation drops from the prompt
+- **THEN** the group is protected
+
 ### Requirement: Serving-model guard
 
 The distiller SHALL log the serving model of every LLM call. For a protected group it SHALL refuse
@@ -523,3 +553,94 @@ be stored, SHALL be logged as `REFUSED`, and SHALL make the run exit non-zero. T
 #### Scenario: A different serving model is refused
 - **WHEN** a protected call reports a `modelUsage` with any model other than the protected id, or none
 - **THEN** nothing is POSTed for that group and it stays pending
+
+### Requirement: Send-time routing gate
+
+Every general-route call SHALL go through one send function, and the distiller SHALL check every outbound string of that call (system and user text, every retry), normalized as the routing view is, for every configured marker and term, and SHALL refuse the send and protect the group if any is present.
+
+#### Scenario: A marker only in an offered thread
+- **WHEN** no session in the group holds a marker but an offered open thread does
+- **THEN** the group is protected with class `prompt`
+
+### Requirement: Routing fails closed
+
+The distiller SHALL protect a group, and log the class, when any session in it cannot be read in full, when a message has a content shape the flatten does not know, when a message from the hub has no `cwd` key (a `cwd` of null is no signal), or when the routing file is missing, invalid, or below its recorded floor or fingerprint. One failing group SHALL NOT stop the next.
+
+#### Scenario: A routing file below its floor protects everything
+- **WHEN** the routing file parses but holds fewer markers or terms than its recorded floor, or its fingerprint differs
+- **THEN** every group is protected with class `protect_all` and the run logs why
+
+#### Scenario: A partial read protects
+- **WHEN** a group has two sessions and one cannot be read
+- **THEN** the group is protected with class `unreadable`
+
+#### Scenario: A hub without the cwd key
+- **WHEN** the hub's messages carry no `cwd` key
+- **THEN** the group is protected with class `cwd_unavailable`, while a `cwd` of null is no signal
+
+### Requirement: Routing log names the class only
+
+Every routing decision SHALL be logged with its class (`path`, `cwd`, `cwd_unavailable`, `tool_input`, `text_marker`, `text_term`, `prompt`, `unreadable`, `protect_all`) and never with the marker, the term or the matched text, and a run SHALL end with per-class counts.
+
+#### Scenario: A protected group is logged
+- **WHEN** a group is protected
+- **THEN** its log line names the class and holds no marker, term or matched text
+
+### Requirement: Entries record the route they were generated on
+
+The write endpoint SHALL store an entry's optional `route` (`general` or `protected`), reject any
+other value with `400`, and store none when it is absent. The distiller SHALL post the route it
+actually generated on. Existing entries SHALL keep no route.
+
+#### Scenario: Protected entry
+- **WHEN** the distiller writes an entry for a protected group
+- **THEN** the stored row has route `protected`
+
+#### Scenario: Gate-turned group
+- **WHEN** a group found general by the routing view is turned protected at the send-time check
+- **THEN** the stored row has route `protected`
+
+#### Scenario: Older distiller
+- **WHEN** an entry is posted without a route
+- **THEN** it is stored with no route, and its open questions count as protected origin
+
+#### Scenario: Existing entries
+- **WHEN** the migration runs over entries written before this change
+- **THEN** every one of them has no route
+
+#### Scenario: Invalid route
+- **WHEN** an entry is posted with route `other`
+- **THEN** the request is rejected with `400` and nothing is written
+
+### Requirement: A general entry cannot link a protected thread
+The write endpoint SHALL reject with `400`, before anything is written, an entry with route
+`general` whose thread links or resolutions name a thread that is not general origin.
+
+#### Scenario: General entry continues a protected thread
+- **WHEN** an entry with route `general` links an open question to a thread whose only mention is a protected entry
+- **THEN** the request is rejected with `400` and nothing is written
+
+#### Scenario: Protected entry continues it
+- **WHEN** an entry with route `protected` links to the same thread
+- **THEN** it is stored
+
+### Requirement: Protected journal text is tagged on read
+Every journal read response SHALL start each text field (headline, summary, each topic, each open
+question) of an entry whose counted route is not `general` with the tag
+`[cchv:protected-journal] `. The stored row, its search text and its embedding SHALL stay untagged.
+
+#### Scenario: Protected entry in a browse response
+- **WHEN** a client browses a project whose entry has route `protected`
+- **THEN** that entry's headline, summary, topics and open questions each start with the tag
+
+#### Scenario: Entry without a route
+- **WHEN** an entry has no route
+- **THEN** its text fields are tagged as a protected entry's are
+
+#### Scenario: General entry
+- **WHEN** an entry has route `general`
+- **THEN** none of its text fields carries the tag
+
+#### Scenario: A transcript quoting a tagged field routes protected
+- **WHEN** the tag is a content term in the routing file and a lab session's tool result holds a tagged field
+- **THEN** that session's group is protected with class `text_term`

@@ -6,7 +6,9 @@ The hub's ingest endpoint and Postgres persistence layer — the only component
 that holds database credentials. It accepts authenticated, idempotent batched
 ingests and stores them in a normalized + raw-fidelity + full-text-searchable,
 pgvector-ready schema managed by versioned migrations.
+
 ## Requirements
+
 ### Requirement: Authenticated batched ingest endpoint
 
 The hub SHALL expose a `POST /v1/ingest` endpoint that accepts a batch containing a machine identifier and collections of projects, sessions, and messages, and persists them to Postgres. The endpoint MUST require a valid bearer token; requests with a missing or invalid token MUST be rejected with `401`. The hub MUST be the only component that holds Postgres credentials.
@@ -194,3 +196,14 @@ ingested in either order, in the same batch or different ones.
 - **WHEN** a message containing no tool invocations is ingested
 - **THEN** no invocation rows are created for it
 
+### Requirement: Stored record keeps the working folder
+
+The normalized Claude Code message record the daemon stores as `raw` SHALL carry the source record's `cwd` when the source has one. Messages ingested before this change are not re-ingested and keep no working folder.
+
+#### Scenario: A source line with a working folder
+- **WHEN** the daemon converts a Claude Code JSONL line that has `cwd`
+- **THEN** the stored `raw` holds that `cwd`
+
+#### Scenario: A source line without one
+- **WHEN** the line has no `cwd`
+- **THEN** the stored `raw` has no `cwd` and is otherwise unchanged
