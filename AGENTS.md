@@ -101,7 +101,7 @@ machine, incl. retired ones via their TM disk): `docs/archive/timemachine-backfi
 
 ### Agent relay
 
-Moved to [`docs/agents/agent-relay.md`](docs/agents/agent-relay.md): the `nats` relay participation, how to message another repo's agent (Channel 0, Gitea issue, `relay-send`; `auto` vs `interactive`). Two rules stay binding here: **run `/check-relay` first at every session start, after `/clear` and after a resume**, and **checkpoint by committing** (uncommitted work in this Syncthing-shared tree is unwritten).
+Moved to [`docs/agents/agent-relay.md`](docs/agents/agent-relay.md): the `nats` relay participation, how to message another repo's agent (Channel 0, Gitea issue, `relay-send`; `auto` vs `interactive`). The criterion for picking a channel: **Channel 0 addresses a context; the relay addresses a role** (relay spec v2.34 § TL;DR). Two rules stay binding here: **run `/check-relay` first at every session start, after `/clear` and after a resume**, and **checkpoint by committing** (uncommitted work in this Syncthing-shared tree is unwritten).
 
 ## Repo rules
 
