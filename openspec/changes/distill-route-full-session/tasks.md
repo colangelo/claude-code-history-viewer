@@ -33,6 +33,6 @@
 ## 5. Release
 
 - [x] 5.1 Gate, release; hub swap, then the daemon on both Macs, then the distiller reinstall; on ac's word: released as cchv-v0.34.0 on 2026-10-31, ac gestore-lab.a1031-18; the gate on a672c68d, then hub, daemons and distiller in that order
-- [ ] 5.2 Read back one night: route counts by class; general-routed groups whose full text holds any marker or term = 0; sent to the client's manager and its security reviewer
-- [ ] 5.3 #10 closes only when 2–4 and the routing-file half (4.1, 4.2) are in
+- [x] 5.2 Read back one night: route counts by class; general-routed groups whose full text holds any marker or term = 0; sent to the client's manager and its security reviewer: night 1 (run 2026-11-01 05:13Z, 37 groups): 0 general, so 0 general groups with a marker or term; classes path 8, text_marker 20, text_term 8, unreadable 1; sent 2026-11-01
+- [x] 5.3 #10 closes only when 2–4 and the routing-file half (4.1, 4.2) are in: met 2026-11-01 (released cchv-v0.34.0, night-1 read-back done)
 - [x] 5.4 Follow-ups (C8): an issue for Codex and Pi `cwd` (turn level); the daemon-lag window in `docs/residuals.md` until both Macs run the new daemon (Gitea #92; the residual is in `docs/residuals.md`)

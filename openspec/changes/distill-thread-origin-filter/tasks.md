@@ -23,4 +23,4 @@
 ## 4. Release
 
 - [x] 4.1 Ships with `distill-route-full-session` (its task 4.3): hub with 0016, then the daemons, then one distiller reinstall carrying both; on ac's word: released as cchv-v0.34.0 on 2026-10-31, ac gestore-lab.a1031-18 (hub 17:41Z, daemons m4m 17:42Z and ac-mbm5 17:43Z, distiller 17:4xZ)
-- [ ] 4.2 Read back after the first night: entries by route; the read-back query = 0; sent with the route counts to the client's manager
+- [x] 4.2 Read back after the first night: entries by route; the read-back query = 0; sent with the route counts to the client's manager: 2026-11-01, entries since the swap 33 protected + 4 protected skips + 1 skip with no route, 0 general; read-back query 0 rows
