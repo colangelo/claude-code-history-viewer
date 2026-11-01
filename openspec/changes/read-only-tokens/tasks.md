@@ -51,4 +51,9 @@
       none, odd names, copied leaf, same token new id, reader with a Mac token, copied leaf with a
       cached runtime (exit 1, cache untouched). Control: the 0.36.0 launcher starts on both duplicates.
 - [x] 4.4 deployment.md: `[[readers]]`, the duplicate rule, the revocation note.
-- [ ] 4.5 Gate (GREEN: 1235 passed, 0 failed, 7 ignored); security reads the commit (C1-C3); release; then the mint (infra, on ac's yes).
+- [x] 4.5 Gate (GREEN: 1235 passed, 0 failed, 7 ignored); security read a506a73a: C1-C3 met, P3s
+      done, OK to release cchv-v0.37.0 (ac/security re-test section, bell ad0f7ed7).
+- [ ] 4.6 Release cchv-v0.37.0 (hub + launcher, nothing minted).
+- [ ] 4.7 infra mints kv/agents/cchv-readers/agents-blog on ac's narrow yes (a1101-25) and shows
+      security both policy lines; context makes the C4 switch (127.0.0.1:8790 with the token, the
+      tailnet rung deleted).
