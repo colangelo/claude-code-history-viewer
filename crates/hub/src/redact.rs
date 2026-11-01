@@ -94,7 +94,7 @@ const PATTERNS: [&str; 4] = [
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
     r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|(?:sk-(?:bf|mw)|aiproxy-(?:ws|pi))-[A-Za-z0-9_:\-]{30,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,}|gl(?:pat|rt)-[A-Za-z0-9_\-]{20,}(?:\.[A-Za-z0-9_\-]+)*)",
     r"\b(?i:Bearer)[ \t]+(?P<value>[A-Za-z0-9._~+/=\-]{20,})",
-    r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
+    r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSWORD|PASSWD|PASSW|SECRET|TOKEN|API_KEY|API-KEY|APIKEY|PRIVATE_KEY|CREDENTIAL|BEARER)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
 ];
 
 struct Detector {
@@ -141,9 +141,23 @@ fn secret_key(key: &str) -> bool {
     SECRET_NAMES.iter().any(|name| upper.contains(name))
 }
 
+/// One `ALL_CAPS` word that announces itself as a placeholder, as templates and
+/// docs write them (`GENERATE_A_LONG_RANDOM_SECRET_FOR_M4M`). Exactly this
+/// shape and nothing wider (security, #65 comment 26606): a mixed-case or
+/// spaced tail after the prefix is not a placeholder.
+fn placeholder_word(value: &str) -> bool {
+    ["GENERATE_", "EXAMPLE_", "YOUR_", "CHANGE_ME"]
+        .iter()
+        .any(|p| value.starts_with(p))
+        && value
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
 pub(crate) fn placeholder(value: &str) -> bool {
     let value = value.trim();
     if value.starts_with("[REDACTED:")
+        || placeholder_word(value)
         || value.starts_with("${{") // CI template: `${{ secrets.GITHUB_TOKEN }}`
         || value.starts_with("***")
         || value
@@ -249,7 +263,8 @@ fn closed_literal_code(value: &str) -> bool {
 fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
     let not_a_secret =
         placeholder(value) || password_hash(value) || (bare && code_expression(value));
-    (secret_key(key)
+    let hex_secret = hex_secret_key(key) && hex_value(value);
+    ((secret_key(key) || hex_secret)
         && value.chars().count() >= 8
         && !value.chars().all(|c| c.is_ascii_digit())
         && !not_a_secret)
@@ -260,10 +275,39 @@ fn assignment_finding(key: &str, value: &str, bare: bool) -> Option<Finding> {
                     rule: Rule::AssignStrong,
                     ..hit
                 }
+            } else if hex_secret && !hit.reference {
+                Finding {
+                    rule: Rule::AssignHexSecret,
+                    ..hit
+                }
             } else {
                 hit
             }
         })
+}
+
+/// Key endings under which a hex value is a secret (security P2, 2026-11-01):
+/// the words of `STRONG_KEY_ENDINGS` that name a credential, plus `PASSW`,
+/// `API-KEY` and `BEARER`. Ending, not containing: `sha256`, `digest`,
+/// `commit` and `password_reset_id` never match.
+const HEX_SECRET_KEY_ENDINGS: [&str; 9] = [
+    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSW", "API_KEY", "API-KEY", "APIKEY", "BEARER",
+];
+
+fn hex_secret_key(key: &str) -> bool {
+    if DENIED_KEYS
+        .iter()
+        .any(|denied| key.eq_ignore_ascii_case(denied))
+    {
+        return false;
+    }
+    let upper = key.to_ascii_uppercase();
+    HEX_SECRET_KEY_ENDINGS.iter().any(|w| upper.ends_with(w))
+}
+
+/// 32 or more hexadecimal characters and nothing else.
+fn hex_value(value: &str) -> bool {
+    value.len() >= 32 && value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Key names whose LAST word marks the value itself as the secret
@@ -1164,9 +1208,11 @@ mod tests {
         let sha = format!("COMMIT_TOKEN={}", hex_sha());
         let (out, hits) = redact(&sha, &[Rule::AssignStrong]);
         assert_eq!(out, sha, "a 40-char hex digest has 2 classes");
+        // Not strong; since 2026-11-01 hex under a key ending in TOKEN is
+        // assign-hex-secret (security P2), which only redacts when listed.
         assert_eq!(
             hits.iter().map(|h| h.rule).collect::<Vec<_>>(),
-            vec![Rule::Assign]
+            vec![Rule::AssignHexSecret]
         );
         let short = "TOKEN=abc123 here";
         assert_eq!(redact(short, &[Rule::AssignStrong]).0, short);
@@ -1231,7 +1277,11 @@ mod tests {
     fn word_final_key_controls_are_untouched() {
         // A 40-char hex digest has two classes.
         let sha = format!("NATS_PASSWORD={}", hex_sha());
-        assert_eq!(strong_rule(&sha), (sha.clone(), vec![Rule::Assign]));
+        assert_eq!(
+            strong_rule(&sha),
+            (sha.clone(), vec![Rule::AssignHexSecret]),
+            "not strong; hex under a secret key is assign-hex-secret (flag-only here)"
+        );
         // 31 chars is below the band.
         let short = format!("NATS_PASSWORD={} next", synthetic(31, ALPHABET));
         assert_eq!(strong_rule(&short).0, short);
@@ -2026,10 +2076,7 @@ mod tests {
             format!("password_reset_id = {}", hex(32)),
         ];
         for text in cases {
-            assert!(
-                !rules_in(&text).contains(&Rule::AssignHexSecret),
-                "{text}"
-            );
+            assert!(!rules_in(&text).contains(&Rule::AssignHexSecret), "{text}");
         }
     }
 

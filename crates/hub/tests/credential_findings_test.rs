@@ -1492,7 +1492,7 @@ async fn findings_record_their_origin() {
 /// security ruling (#65 comment 26620): `messages_by_rule_all`, the volume
 /// count infra pages on at 10 per 6 h, leaves out only findings acked
 /// `false_positive`. Ten unacked hits count 10; the same ten acked
-/// false_positive count 0; acked `handled` (a real secret) they still count 10.
+/// `false_positive` count 0; acked `handled` (a real secret) they still count 10.
 #[tokio::test]
 async fn volume_count_leaves_out_false_positives_only() {
     for (class, want) in [
@@ -1508,7 +1508,14 @@ async fn volume_count_leaves_out_false_positives_only() {
         let keys: Vec<String> = (0..10).map(|i| format!("k-vol-{i}-{session}")).collect();
         let msgs = keys
             .iter()
-            .map(|k| msg(&session, k, &now, &format!("pushed {} now", synthetic_token())))
+            .map(|k| {
+                msg(
+                    &session,
+                    k,
+                    &now,
+                    &format!("pushed {} now", synthetic_token()),
+                )
+            })
             .collect();
         post(&hub, &batch(hub.machine_id, &session, msgs)).await;
         if let Some(class) = class {

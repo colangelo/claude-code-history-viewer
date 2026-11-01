@@ -191,10 +191,34 @@ async fn count_since(
         }
         out.messages_by_rule.insert(rule, row.get("n"));
     }
+    // The volume count (infra's cchv-findings-volume, 10 per 6 h) leaves out
+    // only findings acked `false_positive`: a row acked `handled` was a real
+    // secret, so it is real exposure and still counts (security, #65 comment
+    // 26620). `messages_by_rule` above keeps leaving out every acked row: it is
+    // what the paging check reads, and acking still clears that page.
+    let volume = sqlx::query(
+        r"
+        SELECT f.rule, count(DISTINCT f.message_ref) AS n
+        FROM credential_findings f
+        JOIN messages m ON m.id = f.message_ref
+        WHERE f.detected_at > now() - make_interval(secs => $1)
+          AND m.type IS DISTINCT FROM 'api-request-blob'
+          AND NOT EXISTS (SELECT 1 FROM finding_acks a
+                          WHERE a.finding_id = f.id AND a.classification = 'false_positive')
+        GROUP BY f.rule
+        ",
+    )
+    .bind(since_secs as f64)
+    .fetch_all(pool)
+    .await?;
+    let volume: BTreeMap<String, i64> = volume
+        .into_iter()
+        .map(|row| (row.get("rule"), row.get("n")))
+        .collect();
     out.messages_by_rule_all = redact::Rule::ALL
         .iter()
         .map(|r| {
-            let n = out.messages_by_rule.get(r.id()).copied().unwrap_or(0);
+            let n = volume.get(r.id()).copied().unwrap_or(0);
             (r.id().to_owned(), n)
         })
         .collect();
