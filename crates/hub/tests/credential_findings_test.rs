@@ -1312,10 +1312,12 @@ async fn acked_findings_stop_paging_and_a_new_one_still_pages() {
     assert_eq!(body["total"], 0);
     assert_eq!(body["acked_by_rule"]["prefix"], 3);
     assert!(body["messages_by_rule"].get("prefix").is_none());
+    // security ruling (#65 comment 26620): the volume count leaves out only
+    // false positives; a row acked `handled` is real exposure and still counts.
     assert_eq!(
         body["messages_by_rule_all"],
-        serde_json::json!({"assign": 0, "assign-strong": 0, "bearer": 0, "pair": 0, "pem": 0, "prefix": 0}),
-        "every rule present with an explicit zero, so a threshold reads a number"
+        serde_json::json!({"assign": 0, "assign-hex-secret": 0, "assign-strong": 0, "bearer": 0, "pair": 0, "pem": 0, "prefix": 1}),
+        "every rule present with an explicit number, so a threshold reads one"
     );
 
     let again = findings::ack(&hub.pool, &ack_opts(row, 3, "vendor docs example"))
@@ -1337,7 +1339,10 @@ async fn acked_findings_stop_paging_and_a_new_one_still_pages() {
     let (code, body) = health().await;
     assert_eq!(code, 503, "a new finding pages despite the earlier ack");
     assert_eq!(body["messages_by_rule"]["prefix"], 1);
-    assert_eq!(body["messages_by_rule_all"]["prefix"], 1);
+    assert_eq!(
+        body["messages_by_rule_all"]["prefix"], 2,
+        "the handled message and the new one"
+    );
     assert_eq!(body["messages_by_rule_all"]["pem"], 0);
     assert!(
         body["messages_by_rule"].get("pem").is_none(),
@@ -1482,4 +1487,53 @@ async fn findings_record_their_origin() {
         .await
         .unwrap();
     assert!(s.origins_by_rule["prefix"]["user:tool_result"] >= 1);
+}
+
+/// security ruling (#65 comment 26620): `messages_by_rule_all`, the volume
+/// count infra pages on at 10 per 6 h, leaves out only findings acked
+/// `false_positive`. Ten unacked hits count 10; the same ten acked
+/// false_positive count 0; acked `handled` (a real secret) they still count 10.
+#[tokio::test]
+async fn volume_count_leaves_out_false_positives_only() {
+    for (class, want) in [
+        (None, 10),
+        (Some("false_positive"), 0),
+        (Some("handled"), 10),
+    ] {
+        let hub = spawn(Vec::new()).await;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let start = std::time::Instant::now();
+        let now = Utc::now().to_rfc3339();
+        let session = format!("s-vol-{}", Uuid::new_v4());
+        let keys: Vec<String> = (0..10).map(|i| format!("k-vol-{i}-{session}")).collect();
+        let msgs = keys
+            .iter()
+            .map(|k| msg(&session, k, &now, &format!("pushed {} now", synthetic_token())))
+            .collect();
+        post(&hub, &batch(hub.machine_id, &session, msgs)).await;
+        if let Some(class) = class {
+            for k in &keys {
+                let (row, ..) = stored(&hub, k).await;
+                let mut opts = ack_opts(row, 3, "volume test");
+                opts.classification = match class {
+                    "false_positive" => findings::Classification::FalsePositive,
+                    _ => findings::Classification::Handled,
+                };
+                assert_eq!(findings::ack(&hub.pool, &opts).await.unwrap().acked, 3);
+            }
+        }
+        let since = start.elapsed().as_secs() + 1;
+        let body: serde_json::Value = reqwest::Client::new()
+            .get(format!("{}/v1/healthz/findings?since={since}s", hub.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            body["messages_by_rule_all"]["prefix"], want,
+            "acked as {class:?}"
+        );
+    }
 }

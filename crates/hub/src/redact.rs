@@ -20,18 +20,23 @@ pub enum Rule {
     /// An `assign` hit with a strong value shape (ac/security G3, 2026-10-22):
     /// derived, not a pattern of its own.
     AssignStrong,
+    /// An `assign` hit whose value is 32+ hex characters under a key that ends
+    /// in a secret word: our own hub and guest tokens are 64 hex, two classes,
+    /// so `assign-strong` cannot see them (security P2, 2026-11-01). Derived.
+    AssignHexSecret,
     /// A value field paired with a secret-named name field or a sensitivity
     /// flag in the same object (ac/security F7, 2026-10-22): `crate::pair`.
     Pair,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 6] = [
+    pub const ALL: [Rule; 7] = [
         Rule::Pem,
         Rule::Prefix,
         Rule::Bearer,
         Rule::Assign,
         Rule::AssignStrong,
+        Rule::AssignHexSecret,
         Rule::Pair,
     ];
 
@@ -40,9 +45,11 @@ impl Rule {
     }
 
     /// Whether `rules` selects this rule. Selecting `assign` also selects
-    /// `assign-strong`, which is a subset of it.
+    /// `assign-strong` and `assign-hex-secret`, which are subsets of it.
     pub fn selected(self, rules: &[Rule]) -> bool {
-        rules.contains(&self) || (self == Rule::AssignStrong && rules.contains(&Rule::Assign))
+        rules.contains(&self)
+            || (matches!(self, Rule::AssignStrong | Rule::AssignHexSecret)
+                && rules.contains(&Rule::Assign))
     }
 
     pub fn id(&self) -> &'static str {
@@ -52,6 +59,7 @@ impl Rule {
             Self::Bearer => "bearer",
             Self::Assign => "assign",
             Self::AssignStrong => "assign-strong",
+            Self::AssignHexSecret => "assign-hex-secret",
             Self::Pair => "pair",
         }
     }
@@ -414,6 +422,7 @@ fn spans(text: &str) -> Vec<Span> {
                 }
                 // Derived from an `assign` hit below; never a pattern of its own.
                 Rule::AssignStrong => unreachable!("assign-strong has no pattern"),
+                Rule::AssignHexSecret => unreachable!("assign-hex-secret has no pattern"),
                 Rule::Pair => unreachable!("pair spans come from crate::pair"),
                 Rule::Assign => {
                     let value = captures
@@ -1949,5 +1958,123 @@ mod tests {
         let ed25519 = synthetic(64, ALPHABET);
         let hits: Vec<Rule> = scan(&block(&ed25519)).into_iter().map(|f| f.rule).collect();
         assert_eq!(hits, vec![Rule::Pem]);
+    }
+
+    // assign-hex-secret (security P2, 2026-11-01): our own hub and guest tokens
+    // are 64 hex, two classes, invisible to assign-strong. Fixtures are built at
+    // run time so no literal secret-shaped value sits in the source.
+    fn hex(n: usize) -> String {
+        synthetic(n, b"0123456789abcdef")
+    }
+
+    fn rules_in(text: &str) -> Vec<Rule> {
+        scan(text).iter().map(|h| h.rule).collect()
+    }
+
+    #[test]
+    fn assign_hex_secret_is_a_rule_id_selected_by_assign() {
+        assert_eq!(
+            Rule::from_id("assign-hex-secret"),
+            Some(Rule::AssignHexSecret)
+        );
+        assert!(Rule::AssignHexSecret.selected(&[Rule::Assign]));
+        assert!(!Rule::Assign.selected(&[Rule::AssignHexSecret]));
+    }
+
+    #[test]
+    fn hex_under_a_word_final_secret_key_is_assign_hex_secret() {
+        let cases = [
+            format!("hub_token = \"{}\"", hex(64)),
+            format!("GITHUB_TOKEN={} next", hex(40)),
+            format!("client_secret: {}", hex(32)),
+            format!("db_password = {}", hex(48)),
+            format!("NATS_PASSWD={}", hex(32)),
+            format!("x-api-key: {}", hex(40)),
+            format!("api_key = {}", hex(64)),
+            format!("bearer = {}", hex(64)),
+        ];
+        for text in cases {
+            assert_eq!(rules_in(&text), vec![Rule::AssignHexSecret], "{text}");
+            let (out, _) = redact(&text, &[Rule::AssignHexSecret]);
+            assert!(
+                out.contains("[REDACTED:assign-hex-secret]"),
+                "redacted when listed: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn hex_in_a_json_token_field_is_assign_hex_secret() {
+        let mut v = serde_json::json!({ "token": hex(32), "hubToken": hex(64) });
+        let hits = redact_json(&mut v, &[Rule::AssignHexSecret]);
+        assert_eq!(v["token"], "[REDACTED:assign-hex-secret]");
+        assert_eq!(v["hubToken"], "[REDACTED:assign-hex-secret]");
+        assert!(hits.iter().all(|h| h.rule == Rule::AssignHexSecret));
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn hex_is_not_a_secret_without_a_secret_key() {
+        let cases = [
+            format!("sha256 = {}", hex(64)),
+            format!("digest = {}", hex(64)),
+            format!("commit = {}", hex(40)),
+            format!("checksum: {}", hex(64)),
+            format!("color_seed = {}", hex(32)),
+            format!("fixed in {} last week", hex(40)),
+            format!("token_count = {}", hex(32)),
+            format!("password_reset_id = {}", hex(32)),
+        ];
+        for text in cases {
+            assert!(
+                !rules_in(&text).contains(&Rule::AssignHexSecret),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn short_hex_is_not_assign_hex_secret() {
+        let text = format!("hub_token = \"{}\"", hex(31));
+        assert!(!rules_in(&text).contains(&Rule::AssignHexSecret));
+    }
+
+    #[test]
+    fn listing_assign_strong_does_not_redact_hex_secrets() {
+        let text = format!("hub_token = \"{}\"", hex(64));
+        let (out, _) = redact(&text, &[Rule::AssignStrong]);
+        assert_eq!(out, text, "flag-only until assign-hex-secret is listed");
+    }
+
+    // security #65 comment 26606: an exact ALL_CAPS placeholder word.
+    #[test]
+    fn all_caps_placeholder_words_are_not_strong() {
+        for word in [
+            "GENERATE_A_LONG_RANDOM_SECRET_FOR_M4M",
+            "EXAMPLE_TOKEN_VALUE_1234567890_ABCDEFG",
+            "YOUR_API_TOKEN_GOES_HERE_1234567890ABC",
+            "CHANGE_ME_TO_A_REAL_SECRET_0123456789_X",
+        ] {
+            let text = format!("token = \"{word}\"");
+            let rules = rules_in(&text);
+            assert!(!rules.contains(&Rule::AssignStrong), "{word}: {rules:?}");
+        }
+    }
+
+    #[test]
+    fn a_near_miss_of_a_placeholder_word_still_fires() {
+        let text = format!("token = \"GENERATE_{}\"", alnum32());
+        assert!(rules_in(&text).contains(&Rule::AssignStrong));
+    }
+
+    // Proposed for security's veto: the hub's own marker anywhere in a value.
+    #[test]
+    fn a_value_holding_the_hub_marker_is_a_placeholder() {
+        for text in [
+            "hub_token = \" | [REDACTED:assign-strong]\"infra\" aspect of the config\"",
+            "hub_token = \"[REDACTED:assign-strong]\"a9a99aa99999999999999999999\"",
+        ] {
+            assert!(!rules_in(text).contains(&Rule::AssignStrong), "{text}");
+        }
     }
 }
