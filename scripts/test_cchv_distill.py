@@ -1585,13 +1585,6 @@ def test_restamp_allowed_folders_are_the_gpt_denied_ones() -> None:
     assert d.RESTAMP_DIRS == (home / ".config" / "cchv", home / ".local" / "state" / "cchv")
 
 
-def test_restamp_generation_is_the_hubs_formula(tmp_path) -> None:
-    (tmp_path / "r.toml").write_bytes(b"routing")
-    (tmp_path / "f.json").write_bytes(b"floor")
-    assert d.routing_generation(tmp_path / "r.toml", tmp_path / "f.json") == \
-        hashlib.sha256(b"routingfloor").hexdigest()
-
-
 # --- security's E8 code review (docs/reviews/2026-11-02-cchv-e8-restamp-code.md) ---
 
 class _PagedResp:

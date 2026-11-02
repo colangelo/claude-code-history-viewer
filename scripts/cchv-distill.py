@@ -516,6 +516,7 @@ class Hub:
             params["from"], params["to"] = window
         msgs: list[dict] = []
         offset = 0
+        first_total: int | None = None
         while True:
             r = _with_retry(
                 f"session {session_id} messages (offset {offset})",
@@ -529,8 +530,22 @@ class Hub:
             msgs.extend(page)
             # Windowed, X-Total-Count is the WINDOWED total, so this loop
             # terminates on the filtered set rather than on the session's size.
-            total = int(r.headers.get("X-Total-Count", len(msgs)))
+            # A missing, unparsable or moving total is never a complete read
+            # (security E8 R5): routing must not decide on a part.
+            raw_total = r.headers.get("X-Total-Count")
+            if raw_total is None:
+                raise RuntimeError(f"session {session_id}: no X-Total-Count")
+            try:
+                total = int(raw_total)
+            except ValueError:
+                raise RuntimeError(f"session {session_id}: X-Total-Count is not a count") from None
+            if first_total is None:
+                first_total = total
+            elif total != first_total:
+                raise RuntimeError(f"session {session_id}: the total changed between pages")
             offset += len(page)
+            if offset > total:
+                raise RuntimeError(f"session {session_id}: read more than the {total} messages counted")
             if not page and offset < total:
                 # Fewer than the hub counted: routing must not decide on a part.
                 raise RuntimeError(f"session {session_id}: read {offset} of {total} messages")
@@ -892,19 +907,21 @@ def routing_kinds(r: Routing) -> dict[str, int]:
             "content_terms": len(r.content_terms)}
 
 
-def _read_floor(floor: Path) -> dict:
-    """The floor record; raises FileNotFoundError, or ValueError when invalid."""
-    rec = json.loads(floor.read_text())
+def _read_floor(floor: Path, data: bytes | None = None) -> dict:
+    """The floor record (from `data` when the caller already read it); raises
+    FileNotFoundError, or ValueError when invalid."""
+    rec = json.loads(floor.read_text() if data is None else data.decode())
     if not (isinstance(rec, dict) and isinstance(rec.get("sha256"), str)
             and all(type(rec.get(k)) is int for k in FLOOR_KINDS)):
         raise ValueError("not a floor record")
     return rec
 
 
-def _floor_problem(data: bytes, r: Routing, floor: Path) -> str | None:
+def _floor_problem(data: bytes, r: Routing, floor: Path,
+                   floor_data: bytes | None = None) -> str | None:
     """Why the routing file does not pass its floor record, or None. Names kinds, never entries."""
     try:
-        rec = _read_floor(floor)
+        rec = _read_floor(floor, floor_data)
     except FileNotFoundError:
         return f"no routing floor recorded at {floor} (run --record-routing-floor)"
     except (OSError, ValueError) as e:
@@ -924,9 +941,19 @@ def load_routing(path: Path = ROUTING_FILE, floor: Path | None = None) -> Routin
 
     With `floor`, the file must also pass its floor record (#84 #13, C6).
     """
+    return load_routing_snapshot(path, floor)[0]
 
-    def protect_all(reason: str) -> Routing:
-        return Routing(model=FALLBACK_PROTECTED_MODEL, protect_all=True, reason=reason)
+
+def load_routing_snapshot(path: Path = ROUTING_FILE,
+                          floor: Path | None = None) -> tuple[Routing, str | None]:
+    """The router plus the policy generation, sha256(routing bytes ‖ floor
+    bytes), computed from the very bytes the router was built from (security
+    E8 R4): each file is read once. The generation is None without a floor or
+    when the routing protects everything.
+    """
+
+    def protect_all(reason: str) -> tuple[Routing, None]:
+        return Routing(model=FALLBACK_PROTECTED_MODEL, protect_all=True, reason=reason), None
 
     try:
         data = path.read_bytes()
@@ -946,9 +973,17 @@ def load_routing(path: Path = ROUTING_FILE, floor: Path | None = None) -> Routin
                for x in (markers, terms)):
         return protect_all(f"{path}: path_markers/content_terms must be lists of strings")
     r = Routing(model=model.strip(), path_markers=markers, content_terms=terms)
-    if floor is not None and (problem := _floor_problem(data, r, floor)):
+    if floor is None:
+        return r, None
+    try:
+        floor_data = floor.read_bytes()
+    except FileNotFoundError:
+        return protect_all(f"no routing floor recorded at {floor} (run --record-routing-floor)")
+    except OSError as e:
+        return protect_all(f"routing floor {floor} unreadable or invalid: {e}")
+    if problem := _floor_problem(data, r, floor, floor_data):
         return protect_all(problem)
-    return r
+    return r, hashlib.sha256(data + floor_data).hexdigest()
 
 
 # --- restamp-history, step 1: classify (design R3-E8, security E8) -----------
@@ -969,21 +1004,16 @@ class RestampRefused(RuntimeError):
     """The classify step will not start: its answer could not be trusted."""
 
 
-def routing_generation(routing: Path = ROUTING_FILE, floor: Path = ROUTING_FLOOR_FILE) -> str:
-    """The hub's policy generation: sha256 of (routing bytes ‖ floor bytes)."""
-    return hashlib.sha256(routing.read_bytes() + floor.read_bytes()).hexdigest()
-
-
 def _is_claude(model) -> bool:
     m = model.lower() if isinstance(model, str) else ""
     return any(w in m for w in ("claude", "haiku", "sonnet", "opus"))
 
 
-def restamp_entry_class(hub, routing: Routing, entry: dict, sessions: dict) -> str | None:
+def restamp_entry_class(hub, routing: Routing, entry: dict, groups: dict) -> str | None:
     """Why an unstamped entry stays hidden, or None when it is restampable.
 
-    The checks run in order and the first hit decides. `sessions` caches each
-    session's class for the run: a session in many entries is read once.
+    The checks run in order and the first hit decides. `groups` caches each
+    session group's class for the run: the same group in two entries is read once.
     """
     try:
         generated = datetime.fromisoformat(entry["generated_at"])
@@ -1011,14 +1041,12 @@ def restamp_entry_class(hub, routing: Routing, entry: dict, sessions: dict) -> s
         return "unreadable"
     if not ids:
         return "no_sessions"
-    for sid in ids:
-        if sid not in sessions:
-            # The live router's whole-session pass, one session at a time; the
-            # project path is checked above, so none is passed here.
-            sessions[sid] = route_group(hub, routing, "", [sid])
-        if sessions[sid] is not None:
-            return sessions[sid]
-    return None
+    # The live router over the entry's sessions as ONE group, so the live
+    # per-group limits hold (security E8 R8); the project path is checked above.
+    key = tuple(ids)
+    if key not in groups:
+        groups[key] = route_group(hub, routing, "", ids)
+    return groups[key]
 
 
 def _open_new_private(path: Path):
@@ -1033,7 +1061,7 @@ def restamp_classify(hub, routing: Routing, generation: str, out: Path,
 
     Refuses to start (`RestampRefused`) when the answer could not be trusted:
     protect-all routing, a hub on another generation, client scope off, or a
-    lab caller under enforce (it would see a partial history). The file holds
+    caller that is not a client reader. The file holds
     only restampable entries; every other entry is a count per class.
     """
     if routing.protect_all:
@@ -1046,13 +1074,15 @@ def restamp_classify(hub, routing: Routing, generation: str, out: Path,
         raise RestampRefused("client scope is not on at the hub")
     if health.get("generation") != generation[:12]:
         raise RestampRefused("the hub's generation differs from the routing files here")
-    if health.get("mode") == "enforce" and health.get("caller_scope") != "client":
-        raise RestampRefused("a lab caller under enforce sees a partial history")
+    if health.get("caller_scope") != "client":
+        # In every mode (security E8 P3): a lab caller under enforce sees a
+        # partial history, and observe can turn to enforce mid-run.
+        raise RestampRefused("the caller is not a client reader")
 
     started = datetime.now(timezone.utc)
     with _open_new_private(out) as fh:
         counts: Counter = Counter()
-        sessions: dict = {}
+        groups: dict = {}
         keep: list[dict] = []
         offset = 0
         while True:
@@ -1064,7 +1094,7 @@ def restamp_classify(hub, routing: Routing, generation: str, out: Path,
                 if e.get("status") != "entry" or e.get("route") is not None:
                     continue
                 counts["checked"] += 1
-                cls = restamp_entry_class(hub, routing, e, sessions)
+                cls = restamp_entry_class(hub, routing, e, groups)
                 if cls is None:
                     counts["restampable"] += 1
                     keep.append({k: e[k] for k in
@@ -1517,13 +1547,13 @@ def main() -> int:
 
     if args.restamp_history:
         log(f"cchv-distill {DISTILL_VERSION} blob={script_blob_id()[:12]} mode=restamp-history")
-        routing = load_routing(ROUTING_FILE, floor=ROUTING_FLOOR_FILE)
-        if routing.protect_all:
+        routing, generation = load_routing_snapshot(ROUTING_FILE, floor=ROUTING_FLOOR_FILE)
+        if routing.protect_all or generation is None:
             log(f"REFUSED: routing is protect-all ({routing.reason})")
             return 2
         hub = Hub(args.hub_url, resolve_token(), read_token=resolve_client_token())
         try:
-            counts = restamp_classify(hub, routing, routing_generation(),
+            counts = restamp_classify(hub, routing, generation,
                                       Path(args.restamp_history).expanduser())
         except (RestampRefused, FileExistsError, OSError) as e:
             log(f"REFUSED: {e}")
