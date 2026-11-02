@@ -145,6 +145,23 @@ pub async fn ingest(
         return Err(HubError::Unauthorized);
     }
 
+    // Client scope: re-validate the policy before the batch (R2-C), so a
+    // generation change takes effect before anything is classified under it.
+    // A failed refresh keeps the last snapshot; an unknown policy classifies
+    // nothing, which leaves new sessions unscanned (client for lab readers).
+    let client_policy = match &state.client_scope {
+        Some(scope) => {
+            if let Err(e) = scope.refresh(&state.pool).await {
+                tracing::error!(error = %e, "client scope refresh before ingest failed");
+            }
+            match scope.snapshot() {
+                crate::client_state::Snapshot::Ready(p) => Some(p),
+                crate::client_state::Snapshot::Unknown(_) => None,
+            }
+        }
+        None => None,
+    };
+
     let mut resp = IngestResponse::default();
     let mut tx = state.pool.begin().await?;
 
@@ -259,6 +276,7 @@ pub async fn ingest(
     // (provider, session_id) -> surrogate session id, for message linkage.
     let mut session_ids: HashMap<(String, String), i64> = HashMap::new();
     let mut touched_projects: HashSet<i64> = HashSet::new();
+    let mut new_sessions: HashSet<i64> = HashSet::new();
     for s in &batch.sessions {
         let project_id = s
             .project_path
@@ -315,6 +333,7 @@ pub async fn ingest(
         }
         session_ids.insert((s.provider.clone(), s.session_id.clone()), id);
         if inserted {
+            new_sessions.insert(id);
             resp.sessions_inserted += 1;
         } else {
             resp.sessions_skipped += 1;
@@ -362,6 +381,18 @@ pub async fn ingest(
         };
         session_pks.push(session_pk);
     }
+
+    // Classify before the messages move out of `batch` (they are classified as
+    // received, in full: never the clamped `search_text`).
+    let client_plan = client_policy.as_ref().map(|p| {
+        crate::client_ingest::plan(
+            &p.markers,
+            &batch.sessions,
+            &session_ids,
+            &batch.messages,
+            &session_pks,
+        )
+    });
 
     // Take ownership so the column vectors move the payload out of `batch`
     // instead of cloning it — `raw` alone can be most of an 8 MiB chunk.
@@ -811,6 +842,10 @@ pub async fn ingest(
         .bind(&touched)
         .execute(&mut *tx)
         .await?;
+    }
+
+    if let (Some(policy), Some(plan)) = (&client_policy, &client_plan) {
+        crate::client_ingest::apply(&mut tx, plan, &policy.generation, &new_sessions).await?;
     }
 
     tx.commit().await?;

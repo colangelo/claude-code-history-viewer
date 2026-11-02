@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod backfill;
 pub mod browse;
+pub mod client_ingest;
 pub mod client_policy;
 pub mod client_scope;
 pub mod client_state;

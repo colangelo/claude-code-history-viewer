@@ -37,7 +37,10 @@ impl Drop for TempDir {
 }
 
 fn hex(b: &[u8]) -> String {
-    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
 }
 
 /// A hub as `run()` builds it, with `[client_scope]` on a fresh routing file.
@@ -48,7 +51,10 @@ async fn spawn() -> Hub {
         .await
         .unwrap();
     hub::MIGRATOR.run(&pool).await.unwrap();
-    sqlx::query("DELETE FROM client_scope_policy").execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM client_scope_policy")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE client_scope_state SET generation = NULL, enforced_at = NULL")
         .execute(&pool)
         .await
@@ -109,7 +115,10 @@ fn text(t: &str) -> Value {
 }
 
 async fn ingest(hub: &Hub, machine: Uuid, token: &str, session: Value, messages: Vec<Value>) {
-    let project = session["project_path"].as_str().unwrap_or("/w/lab").to_string();
+    let project = session["project_path"]
+        .as_str()
+        .unwrap_or("/w/lab")
+        .to_string();
     let r = reqwest::Client::new()
         .post(format!("{}/v1/ingest", hub.base))
         .bearer_auth(token)
@@ -129,7 +138,7 @@ fn session(id: &str) -> Value {
     json!({"provider": "claude", "session_id": id, "project_path": "/w/lab"})
 }
 
-/// (client_class, client_gen is the current generation)
+/// (`client_class`, whether `client_gen` is the current generation)
 async fn state_of(hub: &Hub, machine: Uuid, session_id: &str) -> (Option<String>, bool) {
     let row: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT s.client_class, s.client_gen, st.generation
@@ -152,8 +161,18 @@ fn sid() -> String {
 async fn a_new_lab_session_is_scanned_and_lab() {
     let hub = spawn().await;
     let s = sid();
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("lab work"), json!({"cwd": "/w/lab"}))]).await;
-    assert_eq!(state_of(&hub, hub.machine, &s).await, (Some("none".into()), true));
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("lab work"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("none".into()), true)
+    );
 }
 
 #[tokio::test]
@@ -161,15 +180,46 @@ async fn a_marker_anywhere_served_makes_the_session_client() {
     let hub = spawn().await;
     let big = format!("{} then clientco.", "a".repeat(70_000));
     let cases: Vec<(&str, Value, Value, Value)> = vec![
-        ("tool_result", session(&sid()), json!([{"type": "tool_result", "content": [{"type": "text", "text": "x /w/clientco y"}]}]), json!({"cwd": "/w/lab"})),
-        ("text_marker", session(&sid()), text(&big), json!({"cwd": "/w/lab"})),
-        ("cwd", session(&sid()), text("hello"), json!({"cwd": "/w/clientco"})),
-        ("raw", session(&sid()), text("hello"), json!({"cwd": "/w/lab", "toolUseResult": {"stdout": "built clientco."}})),
+        (
+            "tool_result",
+            session(&sid()),
+            json!([{"type": "tool_result", "content": [{"type": "text", "text": "x /w/clientco y"}]}]),
+            json!({"cwd": "/w/lab"}),
+        ),
+        (
+            "text_marker",
+            session(&sid()),
+            text(&big),
+            json!({"cwd": "/w/lab"}),
+        ),
+        (
+            "cwd",
+            session(&sid()),
+            text("hello"),
+            json!({"cwd": "/w/clientco"}),
+        ),
+        (
+            "raw",
+            session(&sid()),
+            text("hello"),
+            json!({"cwd": "/w/lab", "toolUseResult": {"stdout": "built clientco."}}),
+        ),
     ];
     for (want, sess, content, raw) in cases {
         let s = sess["session_id"].as_str().unwrap().to_string();
-        ingest(&hub, hub.machine, &hub.token, sess, vec![msg(&s, content, raw)]).await;
-        assert_eq!(state_of(&hub, hub.machine, &s).await, (Some(want.into()), true), "{want}");
+        ingest(
+            &hub,
+            hub.machine,
+            &hub.token,
+            sess,
+            vec![msg(&s, content, raw)],
+        )
+        .await;
+        assert_eq!(
+            state_of(&hub, hub.machine, &s).await,
+            (Some(want.into()), true),
+            "{want}"
+        );
     }
 }
 
@@ -177,20 +227,47 @@ async fn a_marker_anywhere_served_makes_the_session_client() {
 async fn a_metadata_only_update_is_classified() {
     let hub = spawn().await;
     let s = sid();
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("lab"), json!({"cwd": "/w/lab"}))]).await;
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
     let mut row = session(&s);
     row["summary"] = json!("fixed the /w/clientco build");
     ingest(&hub, hub.machine, &hub.token, row, vec![]).await;
-    assert_eq!(state_of(&hub, hub.machine, &s).await, (Some("metadata".into()), true));
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("metadata".into()), true)
+    );
 }
 
 #[tokio::test]
 async fn the_class_only_rises() {
     let hub = spawn().await;
     let s = sid();
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("now clientco."), json!({"cwd": "/w/lab"}))]).await;
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("harmless"), json!({"cwd": "/w/lab"}))]).await;
-    assert_eq!(state_of(&hub, hub.machine, &s).await, (Some("text_marker".into()), true));
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("now clientco."), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("harmless"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("text_marker".into()), true)
+    );
 }
 
 /// A harmless batch never stamps a session the hub has not fully scanned
@@ -199,18 +276,46 @@ async fn the_class_only_rises() {
 async fn a_harmless_batch_does_not_stamp_an_unscanned_session() {
     let hub = spawn().await;
     let s = sid();
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("lab"), json!({"cwd": "/w/lab"}))]).await;
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
     // As if the session predates client scope, or an older generation scanned it.
     sqlx::query("UPDATE sessions SET client_class = NULL, client_gen = NULL WHERE session_id = $1")
         .bind(&s)
         .execute(&hub.pool)
         .await
         .unwrap();
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("harmless"), json!({"cwd": "/w/lab"}))]).await;
-    assert_eq!(state_of(&hub, hub.machine, &s).await, (None, false), "still unscanned");
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("harmless"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (None, false),
+        "still unscanned"
+    );
     // A marker still raises it, scanned or not.
-    ingest(&hub, hub.machine, &hub.token, session(&s), vec![msg(&s, text("clientco."), json!({"cwd": "/w/lab"}))]).await;
-    assert_eq!(state_of(&hub, hub.machine, &s).await, (Some("text_marker".into()), false));
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("clientco."), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("text_marker".into()), false)
+    );
 }
 
 /// R2-B: copies of one provider session id on two machines, and a subagent
@@ -221,11 +326,34 @@ async fn a_family_is_protected_together() {
     // Parent and subagent child on one machine: the child's path names the parent.
     let parent = Uuid::new_v4().to_string();
     let child = Uuid::new_v4().to_string();
-    ingest(&hub, hub.machine, &hub.token, session(&parent), vec![msg(&parent, text("lab"), json!({"cwd": "/w/lab"}))]).await;
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&parent),
+        vec![msg(&parent, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
     let mut child_row = session(&child);
-    child_row["file_path"] = json!(format!("/Users/ac/.claude/projects/-w-lab/{parent}/subagents/agent-1.jsonl"));
-    ingest(&hub, hub.machine, &hub.token, child_row, vec![msg(&child, text("built clientco."), json!({"cwd": "/w/lab"}))]).await;
-    assert_eq!(state_of(&hub, hub.machine, &child).await.0.as_deref(), Some("text_marker"));
+    child_row["file_path"] = json!(format!(
+        "/Users/ac/.claude/projects/-w-lab/{parent}/subagents/agent-1.jsonl"
+    ));
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        child_row,
+        vec![msg(
+            &child,
+            text("built clientco."),
+            json!({"cwd": "/w/lab"}),
+        )],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &child).await.0.as_deref(),
+        Some("text_marker")
+    );
     assert_eq!(
         state_of(&hub, hub.machine, &parent).await.0.as_deref(),
         Some("family:text_marker"),
@@ -236,6 +364,16 @@ async fn a_family_is_protected_together() {
     let child2 = Uuid::new_v4().to_string();
     let mut row2 = session(&child2);
     row2["file_path"] = json!(format!("/x/{parent}/subagents/agent-2.jsonl"));
-    ingest(&hub, hub.machine, &hub.token, row2, vec![msg(&child2, text("lab"), json!({"cwd": "/w/lab"}))]).await;
-    assert_eq!(state_of(&hub, hub.machine, &child2).await.0.as_deref(), Some("family:text_marker"));
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        row2,
+        vec![msg(&child2, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &child2).await.0.as_deref(),
+        Some("family:text_marker")
+    );
 }
