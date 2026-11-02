@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod backfill;
 pub mod browse;
+pub mod client_admin;
 pub mod client_ingest;
 pub mod client_policy;
 pub mod client_scope;
@@ -269,6 +270,90 @@ pub async fn run_findings_dry_run(opts: findings::DryRunOptions) -> anyhow::Resu
     let report = findings::dry_run(&pool, &opts).await?;
     print!("{}", report.render());
     Ok(())
+}
+
+/// The audited client-scope actions (`hub client-scope accept-routing | clear |
+/// unlatch | restamp-history`), as the pg1 writer. Each prints what it did,
+/// counts only.
+pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let cs = config
+        .client_scope
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no [client_scope] in the hub config"))?;
+    let read_only = matches!(action, ClientScopeAdmin::Restamp { approved_by: None });
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                if read_only {
+                    sqlx::query("SET default_transaction_read_only = on")
+                        .execute(&mut *conn)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    let policy = || match client_policy::load(cs) {
+        client_policy::Load::Ready(p) => Ok(p),
+        client_policy::Load::Unknown(why) => {
+            Err(anyhow::anyhow!("client scope policy unknown: {why}"))
+        }
+    };
+    match action {
+        ClientScopeAdmin::AcceptRouting { approved_by } => {
+            let p = policy()?;
+            client_admin::accept_routing(&pool, &p, &approved_by).await?;
+            println!("accepted the routing generation ({} markers); the hub adopts it at its next refresh", p.marker_hashes.len());
+        }
+        ClientScopeAdmin::Clear {
+            session,
+            reason,
+            approved_by,
+        } => {
+            client_admin::clear(&pool, session, &reason, &approved_by).await?;
+            println!("cleared session {session}; it is lab only after a sweep stamps it");
+        }
+        ClientScopeAdmin::Unlatch {
+            reason,
+            approved_by,
+        } => {
+            client_admin::unlatch(&pool, &reason, &approved_by).await?;
+            println!("enforcement latch lifted; a config with enforce = false now observes");
+        }
+        ClientScopeAdmin::Restamp { approved_by } => {
+            let p = policy()?;
+            let r = client_admin::restamp_history(&pool, &p, approved_by.as_deref()).await?;
+            println!(
+                "restamp-history{}: checked {}, restampable {}, entry text hit {}, session not lab {}, session term hit {}",
+                if approved_by.is_some() { "" } else { " (dry run, nothing written)" },
+                r.checked, r.restampable, r.entry_text_hit, r.session_not_lab, r.session_term_hit
+            );
+        }
+    }
+    Ok(())
+}
+
+/// One audited client-scope action, as parsed by the CLI.
+pub enum ClientScopeAdmin {
+    AcceptRouting {
+        approved_by: String,
+    },
+    Clear {
+        session: i64,
+        reason: String,
+        approved_by: String,
+    },
+    Unlatch {
+        reason: String,
+        approved_by: String,
+    },
+    Restamp {
+        approved_by: Option<String>,
+    },
 }
 
 /// `hub client-scope sweep [--dry-run]`: classify every session not scanned

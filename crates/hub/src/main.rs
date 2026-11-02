@@ -28,6 +28,17 @@ USAGE:
                                          reported as acked_by_rule; refuses before writing on an
                                          empty selection, more than N findings, or a note the
                                          detector flags. FROM and TO are RFC 3339 times
+    hub client-scope accept-routing --approved-by WHO
+                                         accept the routing file's marker set as it is now,
+                                         removals included (a narrowing); audited
+    hub client-scope clear --session N --reason TEXT --approved-by WHO
+                                         clear one session's client class (a narrowing); audited
+    hub client-scope unlatch --reason TEXT --approved-by WHO
+                                         lift the enforcement latch (emergency); audited
+    hub client-scope restamp-history --dry-run | --approved-by WHO
+                                         make pre-routing journal entries lab again where their
+                                         text and sessions match nothing under the full router
+                                         (markers and terms); the write is audited
     hub client-scope sweep [--dry-run] [--batch N]
                                          classify every session not scanned under the routing
                                          generation the hub accepted; raises classes only and
@@ -149,6 +160,14 @@ fn ack_options(args: &[String]) -> hub::findings::AckOptions {
     }
 }
 
+/// `--approved-by WHO`, required by every audited client-scope action.
+fn approver(args: &[String]) -> String {
+    flag_values(args, "--approved-by")
+        .pop()
+        .filter(|w| !w.trim().is_empty())
+        .unwrap_or_else(|| usage_error("this client-scope action needs --approved-by WHO"))
+}
+
 /// `--flag N` / `--flag=N`, when present and parseable.
 fn flag_i64(args: &[String], flag: &str) -> Option<i64> {
     let mut it = args.iter();
@@ -221,6 +240,41 @@ async fn main() -> anyhow::Result<()> {
             )),
         },
         Some("client-scope") => match args.get(1).map(String::as_str) {
+            Some("accept-routing") => {
+                hub::run_client_scope_admin(hub::ClientScopeAdmin::AcceptRouting {
+                    approved_by: approver(&args[2..]),
+                })
+                .await
+            }
+            Some("clear") => {
+                hub::run_client_scope_admin(hub::ClientScopeAdmin::Clear {
+                    session: flag_i64(&args[2..], "--session")
+                        .unwrap_or_else(|| usage_error("client-scope clear needs --session N")),
+                    reason: flag_values(&args[2..], "--reason")
+                        .pop()
+                        .unwrap_or_else(|| usage_error("client-scope clear needs --reason TEXT")),
+                    approved_by: approver(&args[2..]),
+                })
+                .await
+            }
+            Some("unlatch") => {
+                hub::run_client_scope_admin(hub::ClientScopeAdmin::Unlatch {
+                    reason: flag_values(&args[2..], "--reason")
+                        .pop()
+                        .unwrap_or_else(|| usage_error("client-scope unlatch needs --reason TEXT")),
+                    approved_by: approver(&args[2..]),
+                })
+                .await
+            }
+            Some("restamp-history") => {
+                let dry = args[2..].iter().any(|a| a == "--dry-run");
+                let by = flag_values(&args[2..], "--approved-by").pop();
+                if dry == by.is_some() {
+                    usage_error("client-scope restamp-history needs exactly one of --dry-run or --approved-by WHO");
+                }
+                hub::run_client_scope_admin(hub::ClientScopeAdmin::Restamp { approved_by: by })
+                    .await
+            }
             Some("sweep") => {
                 let dry_run = args[2..].iter().any(|a| a == "--dry-run");
                 let batch = flag_i64(&args[2..], "--batch").unwrap_or(200);
