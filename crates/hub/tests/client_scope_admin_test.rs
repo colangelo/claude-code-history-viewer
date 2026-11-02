@@ -569,3 +569,46 @@ fn restamp_file_must_be_private_and_not_a_link() {
     std::os::unix::fs::symlink(&good, &link).unwrap();
     assert!(hub::client_admin::read_restamp_file(&link).is_err());
 }
+
+/// Security's E8 re-check: the hub's term check is `contains` on normalized
+/// text, so the terms are normalized at load too. A capitalized or
+/// percent-encoded term in the routing file still keeps an entry hidden.
+#[tokio::test]
+async fn restamp_terms_match_however_the_routing_file_writes_them() {
+    let pool = pool().await;
+    let text = "[protected]\nmodel = \"claude-x\"\npath_markers = [\"/clientco\"]\n\
+                content_terms = [\"Client%57ord Deal\"]\n";
+    let (p, _dir) = policy(text, 1);
+    assert_eq!(p.terms, vec!["clientword deal".to_string()]);
+    let g = p.generation.clone();
+    set_generation(&pool, &g).await;
+    let lab = session(&pool, "plain lab work", Some("none"), Some(&g)).await;
+    let started = chrono::Utc::now()
+        + chrono::Duration::seconds(hub::client_admin::RESTAMP_INGEST_MARGIN_SECS + 60);
+    let (id, project, at) = entry_with(
+        &pool,
+        &[lab],
+        "gpt-x",
+        "the CLIENTWORD%20deal closed",
+        None,
+        None,
+    )
+    .await;
+    let file = restamp_file(
+        &g,
+        hub::client_admin::RESTAMP_MIN_DISTILLER,
+        started,
+        &[(project, at, vec![lab])],
+    );
+    let r = restamp_from_file(
+        &pool,
+        &p,
+        &file,
+        None,
+        started + chrono::Duration::seconds(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.render(), "listed 1, restamped 0; skipped: entry_text 1");
+    assert_eq!(route_of(&pool, id).await, None);
+}
