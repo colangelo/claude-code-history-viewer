@@ -15,7 +15,15 @@ The injected copies, measured on pg1 2026-11-02 (hashes and lengths only):
 ### D1. Registered by hash, located at line starts
 
 An entry is `{sha256, bytes, head_sha256}`: the sha256 and length of the block, and the sha256 of its
-first 64 bytes. In a string, a candidate start is offset 0 or any offset just after `\n`. At a
+first 64 bytes. In a string, a candidate start is offset 0 or any offset just after ASCII whitespace
+(a word start).
+
+Each file version is registered in two forms, both printed by `instruction-entry`: as injected, and
+as `search_text` holds it. `search_text` (history-core `search_text`) joins the message's strings and
+collapses every whitespace run to one space, so there the block follows a space, not a newline. The
+first census (2026-11-02, infra-hlp) found the injected form alone lowered no `text_marker` session:
+`search_text` still marked all 11 Exa sessions, and its collapsed form of the global file is present
+verbatim in all 11. At a
 candidate, the classifier hashes the next 64 bytes; only when that matches a registered head does it
 hash the full length of each block with that head and compare. A match removes the span and the scan
 resumes at its end.

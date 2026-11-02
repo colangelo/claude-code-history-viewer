@@ -121,6 +121,12 @@ pub const HEAD_BYTES: usize = 64;
 /// would blind the classifier to that marker.
 pub const MIN_BLOCK_BYTES: usize = 256;
 
+/// A text as the `search_text` column holds it: whitespace runs collapsed to
+/// one space, ends trimmed (history-core `search_text`, the same std split).
+pub fn search_form(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// One registered instruction text, by hashes and length only (design D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstructionBlock {
@@ -177,7 +183,9 @@ impl InstructionBlocks {
     }
 
     /// The pieces of `s` outside every registered block that starts at the
-    /// string's start or right after a newline; `None` when there is none.
+    /// string's start or right after ASCII whitespace (a word start: the
+    /// injected file follows a blank line, its `search_text` form a space);
+    /// `None` when there is none.
     fn pieces<'s>(&self, s: &'s str) -> Option<Vec<&'s str>> {
         if self.is_empty() {
             return None;
@@ -190,11 +198,11 @@ impl InstructionBlocks {
                 pieces.push(&s[from..at]);
                 at += len;
                 from = at;
-                if bytes[at - 1] == b'\n' {
-                    continue; // the block ended a line: `at` starts the next one
+                if bytes[at - 1].is_ascii_whitespace() {
+                    continue; // the block ended a word: `at` starts the next one
                 }
             }
-            match bytes[at..].iter().position(|&c| c == b'\n') {
+            match bytes[at..].iter().position(u8::is_ascii_whitespace) {
                 Some(i) => at += i + 1,
                 None => break,
             }
@@ -817,14 +825,42 @@ mod tests {
         assert_eq!(one(&m, &Value::Null, &raw, None), Class::Raw);
     }
 
-    /// A block counts only where a line starts: the injected file always does.
+    /// A block counts only where a word starts: right after whitespace or at
+    /// the start. Glued to a word, it is scanned.
     #[test]
-    fn a_block_inside_a_line_is_scanned() {
+    fn a_block_glued_to_a_word_is_scanned() {
         let b = block_text();
         let m = registered(&[&b]);
-        let content = serde_json::json!([{"type": "text", "text": format!("quoted: {b}")}]);
+        let none = serde_json::json!({});
+        let glued = serde_json::json!([{"type": "text", "text": format!("quoted:{b}")}]);
+        assert_eq!(one(&m, &glued, &none, None), Class::TextMarker);
+        let spaced = serde_json::json!([{"type": "text", "text": format!("quoted: {b}")}]);
+        assert_eq!(one(&m, &spaced, &none, None), Class::None);
+    }
+
+    /// `search_text` holds the message with whitespace runs collapsed
+    /// (history-core `search_text`): its form of the block is registered too.
+    #[test]
+    fn the_search_text_form_is_subtracted_when_registered() {
+        let b = block_text();
+        let content = request_copy(&b);
+        let flat = search_form(content[0]["text"].as_str().unwrap());
+        assert!(!flat.contains('\n'));
+        let none = serde_json::json!({});
         assert_eq!(
-            one(&m, &content, &serde_json::json!({}), None),
+            one(&registered(&[&b]), &Value::Null, &none, Some(&flat)),
+            Class::TextMarker,
+            "the injected form alone does not cover search_text"
+        );
+        let both = registered(&[&b, &search_form(&b)]);
+        assert_eq!(one(&both, &content, &none, Some(&flat)), Class::None);
+        assert_eq!(
+            one(
+                &both,
+                &Value::Null,
+                &none,
+                Some(&format!("{flat} /clientco/x"))
+            ),
             Class::TextMarker
         );
     }

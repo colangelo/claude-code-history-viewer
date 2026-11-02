@@ -489,11 +489,12 @@ enforce      = false   # observe: classify and count, hide nothing
   ]
   ```
 
-  - *An entry:* `cchv-hub client-scope instruction-entry FILE` prints it for a file as Claude Code
-    injects it (trailing whitespace removed). Take each version from a source other than the
+  - *Entries:* `cchv-hub client-scope instruction-entry FILE` prints two per file: as Claude Code
+    injects it (trailing whitespace removed), and in its `search_text` form (whitespace collapsed).
+    Register both. Take each version from a source other than the
     archive (ac's dotfiles repo for the global file). A block under 256 bytes, or a malformed
     entry, makes the policy `unknown`.
-  - *What it does:* a span of a message string that starts at a line start and hashes to a block
+  - *What it does:* a span of a message string that starts at a word start and hashes to a block
     is removed; the rest of the string, and every other string, is still matched. Nothing is
     skipped by row or attachment type, so a client file injected next to the block still marks.
   - *Before registering:* `cchv-hub client-scope census --routing CANDIDATE --floor CANDIDATE_FLOOR

@@ -13,7 +13,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::client_scope::{
-    normalize, InstructionBlock, InstructionBlocks, Markers, MIN_BLOCK_BYTES,
+    normalize, search_form, InstructionBlock, InstructionBlocks, Markers, MIN_BLOCK_BYTES,
 };
 use crate::config::ClientScopeConfig;
 
@@ -61,16 +61,25 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// The routing-file entry for an instructions file as Claude Code injects it:
-/// trailing whitespace removed (measured against the archive, 2026-11-02).
-pub fn instruction_entry(file_text: &str) -> String {
-    let b = InstructionBlock::of(file_text.trim_end());
-    format!(
-        "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\" }}",
-        hex(&b.sha256),
-        b.bytes,
-        hex(&b.head_sha256)
-    )
+/// The routing-file entries for an instructions file: the text as Claude Code
+/// injects it (trailing whitespace removed, measured against the archive
+/// 2026-11-02), and its `search_text` form (whitespace runs collapsed).
+pub fn instruction_entries(file_text: &str) -> Vec<String> {
+    let injected = file_text.trim_end();
+    let mut out: Vec<String> = [injected.to_string(), search_form(injected)]
+        .iter()
+        .map(|t| {
+            let b = InstructionBlock::of(t);
+            format!(
+                "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\" }}",
+                hex(&b.sha256),
+                b.bytes,
+                hex(&b.head_sha256)
+            )
+        })
+        .collect();
+    out.dedup();
+    out
 }
 
 fn unhex32(s: &str) -> Option<[u8; 32]> {
@@ -424,7 +433,7 @@ content_terms = ["clientword"]
     }
 
     fn block_entry(text: &str) -> String {
-        instruction_entry(text)
+        instruction_entries(text).join(", ")
     }
 
     fn with_blocks(entries: &str) -> String {
@@ -442,16 +451,25 @@ content_terms = ["clientword"]
         let Load::Ready(p) = load_paths(&r, &f) else {
             panic!("expected ready");
         };
-        assert_eq!(p.instruction_hashes.len(), 1);
+        assert_eq!(
+            p.instruction_hashes.len(),
+            2,
+            "the injected form and the search_text form"
+        );
         assert!(
             !p.markers.hits_message_text(&text),
             "the block is subtracted"
         );
         assert!(p.markers.hits_message_text(&format!("{text}/clientco")));
+        assert!(
+            !p.markers
+                .hits_message_text(&format!("q {}", search_form(&text))),
+            "the search_text form is subtracted"
+        );
         assert_eq!(
             p.accepted_set().len(),
-            4,
-            "3 markers and 1 block in the accepted set"
+            5,
+            "3 markers and 2 blocks in the accepted set"
         );
         // No key: no blocks, as before.
         let (r, f) = fs.write(GOOD, None);

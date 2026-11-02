@@ -21,8 +21,8 @@ block, and scan everything else.
 - The routing file's `[protected]` table can list `instruction_blocks`: each entry is the sha256 and
   byte length of one exact text (one version of an instructions file as Claude Code injects it), and
   the sha256 of its first 64 bytes.
-- The classifier removes from a message string every span that starts at a line start and whose bytes
-  hash to a registered block. It matches markers in what is left, piece by piece. Nothing is skipped by
+- The classifier removes from a message string every span that starts at a word start and whose bytes
+  hash to a registered block. Each version is registered as injected and in its `search_text` form. It matches markers in what is left, piece by piece. Nothing is skipped by
   row type or block type.
 - A block shorter than 256 bytes, or a malformed entry, makes the policy unknown (every session
   client), like any other invalid routing file.

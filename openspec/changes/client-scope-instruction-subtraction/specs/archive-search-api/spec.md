@@ -5,7 +5,7 @@
 The routing file MAY register instruction blocks under `[protected].instruction_blocks`, each by the
 sha256 and byte length of the exact text and the sha256 of its first 64 bytes. Before matching path
 markers in a message string, the hub SHALL remove every span that starts at the string's start or
-right after a newline and whose bytes hash to a registered block. It SHALL match the markers in each
+right after ASCII whitespace and whose bytes hash to a registered block. It SHALL match the markers in each
 remaining piece. It SHALL NOT skip any row, attachment or block by its type.
 
 A registered block shorter than 256 bytes, or an entry that is not a table with a 64-hex `sha256`, a
@@ -30,6 +30,10 @@ registers a block not yet accepted SHALL be a narrowing: the policy stays unknow
 - **WHEN** an `instructions` attachment lists a registered block and a second file whose text holds a
   path marker
 - **THEN** the session is client
+
+#### Scenario: The search_text form is subtracted
+- **WHEN** a block's whitespace-collapsed form is registered and `search_text` holds it after a space
+- **THEN** it is removed there too, and a marker after it still marks
 
 #### Scenario: Registering a block needs acceptance
 - **WHEN** the routing file gains an instruction block the hub has not accepted

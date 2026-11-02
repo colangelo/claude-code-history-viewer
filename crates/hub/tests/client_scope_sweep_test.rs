@@ -422,7 +422,7 @@ fn candidate(e: &Env, block: &str) -> hub::client_policy::Policy {
         "content_terms = [\"clientword\"]",
         &format!(
             "content_terms = [\"clientword\"]\ninstruction_blocks = [{}]",
-            hub::client_policy::instruction_entry(block)
+            hub::client_policy::instruction_entries(block).join(", ")
         ),
     );
     std::fs::write(e.dir.join("c.toml"), &routing).unwrap();

@@ -48,8 +48,9 @@ USAGE:
                                          --rescan also reads sessions already stamped lab
                                          (run once after a release that changes the extractor)
     hub client-scope instruction-entry FILE
-                                         print the routing-file entry that registers FILE as
+                                         print the routing-file entries that register FILE as
                                          Claude Code injects it (trailing whitespace removed)
+                                         and in its search_text form (whitespace collapsed)
     hub client-scope census --routing FILE --floor FILE [--days N] [--ids]
                                          read-only: re-read the sessions stamped client under a
                                          candidate routing file with the same markers, and count
@@ -311,7 +312,9 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or_else(|| usage_error("client-scope instruction-entry needs FILE"));
                 match std::fs::read_to_string(file) {
                     Ok(text) => {
-                        println!("{}", hub::client_policy::instruction_entry(&text));
+                        for e in hub::client_policy::instruction_entries(&text) {
+                            println!("  {e},");
+                        }
                         Ok(())
                     }
                     Err(e) => Err(anyhow::anyhow!("cannot read {file}: {e}")),
