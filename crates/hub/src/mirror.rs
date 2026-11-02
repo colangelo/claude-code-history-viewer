@@ -164,8 +164,17 @@ impl Mirror {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = match Self::open_at(&path, cfg) {
+        let conn = match Self::open_waiting_for_lock(&path, cfg) {
             Ok(c) => c,
+            // Held by another process (#105): never rename it or create a
+            // replacement, which the holder would adopt and cold-build from.
+            Err(e) if is_lock_error(&e) => {
+                return Err(e.context(format!(
+                    "stats mirror {} is locked by another process after {} s; left untouched",
+                    path.display(),
+                    cfg.lock_wait_secs
+                )));
+            }
             Err(e) => {
                 let aside = aside_path(&path);
                 tracing::error!(
@@ -187,6 +196,30 @@ impl Mirror {
         };
         mirror.create_schema()?;
         Ok(mirror)
+    }
+
+    /// [`Mirror::open_at`], retried while another process holds the file's
+    /// lock, for at most `lock_wait_secs` (a swap's outgoing hub is usually
+    /// gone within a second).
+    fn open_waiting_for_lock(path: &Path, cfg: &MirrorConfig) -> anyhow::Result<Connection> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(cfg.lock_wait_secs);
+        let mut logged = false;
+        loop {
+            match Self::open_at(path, cfg) {
+                Err(e) if is_lock_error(&e) && Instant::now() < deadline => {
+                    if !logged {
+                        tracing::warn!(
+                            path = %path.display(),
+                            wait_secs = cfg.lock_wait_secs,
+                            "stats mirror: locked by another process; waiting for it to let go"
+                        );
+                        logged = true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                other => return other,
+            }
+        }
     }
 
     fn open_at(path: &Path, cfg: &MirrorConfig) -> anyhow::Result<Connection> {
@@ -1014,6 +1047,14 @@ where
         }
     }
     outcome
+}
+
+/// DuckDB's refusal to open a file another process holds ("Could not set lock
+/// on file ... Conflicting lock is held in ... (PID n)"): a busy file, not a
+/// broken one (#105).
+fn is_lock_error(e: &anyhow::Error) -> bool {
+    let text = format!("{e:#}");
+    text.contains("Could not set lock on file") || text.contains("Conflicting lock is held")
 }
 
 /// Progress percentage for the cold-build log, guarding the empty-archive case.

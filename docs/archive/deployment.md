@@ -318,6 +318,18 @@ cause a multi-minute `503 warming`. The live hub notices the swap on its next
 refresher tick (default 300 s) and reopens; no restart is needed, and none
 should be issued mid-rebuild.
 
+**One process per mirror file (#105).** DuckDB locks the mirror file. A second
+hub on the same file (a canary or test hub without its own `[stats_mirror]
+path`, or a swap's new hub started while the old one is still exiting) waits up
+to `lock_wait_secs` (default 30) for the lock, then runs WITHOUT a mirror
+(`/v1/stats/*` answers 503, log: "locked by another process … left untouched")
+and leaves the file alone. Before cchv-v0.41.1 it renamed the live file aside
+instead, and the live hub adopted an empty one and cold-built: on 2026-11-02 that
+cost about 33 min of 503 and left 30 aside files (28 GB). So: give every extra
+hub its own mirror path, and in a swap wait for the old hub's pid to exit after
+`bootout` before `bootstrap`. A hub that started without its mirror needs a
+restart once the other process is gone.
+
 The rebuild is also the recovery path for any other Postgres-side `UPDATE` of a
 mirrored column, and for a mirror suspected of being wrong for any reason: it is
 derived state, so rebuilding it can never lose data.

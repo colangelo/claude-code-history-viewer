@@ -142,6 +142,12 @@ pub struct MirrorConfig {
     /// finish and `/v1/stats/*` would answer 503 permanently.
     #[serde(default = "default_cold_build_timeout_secs")]
     pub cold_build_timeout_secs: u64,
+    /// How long opening the mirror waits while ANOTHER process holds its lock
+    /// (a swap's outgoing hub, a stray second hub) before giving up WITHOUT
+    /// touching the file (#105). A held file is not unreadable: moving it
+    /// aside made the live hub adopt an empty one and cold-build.
+    #[serde(default = "default_lock_wait_secs")]
+    pub lock_wait_secs: u64,
 }
 
 impl Default for MirrorConfig {
@@ -155,8 +161,13 @@ impl Default for MirrorConfig {
             stale_after_secs: default_stale_after_secs(),
             refresh_timeout_secs: default_refresh_timeout_secs(),
             cold_build_timeout_secs: default_cold_build_timeout_secs(),
+            lock_wait_secs: default_lock_wait_secs(),
         }
     }
+}
+
+fn default_lock_wait_secs() -> u64 {
+    30
 }
 
 fn default_refresh_secs() -> u64 {
