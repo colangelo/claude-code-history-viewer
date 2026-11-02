@@ -41,6 +41,9 @@ pub struct AppState {
     /// Credential rules in redact mode (`[redaction] redact`). Empty means
     /// every rule only flags (Gitea #34).
     pub redact_rules: Arc<Vec<crate::redact::Rule>>,
+    /// Client scope (`[client_scope]`). `None` = off: nothing is classified
+    /// and every reader reads as before.
+    pub client_scope: Option<Arc<crate::client_state::ClientScope>>,
 }
 
 impl AppState {
@@ -59,6 +62,7 @@ impl AppState {
             embed_nudge: Arc::new(Notify::new()),
             mirror: None,
             redact_rules: Arc::new(Vec::new()),
+            client_scope: None,
         }
     }
 
@@ -75,7 +79,15 @@ impl AppState {
         )
         .with_ingest_only_tokens(config.ingest_only_tokens())
         .with_read_only_tokens(config.read_only_tokens())
-        .with_redact_rules(config.redaction.rules()?))
+        .with_redact_rules(config.redaction.rules()?)
+        .with_client_scope(config.client_scope.clone()))
+    }
+
+    /// Turn client scope on with this config (builder-style, same reason).
+    /// Call [`crate::client_state::ClientScope::refresh`] before serving.
+    pub fn with_client_scope(mut self, cfg: Option<crate::config::ClientScopeConfig>) -> Self {
+        self.client_scope = cfg.map(|c| Arc::new(crate::client_state::ClientScope::new(c)));
+        self
     }
 
     /// Limit these tokens to `/v1/ingest` (builder-style, same reason).

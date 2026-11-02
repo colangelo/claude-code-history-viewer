@@ -9,6 +9,7 @@ pub mod backfill;
 pub mod browse;
 pub mod client_policy;
 pub mod client_scope;
+pub mod client_state;
 pub mod config;
 pub mod db_watchdog;
 pub mod embed;
@@ -375,6 +376,28 @@ pub async fn run() -> anyhow::Result<()> {
         redact = ?state.redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
         "credential detection: every rule flags; listed rules also redact"
     );
+    // Client scope: load the policy before serving, then re-validate it every
+    // 60 s (ingest also re-validates before each batch). A failure to read the
+    // database here is fatal: the hub would not know its latch.
+    if let Some(scope) = state.client_scope.clone() {
+        scope.refresh(&state.pool).await?;
+        tracing::info!(
+            enforcing = scope.enforcing(),
+            ready = scope.snapshot().generation().is_some(),
+            "client scope configured"
+        );
+        let pool = state.pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if let Err(e) = scope.refresh(&pool).await {
+                    tracing::error!(error = %e, "client scope refresh failed; keeping the last state");
+                }
+            }
+        });
+    }
     if let Some(dir) = &config.embed_model_dir {
         tracing::info!(dir = %dir.display(), "embed model configured (lazy load)");
         state = state.with_embedder(std::sync::Arc::new(embed::CandleEmbedder::new(dir.clone())));

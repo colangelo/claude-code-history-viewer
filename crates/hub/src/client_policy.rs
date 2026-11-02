@@ -33,10 +33,13 @@ pub enum Load {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     Sha256::digest(bytes)
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// Read and check the routing file and its floor record.
@@ -79,7 +82,7 @@ pub fn load_paths(routing_file: &Path, floor_file: &Path) -> Load {
     if sect
         .get("model")
         .and_then(toml::Value::as_str)
-        .is_none_or(|m| m.trim().is_empty())
+        .map_or(true, |m| m.trim().is_empty())
     {
         return unknown("[protected].model missing".into());
     }

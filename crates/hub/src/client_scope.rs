@@ -160,6 +160,7 @@ pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 /// What one message's parts hit, before the order picks one class.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // one flag per class, read in the order of `Class`
 struct Hits {
     cwd: bool,
     tool_input: bool,
