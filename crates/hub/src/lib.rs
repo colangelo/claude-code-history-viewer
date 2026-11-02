@@ -27,6 +27,7 @@ pub mod identity_filter;
 pub mod ingest;
 pub mod journal;
 pub mod journal_threads;
+pub mod login;
 pub mod mirror;
 pub mod pagination;
 pub mod pair;
@@ -121,6 +122,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/healthz/findings", get(findings::healthz))
         .route("/v1/healthz/client-scope", get(client_state::healthz))
         .route("/v1/ingest", post(ingest::ingest))
+        .route("/v1/login", post(login::login).delete(login::logout))
         .route("/v1/findings/summary", get(findings::summary))
         .route("/v1/search", get(search::search))
         .route("/v1/journal/pending", get(journal::pending))

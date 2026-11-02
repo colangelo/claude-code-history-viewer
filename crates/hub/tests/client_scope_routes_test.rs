@@ -516,3 +516,82 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
         }
     }
 }
+
+/// R2-H: a browser trades its token once for an HttpOnly cookie of the same
+/// scope; a forged or signed-out cookie reads nothing.
+#[tokio::test]
+async fn login_cookie_carries_the_tokens_scope_and_nothing_more() {
+    let w = world().await;
+    let login = |token: String| {
+        let base = w.base.clone();
+        async move {
+            let r = reqwest::Client::new()
+                .post(format!("{base}/v1/login"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status().as_u16(), 204);
+            let set = r
+                .headers()
+                .get("set-cookie")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            assert!(
+                set.contains("HttpOnly")
+                    && set.contains("Secure")
+                    && set.contains("SameSite=Strict")
+            );
+            set.split(';').next().unwrap().to_string()
+        }
+    };
+    let with_cookie = |cookie: String, url: String| {
+        let base = w.base.clone();
+        async move {
+            let r = reqwest::Client::new()
+                .get(format!("{base}{url}"))
+                .header("Cookie", cookie)
+                .send()
+                .await
+                .unwrap();
+            (r.status().as_u16(), r.text().await.unwrap())
+        }
+    };
+    let client_msgs = format!("/v1/sessions/{}/messages", w.client_id);
+
+    let client_cookie = login(w.client_reader.clone()).await;
+    let (status, body) = with_cookie(client_cookie.clone(), client_msgs.clone()).await;
+    assert_eq!(status, 200);
+    assert!(
+        body.contains(&w.client_canary),
+        "a client token's cookie reads client sessions"
+    );
+
+    let lab_cookie = login(w.lab_reader.clone()).await;
+    let (status, _) = with_cookie(lab_cookie, client_msgs.clone()).await;
+    assert_eq!(status, 404, "a lab token's cookie stays lab");
+
+    let (status, _) = with_cookie("cchv_session=forged".into(), client_msgs.clone()).await;
+    assert_eq!(status, 401);
+
+    let r = reqwest::Client::new()
+        .delete(format!("{}/v1/login", w.base))
+        .header("Cookie", client_cookie.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let (status, _) = with_cookie(client_cookie, client_msgs).await;
+    assert_eq!(status, 401, "signed out");
+
+    // Only a bearer token logs in: not the Tailscale identity.
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/login", w.base))
+        .header("Tailscale-User-Login", LOGIN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+}

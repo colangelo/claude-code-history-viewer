@@ -67,7 +67,15 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 /// Resolve the bearer token from request headers to its machine id, or 401
 /// when the token is unknown or its kind does not allow `scope`.
 fn resolve_machine(parts: &Parts, state: &AppState, scope: Scope) -> Result<Uuid, HubError> {
-    let token = bearer(&parts.headers).ok_or(HubError::Unauthorized)?;
+    resolve_machine_headers(&parts.headers, state, scope)
+}
+
+fn resolve_machine_headers(
+    headers: &HeaderMap,
+    state: &AppState,
+    scope: Scope,
+) -> Result<Uuid, HubError> {
+    let token = bearer(headers).ok_or(HubError::Unauthorized)?;
     let refused = match scope {
         Scope::Ingest => state.read_only.contains(token),
         Scope::Write => state.ingest_only.contains(token) || state.read_only.contains(token),
@@ -91,10 +99,11 @@ pub async fn refuse_read_only_writes(
     request: Request,
     next: Next,
 ) -> Response {
+    // `/v1/login` exchanges a read token for a read-only cookie: not a write.
     let reads = matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
-    );
+    ) || request.uri().path() == "/v1/login";
     let read_only = |t: &str| state.read_only.contains(t) || client_reader(&state, t).is_some();
     if !reads && bearer(request.headers()).is_some_and(read_only) {
         return HubError::Unauthorized.into_response();
@@ -201,15 +210,33 @@ fn client_reader(state: &AppState, token: &str) -> Option<Uuid> {
 
 /// Resolve the caller's read principal: a valid read-capable bearer token first,
 /// then a trusted Tailscale identity header, else 401.
-fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticated, HubError> {
-    if let Ok(machine) = resolve_machine(parts, state, Scope::Read) {
+/// A read principal from the bearer token alone (no cookie, no Tailscale
+/// identity): what `/v1/login` accepts.
+pub fn bearer_read_principal(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<Authenticated, HubError> {
+    if let Ok(machine) = resolve_machine_headers(headers, state, Scope::Read) {
         return Ok(Authenticated(format!("machine:{machine}"), ReadScope::Lab));
     }
-    if let Some(machine) = bearer(&parts.headers).and_then(|t| client_reader(state, t)) {
+    if let Some(machine) = bearer(headers).and_then(|t| client_reader(state, t)) {
         return Ok(Authenticated(
             format!("client-reader:{machine}"),
             ReadScope::Client,
         ));
+    }
+    Err(HubError::Unauthorized)
+}
+
+fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticated, HubError> {
+    if let Ok(found) = bearer_read_principal(&parts.headers, state) {
+        return Ok(found);
+    }
+    // A browser session from `/v1/login` (R2-H).
+    if let Some(found) =
+        crate::login::cookie_value(&parts.headers).and_then(|v| state.logins.lookup(v))
+    {
+        return Ok(found);
     }
     // The Tailscale identity is lab read, always: the hub cannot tell ac's
     // browser from any other process of his login (design D5).

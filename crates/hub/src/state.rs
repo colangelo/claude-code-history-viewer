@@ -46,6 +46,8 @@ pub struct AppState {
     pub client_scope: Option<Arc<crate::client_state::ClientScope>>,
     /// sha256(token) → machine id of the client-read principals (R2-H).
     pub client_readers: Arc<HashMap<String, Uuid>>,
+    /// Browser sessions minted by `/v1/login` (R2-H).
+    pub logins: crate::login::Logins,
 }
 
 impl AppState {
@@ -66,6 +68,7 @@ impl AppState {
             redact_rules: Arc::new(Vec::new()),
             client_scope: None,
             client_readers: Arc::new(HashMap::new()),
+            logins: crate::login::Logins::default(),
         }
     }
 
