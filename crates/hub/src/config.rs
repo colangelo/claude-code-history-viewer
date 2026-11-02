@@ -43,6 +43,25 @@ pub struct HubConfig {
     /// the value before it is stored. Empty (the default) = flag-only.
     #[serde(default)]
     pub redaction: RedactionConfig,
+    /// Client scope (openspec `hub-client-read-scope`). Absent = off: no session is
+    /// classified and every reader reads as today.
+    #[serde(default)]
+    pub client_scope: Option<ClientScopeConfig>,
+}
+
+/// `[client_scope]` in `hub.toml`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientScopeConfig {
+    /// The distiller's routing file (`[protected].path_markers`), outside the repo.
+    pub routing_file: PathBuf,
+    /// Its floor record (sha256 and minimum counts per marker kind).
+    pub floor_file: PathBuf,
+    /// Hide client sessions from lab readers. `false` = observe: classify and
+    /// count, hide nothing. Once the hub has enforced, `false` no longer turns
+    /// enforcement off (the latch, design R2-I).
+    #[serde(default)]
+    pub enforce: bool,
 }
 
 /// `[redaction]` in `hub.toml`.
@@ -269,6 +288,8 @@ impl HubConfig {
             },
             // Env-configured hubs are flag-only; redact mode needs `hub.toml`.
             redaction: RedactionConfig::default(),
+            // Client scope needs `hub.toml`.
+            client_scope: None,
         })
     }
 

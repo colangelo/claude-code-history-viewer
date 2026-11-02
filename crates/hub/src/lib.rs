@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod backfill;
 pub mod browse;
+pub mod client_policy;
 pub mod client_scope;
 pub mod config;
 pub mod db_watchdog;
