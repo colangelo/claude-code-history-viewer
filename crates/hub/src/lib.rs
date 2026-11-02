@@ -35,6 +35,7 @@ pub mod state;
 pub mod stats;
 pub mod stats_api;
 pub mod tz_spans;
+pub mod visibility;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE};

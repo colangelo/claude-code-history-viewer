@@ -47,6 +47,20 @@ pub struct HubConfig {
     /// classified and every reader reads as today.
     #[serde(default)]
     pub client_scope: Option<ClientScopeConfig>,
+    /// Client-read principals (design D5, R2-H): read-only, and they read client
+    /// sessions. The config holds only the sha256 of each token, never the token.
+    #[serde(default)]
+    pub client_readers: Vec<ClientReaderEntry>,
+}
+
+/// One `[[client_readers]]` entry.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientReaderEntry {
+    /// Lowercase hex sha256 of the bearer token.
+    pub token_sha256: String,
+    pub machine_id: Uuid,
+    pub label: String,
 }
 
 /// `[client_scope]` in `hub.toml`.
@@ -290,6 +304,7 @@ impl HubConfig {
             redaction: RedactionConfig::default(),
             // Client scope needs `hub.toml`.
             client_scope: None,
+            client_readers: Vec::new(),
         })
     }
 
@@ -330,7 +345,27 @@ impl HubConfig {
                     r.machine_id,
                     format!("reader `{}`", r.label),
                 )
+            }))
+            .chain(self.client_readers.iter().map(|r| {
+                (
+                    r.token_sha256.as_str(),
+                    r.machine_id,
+                    format!("client reader `{}`", r.label),
+                )
             }));
+        for r in &self.client_readers {
+            if r.token_sha256.len() != 64
+                || !r
+                    .token_sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                anyhow::bail!(
+                    "client reader `{}`: token_sha256 must be 64 lowercase hex characters",
+                    r.label
+                );
+            }
+        }
         let mut by_token: HashMap<&str, String> = HashMap::new();
         let mut by_machine: HashMap<Uuid, String> = HashMap::new();
         for (token, machine_id, who) in entries {
@@ -342,6 +377,14 @@ impl HubConfig {
             }
         }
         Ok(())
+    }
+
+    /// Client-read token hashes → machine id.
+    pub fn client_reader_map(&self) -> HashMap<String, Uuid> {
+        self.client_readers
+            .iter()
+            .map(|r| (r.token_sha256.clone(), r.machine_id))
+            .collect()
     }
 
     /// Build the token → machine-id lookup used by the auth layer.

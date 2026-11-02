@@ -44,6 +44,8 @@ pub struct AppState {
     /// Client scope (`[client_scope]`). `None` = off: nothing is classified
     /// and every reader reads as before.
     pub client_scope: Option<Arc<crate::client_state::ClientScope>>,
+    /// sha256(token) → machine id of the client-read principals (R2-H).
+    pub client_readers: Arc<HashMap<String, Uuid>>,
 }
 
 impl AppState {
@@ -63,6 +65,7 @@ impl AppState {
             mirror: None,
             redact_rules: Arc::new(Vec::new()),
             client_scope: None,
+            client_readers: Arc::new(HashMap::new()),
         }
     }
 
@@ -80,7 +83,14 @@ impl AppState {
         .with_ingest_only_tokens(config.ingest_only_tokens())
         .with_read_only_tokens(config.read_only_tokens())
         .with_redact_rules(config.redaction.rules()?)
-        .with_client_scope(config.client_scope.clone()))
+        .with_client_scope(config.client_scope.clone())
+        .with_client_readers(config.client_reader_map()))
+    }
+
+    /// Client-read principals by token hash (builder-style, same reason).
+    pub fn with_client_readers(mut self, readers: HashMap<String, Uuid>) -> Self {
+        self.client_readers = Arc::new(readers);
+        self
     }
 
     /// Turn client scope on with this config (builder-style, same reason).

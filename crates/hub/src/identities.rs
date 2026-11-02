@@ -255,7 +255,7 @@ pub struct CreateAlias {
 
 /// Create (or re-point — a path belongs to at most one identity) an alias.
 pub async fn create_alias(
-    Authenticated(principal): Authenticated,
+    Authenticated(principal, _): Authenticated,
     State(state): State<AppState>,
     Json(payload): Json<CreateAlias>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), HubError> {

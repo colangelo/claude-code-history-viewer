@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 use crate::error::HubError;
 use crate::state::AppState;
+pub use crate::visibility::{ReadScope, Visibility};
 
 /// What the calling extractor is about to allow.
 ///
@@ -94,7 +95,8 @@ pub async fn refuse_read_only_writes(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
     );
-    if !reads && bearer(request.headers()).is_some_and(|t| state.read_only.contains(t)) {
+    let read_only = |t: &str| state.read_only.contains(t) || client_reader(&state, t).is_some();
+    if !reads && bearer(request.headers()).is_some_and(read_only) {
         return HubError::Unauthorized.into_response();
     }
     next.run(request).await
@@ -170,16 +172,49 @@ fn trusted_tailscale_identity(parts: &Parts, state: &AppState) -> Option<String>
 ///
 /// Carries the caller's principal (`machine:<uuid>` / `tailscale:<login>`)
 /// for audit trails on the few read-principal writes (identity aliases).
-pub struct Authenticated(pub String);
+pub struct Authenticated(pub String, pub ReadScope);
+
+impl Authenticated {
+    /// What this caller may see, under the hub's client-scope state now.
+    pub fn visibility(&self, state: &AppState) -> Visibility {
+        Visibility::of(state, self.1)
+    }
+}
+
+/// The machine id of a client-read principal, by the sha256 of its token
+/// (the hub keeps only hashes of client-read tokens, design R2-H).
+fn client_reader(state: &AppState, token: &str) -> Option<Uuid> {
+    if state.client_readers.is_empty() {
+        return None;
+    }
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    let hash =
+        Sha256::digest(token.as_bytes())
+            .iter()
+            .fold(String::with_capacity(64), |mut s, b| {
+                let _ = write!(s, "{b:02x}");
+                s
+            });
+    state.client_readers.get(&hash).copied()
+}
 
 /// Resolve the caller's read principal: a valid read-capable bearer token first,
 /// then a trusted Tailscale identity header, else 401.
 fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticated, HubError> {
     if let Ok(machine) = resolve_machine(parts, state, Scope::Read) {
-        return Ok(Authenticated(format!("machine:{machine}")));
+        return Ok(Authenticated(format!("machine:{machine}"), ReadScope::Lab));
     }
+    if let Some(machine) = bearer(&parts.headers).and_then(|t| client_reader(state, t)) {
+        return Ok(Authenticated(
+            format!("client-reader:{machine}"),
+            ReadScope::Client,
+        ));
+    }
+    // The Tailscale identity is lab read, always: the hub cannot tell ac's
+    // browser from any other process of his login (design D5).
     if let Some(login) = trusted_tailscale_identity(parts, state) {
-        return Ok(Authenticated(format!("tailscale:{login}")));
+        return Ok(Authenticated(format!("tailscale:{login}"), ReadScope::Lab));
     }
     Err(HubError::Unauthorized)
 }
