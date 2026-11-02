@@ -112,6 +112,15 @@ bao_kv_list() {
 # entry in [[<table>]] (tokens or readers), with `<flag> = true` when a flag is
 # given. Callers validate every value first: these values land in TOML.
 scoped_token_block() {
+  if [ "$1" = client_readers ]; then
+    # Client-read principals (openspec hub-client-read-scope, R2-H): the
+    # rendered file carries only the token's sha256. printf is a builtin, so
+    # the token never reaches an argv.
+    local hash
+    hash="$(printf '%s' "$2" | shasum -a 256 | cut -d' ' -f1)"
+    printf '\n[[%s]]\ntoken_sha256 = "%s"\nmachine_id = "%s"\nlabel = "%s"\n' "$1" "$hash" "$3" "$4"
+    return 0
+  fi
   printf '\n[[%s]]\ntoken = "%s"\nmachine_id = "%s"\nlabel = "%s"\n' "$1" "$2" "$3" "$4"
   [ -n "${5:-}" ] && printf '%s = true\n' "$5"
   return 0
@@ -162,7 +171,7 @@ render_scoped_tokens() {
 # included. Prints counts and machine ids only, never a token.
 duplicate_values() {
   local dup_tokens dup_ids
-  dup_tokens="$(printf '%s\n' "$1" | sed -n 's/^token = "\(.*\)"$/\1/p' | sort | uniq -d | wc -l | tr -d ' ')"
+  dup_tokens="$(printf '%s\n' "$1" | sed -n 's/^token\(_sha256\)\{0,1\} = "\(.*\)"$/\2/p' | sort | uniq -d | wc -l | tr -d ' ')"
   dup_ids="$(printf '%s\n' "$1" | sed -n 's/^machine_id = "\(.*\)"$/\1/p' | sort | uniq -d | tr '\n' ' ')"
   [ "$dup_tokens" = 0 ] && [ -z "$dup_ids" ] && return 1
   log "FATAL: duplicate entries in the rendered config: $dup_tokens repeated token string(s); repeated machine ids: ${dup_ids:-none}"
@@ -267,6 +276,10 @@ render() {
       # no write of any kind), from kv/agents/cchv-readers/<reader>. Each
       # reader's client reads only its own entry.
       render_scoped_tokens agents/cchv-readers readers "" reader
+      # Client readers (the distiller, ac's browser, the blog's client
+      # audience): read-only, and they read client sessions. From
+      # kv/agents/cchv-client-readers/<name>; rendered as sha256 only.
+      render_scoped_tokens agents/cchv-client-readers client_readers "" client-reader
       ;;
   esac
 
