@@ -230,14 +230,23 @@ pub async fn audit(
 /// `GET /v1/healthz/client-scope` (design R2-I): the effective mode of the
 /// running process, never a marker or a path. 503 when the policy is unknown,
 /// or when the latch overrides a config that says observe (a stale render).
+///
+/// `caller_scope` is the scope of the credential the request carried (`lab`,
+/// `client`, or null when it carried none): the restamp's classify step refuses
+/// to read as a lab caller under enforce (design R3-E8).
 pub async fn healthz(
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    caller: Option<crate::auth::Authenticated>,
 ) -> Result<(axum::http::StatusCode, axum::Json<serde_json::Value>), crate::error::HubError> {
     use axum::http::StatusCode;
+    let caller_scope = caller.map(|c| match c.1 {
+        crate::visibility::ReadScope::Lab => "lab",
+        crate::visibility::ReadScope::Client => "client",
+    });
     let Some(scope) = &state.client_scope else {
         return Ok((
             StatusCode::OK,
-            axum::Json(serde_json::json!({"mode": "off"})),
+            axum::Json(serde_json::json!({"mode": "off", "caller_scope": caller_scope})),
         ));
     };
     let snap = scope.snapshot();
@@ -274,6 +283,7 @@ pub async fn healthz(
             "generation": snap.generation().map(|g| g[..12].to_string()),
             "sessions_unscanned": unscanned,
             "sessions_client": client,
+            "caller_scope": caller_scope,
         })),
     ))
 }
