@@ -846,6 +846,13 @@ pub async fn ingest(
 
     if let (Some(policy), Some(plan)) = (&client_policy, &client_plan) {
         crate::client_ingest::apply(&mut tx, plan, &policy.generation, &new_sessions).await?;
+    } else if state.client_scope.is_some() {
+        // No usable policy (security O2): nothing can be classified, so every
+        // session this batch touched loses its coverage. Otherwise a marked
+        // message would sit in a session still stamped lab, and when the same
+        // routing file came back the sweep would skip it.
+        let touched: Vec<i64> = session_ids.values().copied().collect();
+        crate::client_ingest::invalidate(&mut tx, &touched).await?;
     }
 
     tx.commit().await?;

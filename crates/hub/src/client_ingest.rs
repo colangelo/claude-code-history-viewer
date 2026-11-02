@@ -184,6 +184,25 @@ pub async fn apply(
     Ok(())
 }
 
+/// Drop the coverage stamp of these sessions: they are unscanned until a
+/// sweep reads them whole under a usable policy. The class is kept (it only
+/// rises).
+pub async fn invalidate(
+    tx: &mut Transaction<'_, Postgres>,
+    ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE sessions SET client_gen = NULL, client_rev = client_rev + 1 WHERE id = ANY($1)",
+    )
+    .bind(ids)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

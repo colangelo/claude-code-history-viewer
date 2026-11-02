@@ -521,3 +521,83 @@ async fn a_latched_hub_without_the_section_shows_lab_readers_nothing() {
         .await
         .unwrap();
 }
+
+/// Security O2: a batch ingested while the policy is unusable cannot be
+/// classified, so the session it touches loses its coverage. When the same
+/// routing file returns, the session stays unscanned until a sweep reads it.
+#[tokio::test]
+async fn ingest_during_a_policy_outage_leaves_the_session_unscanned() {
+    let hub = spawn().await;
+    let s = sid();
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("none".into()), true)
+    );
+
+    let routing = hub.dir.0.join("routing.toml");
+    let away = hub.dir.0.join("routing.away");
+    std::fs::rename(&routing, &away).unwrap();
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("now clientco."), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    std::fs::rename(&away, &routing).unwrap();
+    // The next batch reloads the identical file: same generation as before.
+    let other = sid();
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&other),
+        vec![msg(&other, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &other).await,
+        (Some("none".into()), true),
+        "policy back"
+    );
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("none".into()), false),
+        "unscanned: not lab until a sweep reads it"
+    );
+
+    let hub::client_policy::Load::Ready(policy) =
+        hub::client_policy::load_paths(&routing, &hub.dir.0.join("floor.json"))
+    else {
+        panic!("policy")
+    };
+    let pk: i64 = sqlx::query_scalar("SELECT id FROM sessions WHERE session_id = $1")
+        .bind(&s)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap();
+    hub::client_sweep::sweep(
+        &hub.pool,
+        &policy,
+        &hub::client_sweep::SweepOptions {
+            dry_run: false,
+            batch: 10,
+            only_sessions: Some(vec![pk]),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("text_marker".into()), true)
+    );
+}
