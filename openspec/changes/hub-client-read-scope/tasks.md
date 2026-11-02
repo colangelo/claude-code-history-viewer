@@ -119,7 +119,13 @@ before `enforce = true`:
       - one transaction with the full evidence (removed hashes, generation);
       - the restamp CLI refuses an empty `--approved-by`.
 - [ ] E8 restamp-history uses the distiller's FULL router (decoding, project path, model, version
-      guard), before it is ever run.
+      guard), before it is ever run. Design: `design.md` § R3-E8, with security's check first.
+      - [ ] hub: `caller_scope` in `/v1/healthz/client-scope` for an authenticated request;
+      - [ ] distiller: `--restamp-history --out FILE` (refusals, the five checks in order, a
+            session cache, a 0600 `O_EXCL|O_NOFOLLOW` file, counts on stdout), with tests;
+      - [ ] hub: `restamp-history --from FILE` (refusals for the whole file, a per-entry re-check
+            and write in one transaction with its audit), the `LIKE` path deleted, with tests;
+      - [ ] mutation evidence for every check.
 - [ ] E9 Credentials:
       - no AppRole secret or bao token in `curl` argv (use stdin or a file descriptor);
       - the client cache is created `O_EXCL|O_NOFOLLOW` at mode 0600.

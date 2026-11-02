@@ -285,6 +285,124 @@ or resolved it is client.
   per session, the sessions the distiller protected by a term only that the hub would leave lab.
   the client manager decides again with that number.
 
+### R3-E8. `restamp-history` on the distiller's router (code review E8, P2)
+
+**The finding.** The hub's `restamp-history` trusts the stored flags. It checks the terms as
+`lower(content::text) LIKE`, with no decoding. It inspects no `project_path` and no `model`, and it
+has no version guard. It must be fixed before it is ever run. It has never run.
+
+**What it would act on** (pg1, 2026-11-02 07:5xZ). 1062 entries have no current route stamp:
+
+| model | generated | entries | session refs | entry days |
+|---|---|---|---|---|
+| GPT | before routing (10-21 10:16:59Z) | 826 | 4006 | 07-04 .. 10-20 |
+| Haiku | before routing | 37 | 255 | 07-04 .. 07-14 |
+| GPT | after routing | 65 | 169 | 10-18 .. 10-30 |
+| Claude | after routing | 134 | 476 | 10-20 .. 10-30 |
+
+Every entry since v0.34.0 carries a stamp, and all 75 of them are `protected`. So under enforce a
+lab reader sees no journal entries at all today.
+
+**The decision: two steps, one router.**
+- **The distiller classifies.** It runs the router the distiller already uses for live traffic.
+- **The hub applies.** It re-checks what may have changed since, then writes.
+- The hub makes no client decision of its own for a restamp. Its `LIKE` term check is deleted.
+
+**Step 1, classify:** `cchv-distill --restamp-history --out FILE`.
+- **What it touches:** hub GETs only, no model call, no write anywhere but `FILE`.
+- **It refuses to start when:**
+  - the routing file fails its floor record, or loads as protect-all;
+  - the hub's generation differs from `sha256(routing || floor)` computed locally;
+  - the caller is not a client reader. A lab principal under enforce would see a partial
+    history. The hub adds `caller_scope` to `/v1/healthz/client-scope` for an authenticated
+    request, so the distiller can check this.
+- **The candidates:** every `/v1/journal/entries` row with `status = entry` and no route, paged to
+  the end.
+- **The checks, in order.** The first hit decides, and the entry stays hidden:
+  1. **Model:** generated after routing went live by any Claude model → `was_protected`. The
+     router of its day protected it. Before routing, the model says nothing, so the entry goes on
+     to the next check.
+  2. **Entry text:** the headline, the summary, each topic and each open question, normalized, with
+     `marker_in` or `term_in` → `entry_text`.
+  3. **Project path:** `marker_in(normalize(project_path))` → `path`.
+  4. **Sessions:** `route_group`'s whole-session pass. It reads every message of every session,
+     all days, sidechains included. It applies `flatten` and `normalize` (URL-decoding,
+     backslashes, case) and checks `cwd`, tool values, text markers and content terms. An
+     unknown shape, a failed or partial read, or a limit gives `unreadable`. A missing `cwd` gives
+     `cwd_unavailable`. A session shared by many entries is read once per run.
+  5. **Otherwise:** restampable.
+- **The output file:**
+  - It is created `O_EXCL|O_NOFOLLOW` at mode 0600.
+  - **Header:** the distiller version, the full generation, `started_at`, `finished_at` and the
+    hub version.
+  - **One record per restampable entry:** `entry_date`, `project_path`, `generated_at` and
+    `session_ids`.
+  - The rest are counts per class only, so the file holds no path of a hidden entry.
+- **Standard output:** counts only.
+
+**Step 2, apply:** `cchv-hub client-scope restamp-history --from FILE --dry-run | --approved-by WHO`.
+It is run by the pg1 writer.
+- **It refuses the whole file when:**
+  - the header's generation is not `client_scope_state.generation`;
+  - the distiller version is below the version that ships this step;
+  - `finished_at` is older than 24 h;
+  - `--approved-by` is empty (E7);
+  - `--from` is missing (the old in-hub path is gone).
+- **Per listed entry**, in one transaction with its audit row (E7), it locks the row by
+  `(entry_date, project_path)` and requires all of:
+  - the entry still has `status = entry` and no current stamp;
+  - `generated_at` equals the file's, so the entry was not regenerated since;
+  - `session_ids` equal the file's;
+  - every session has `client_class = 'none'` and `client_gen` equal to the current generation.
+    This is an extra condition, never the only check;
+  - no session has a message created after `started_at`, and no `flags_changed_at` after it. The
+    router's read must cover the session as it is now.
+- **When all of them hold,** it sets `route = 'general-restamped'` and `route_at = generated_at`. The
+  audit row records the entry, the generation, `approved_by`, the file's sha256 and the distiller
+  version.
+- **When any of them fails,** the entry is skipped and a counter per reason goes up.
+- **The dry run** makes the same checks in a read-only transaction and prints the counts.
+
+**Order of runs.**
+1. The classify run.
+2. Its counts go to security and the client manager.
+3. The apply dry run.
+4. ac's row, with the client manager's word.
+5. The apply.
+
+None of it runs before this design is built, tested and reviewed.
+
+**Tests.**
+- **Distiller** (`scripts/test_cchv_distill.py`, fake hub). Each class stops an entry:
+  - an entry written by Claude after routing;
+  - a marker in the entry text;
+  - a term in the entry text;
+  - a URL-encoded marker in message content;
+  - a backslash path;
+  - a marker in `cwd`;
+  - a marker in a tool input;
+  - an unknown block;
+  - a missing `cwd`.
+
+  These refuse to start: a generation mismatch, a lab caller under enforce, protect-all routing,
+  and an output file that already exists. The output has mode 0600 and holds paths of
+  restampable entries only.
+- **Hub** (`client_scope_admin_test.rs`). These refuse or skip:
+  - a generation mismatch, an old distiller, a stale file, an empty `--approved-by`, and no
+    `--from` (whole file);
+  - a regenerated entry, a session that grew after `started_at`, and a session flagged client
+    (that entry only).
+
+  An audit failure rolls back the route write, and the dry run writes nothing.
+- **Mutation evidence:** drop any single check, and a test fails.
+
+**For security's check.**
+- **E8-a:** Claude entries written after routing stay hidden, and the 37 Claude entries from before
+  routing (July) go through the router. Or should every Claude entry stay hidden?
+- **E8-b:** is 24 h the right age limit for the file?
+- **E8-c:** the file holds lab project paths, and only for restampable entries, at 0600 on m4m.
+  Acceptable?
+
 ## Context
 
 ### What reads the hub today (security's list, bell e790f4ca)
