@@ -68,6 +68,8 @@ struct World {
     /// `/v1/stats/daily` over the last 31 days, which hold the world's
     /// two-days-ago rows.
     daily_url: String,
+    /// `/v1/stats/tool-calls` for the one tool both sessions called, two days ago.
+    tool_calls_url: String,
     _dir: std::path::PathBuf,
 }
 
@@ -222,6 +224,24 @@ async fn world_with(enforce: bool) -> World {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 200, "journal entry create");
     }
+    // One tool call in each session's newest (two-days-ago) message.
+    let tool = format!("mcp__exa__rt_{}", &r[..8]);
+    for sid in [lab_id, client_id] {
+        sqlx::query(
+            "INSERT INTO message_tool_uses (message_ref, session_id, seq, tool_name)
+             SELECT id, session_id, 0, $2 FROM messages
+              WHERE session_id = $1 ORDER BY \"timestamp\" DESC LIMIT 1",
+        )
+        .bind(sid)
+        .bind(&tool)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let since = (chrono::Utc::now() - chrono::Duration::days(30))
+        .format("%Y-%m-%dT%H%%3A%M%%3A%SZ")
+        .to_string();
+    let tool_calls_url = format!("/v1/stats/tool-calls?prefix=rt_{}&since={since}", &r[..8]);
     mirror.refresh(&pool).await.unwrap();
     let today = chrono::Utc::now().date_naive();
     let daily_url = format!(
@@ -244,6 +264,7 @@ async fn world_with(enforce: bool) -> World {
         mirror,
         mirror_cfg,
         daily_url,
+        tool_calls_url,
         _dir: dir,
     }
 }
@@ -346,6 +367,11 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
             "/v1/stats/daily",
             w.daily_url.clone(),
             Some("\"space\":\"ac\"".into()),
+        ),
+        (
+            "/v1/stats/tool-calls",
+            w.tool_calls_url.clone(),
+            Some("\"count\":1".into()),
         ),
     ]
 }
@@ -519,6 +545,7 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
         format!("/v1/sessions/{}/messages", w.client_sid),
         "/v1/stats/global".to_string(),
         w.daily_url.clone(),
+        w.tool_calls_url.clone(),
     ];
     assert_lab_view_unchanged_by_deleting_client_rows(&w, &urls).await;
 }
@@ -528,13 +555,15 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
 #[tokio::test]
 async fn stats_read_routes_are_lab_only_in_observe_too() {
     let w = world_with(false).await;
-    let urls = vec![w.daily_url.clone()];
+    let urls = vec![w.daily_url.clone(), w.tool_calls_url.clone()];
     // The control: in observe a client reader's view does contain the client
     // session, so the lab view below is filtered, not merely empty.
-    let lab = get(&w, &w.daily_url, "lab").await;
-    let client = get(&w, &w.daily_url, "client").await;
-    assert_eq!((lab.0, client.0), (200, 200), "{lab:?} {client:?}");
-    assert_ne!(lab.1, client.1, "observe: the client reader sees more");
+    for url in &urls {
+        let lab = get(&w, url, "lab").await;
+        let client = get(&w, url, "client").await;
+        assert_eq!((lab.0, client.0), (200, 200), "{lab:?} {client:?}");
+        assert_ne!(lab.1, client.1, "observe: the client reader sees more on {url}");
+    }
     assert_lab_view_unchanged_by_deleting_client_rows(&w, &urls).await;
 }
 
@@ -823,3 +852,4 @@ async fn client_scope_health_names_the_callers_scope() {
         ]
     );
 }
+

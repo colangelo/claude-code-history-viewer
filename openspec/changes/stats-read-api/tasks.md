@@ -15,8 +15,8 @@
 
 ## 3. `GET /v1/stats/tool-calls`
 
-- [ ] 3.1 Red: counts per tool and host since T. A last-segment match. The 31-day bound is refused past it. Lab sessions only (D3 a). The R2-E differential test is extended to this route.
-- [ ] 3.2 The route, plus an index migration on `messages ("timestamp")` if the plan needs it (EXPLAIN on a pg1 copy first). Route-walk case.
+- [x] 3.1 Red: counts per tool and host since T. A last-segment match. The 31-day bound is refused past it. Lab sessions only (D3 a). The R2-E differential test is extended to this route.
+- [x] 3.2 The route, plus an index migration on `messages ("timestamp")` if the plan needs it (EXPLAIN on a pg1 copy first). Route-walk case.
 
 ## 3b. Stats-only reader tokens (D3 condition 3)
 

@@ -1,5 +1,6 @@
 //! Statistics endpoints: `GET /v1/stats/global`, `/v1/stats/projects/{key}`,
-//! `/v1/stats/sessions/{id}`, and the stats-read route `/v1/stats/daily`.
+//! `/v1/stats/sessions/{id}`, and the stats-read routes `/v1/stats/daily` and
+//! `/v1/stats/tool-calls` (the latter reads Postgres: the mirror has no host).
 //!
 //! Thin HTTP layer over [`crate::stats`] — parameter parsing, identity
 //! expansion and not-found handling. All the aggregation (and the dedup rule
@@ -358,4 +359,134 @@ pub async fn daily(
     let (headers, rows) =
         with_mirror(&state, move |c| Ok(stats::daily_by_project(c, &w)?)).await?;
     Ok((headers, Json(DailyAnswer { from, to, tz, rows })))
+}
+
+/// `/v1/stats/tool-calls` parameters, these two and no others (D3 condition 2).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolCallsParams {
+    /// A tool name, or the last `__` segment of one (`web_search_exa`).
+    pub prefix: Option<String>,
+    /// RFC 3339; at most [`MAX_WINDOW_DAYS`] back.
+    pub since: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ToolCount {
+    pub tool: String,
+    /// The MCP server of an `mcp__<server>__<tool>` name, else null.
+    pub server: Option<String>,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HostCount {
+    pub host: String,
+    pub count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ToolCallsAnswer {
+    pub since: DateTime<Utc>,
+    /// When any machine last ingested (`machines.last_seen`).
+    pub last_ingest: Option<DateTime<Utc>>,
+    pub by_tool: Vec<ToolCount>,
+    pub by_host: Vec<HostCount>,
+}
+
+fn mcp_server(tool: &str) -> Option<String> {
+    let mut parts = tool.split("__");
+    (parts.next() == Some("mcp"))
+        .then(|| parts.next())
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Tool calls since T, per tool and per host (stats-read-api D4): quota-tap's
+/// Exa counter. Lab sessions only for a lab reader, in observe as under
+/// enforce (D3 (a)). Read from Postgres, where the archive is authoritative,
+/// so no mirror freshness check applies.
+pub async fn tool_calls(
+    auth: Authenticated,
+    State(state): State<AppState>,
+    Query(params): Query<ToolCallsParams>,
+) -> Result<Json<ToolCallsAnswer>, HubError> {
+    let prefix = params
+        .prefix
+        .filter(|p| {
+            !p.is_empty()
+                && p.len() <= 200
+                && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+        })
+        .ok_or_else(|| HubError::BadRequest("prefix: a tool name (A-Z a-z 0-9 _ . -)".into()))?;
+    let since = params
+        .since
+        .as_deref()
+        .ok_or_else(|| HubError::BadRequest("since is required (RFC 3339)".into()))
+        .and_then(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .map(|t| t.with_timezone(&Utc))
+                .map_err(|_| HubError::BadRequest(format!("since is not RFC 3339: {s}")))
+        })?;
+    if since < Utc::now() - chrono::Duration::days(MAX_WINDOW_DAYS) {
+        return Err(HubError::BadRequest(format!(
+            "since is more than {MAX_WINDOW_DAYS} days back"
+        )));
+    }
+    let visible = Visibility::stats_read(&state, auth.1).session_ok("s");
+    let sql = format!(
+        r#"WITH hits AS (
+               SELECT u.tool_name, m.machine_id
+                 FROM messages m
+                 JOIN message_tool_uses u ON u.message_ref = m.id
+                 JOIN sessions s ON s.id = m.session_id
+                WHERE m."timestamp" >= $1
+                  AND (u.tool_name = $2 OR regexp_replace(u.tool_name, '^.*__', '') = $2)
+                  AND {visible})
+           SELECT 'tool', tool_name, count(*) FROM hits GROUP BY 2
+           UNION ALL
+           SELECT 'host', coalesce(mc.hostname, h.machine_id::text), count(*)
+             FROM hits h LEFT JOIN machines mc ON mc.machine_id = h.machine_id
+            GROUP BY 2"#
+    );
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(&sql)
+        .bind(since)
+        .bind(&prefix)
+        .fetch_all(&state.pool)
+        .await?;
+    let last_ingest: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT max(last_seen) FROM machines")
+            .fetch_one(&state.pool)
+            .await?;
+    let (mut by_tool, mut by_host) = (Vec::new(), Vec::new());
+    for (kind, key, count) in rows {
+        if kind == "tool" {
+            by_tool.push(ToolCount {
+                server: mcp_server(&key),
+                tool: key,
+                count,
+            });
+        } else {
+            by_host.push(HostCount { host: key, count });
+        }
+    }
+    by_tool.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tool.cmp(&b.tool)));
+    by_host.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.host.cmp(&b.host)));
+    Ok(Json(ToolCallsAnswer {
+        since,
+        last_ingest,
+        by_tool,
+        by_host,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mcp_server_of_a_name() {
+        assert_eq!(super::mcp_server("mcp__exa__web_search_exa").as_deref(), Some("exa"));
+        assert_eq!(super::mcp_server("web_search_exa"), None);
+        assert_eq!(super::mcp_server("mcp__"), None);
+    }
 }
