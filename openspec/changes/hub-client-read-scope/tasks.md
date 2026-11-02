@@ -1,6 +1,7 @@
 # Tasks: hub client-read scope (Revision 2)
 
-Nothing below starts until security's re-check of design Revision 2 is OK.
+Security accepted design Revision 2 (7cd5a699) on 2026-11-02, with additions to R2-F; the build
+may start.
 
 L1 (`/v1/healthz/journal` paths) is already fixed in v0.38.1.
 
@@ -42,9 +43,13 @@ L1 (`/v1/healthz/journal` paths) is already fixed in v0.38.1.
 - [ ] 2.4 Sweep: `client-scope sweep [--dry-run]`. Writes are monotonic and conditional on the
       revision; it survives a crash and a resume, and two sweeps at once are safe. Its counts are
       per session, by class, plus term-only sessions the hub would leave lab (this one needs the
-      terms read-only, counted, never used for the flag).
+      terms read-only, counted, never used for the flag), plus sessions hidden only by family from a
+      term-protected entry.
 - [ ] 2.5 Audited CLIs: `accept-routing`, `clear`, `unlatch`, `restamp-history [--dry-run]`.
-      Each refuses to run without `--approved-by`.
+      Each refuses to run without `--approved-by`. `restamp-history` classifies the entry's own text
+      (summary, threads, every served field) and its sessions with the full router, terms included,
+      and restamps only when both match nothing. Its write waits for ac's row and manager-aruba's
+      word.
 
 ## 3. Scopes and routes (D5, D6, R2-E, R2-F, R2-G)
 

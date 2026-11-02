@@ -171,6 +171,16 @@ re-proven.
 - **Only an entry where nothing matches** gets `route = 'general-restamped'` plus a current
   `route_at`. Anything else stays hidden.
 - **Before it writes:** the dry run's counts go to security and manager-aruba first.
+- **Security's additions (re-check of Revision 2, 2026-11-02):**
+  - **The entry's own text** is classified too: summary, threads and every served field. An entry
+    is restamped only when both its own text and its sessions match nothing.
+  - **The write** happens only after ac approves it on one row, with manager-aruba's word. It makes
+    material lab that is hidden today (Q4).
+- **Stage 2 also counts** sessions hidden *only* by family from a term-protected entry (R2-B). Most
+  sessions since 11-01 are in that set: fail-closed, and expected.
+
+Security ACCEPTED Revision 2 (7cd5a699) on 2026-11-02, with the additions above. The build may
+start, and security reviews the code before observe mode.
 
 **Threads (open questions).** A thread's protection is computed over its full source history, before
 the display window and the filters apply. The thread is client if any entry that opened, continued
