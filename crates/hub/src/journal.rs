@@ -582,6 +582,18 @@ pub async fn create(
         payload.open_questions.clone()
     };
 
+    // Client scope (R2-B): the sessions of a protected entry are one family.
+    // Before the entry is written, so a failure leaves them client, never lab.
+    if state.client_scope.is_some() && payload.route.as_deref() == Some("protected") {
+        sqlx::query(
+            "UPDATE sessions SET client_class = 'family:protected-entry', client_rev = client_rev + 1
+             WHERE id = ANY($1) AND (client_class IS NULL OR client_class = 'none')",
+        )
+        .bind(&payload.session_ids)
+        .execute(&state.pool)
+        .await?;
+    }
+
     // `generated_snapshot` anchors dirty-detection: sessions whose `ingest_xid`
     // is not visible in it are dirty. The distiller echoes the `as_of` snapshot
     // it received from the pending endpoint (taken BEFORE it read any

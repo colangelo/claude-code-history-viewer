@@ -378,3 +378,50 @@ async fn a_family_is_protected_together() {
         Some("family:text_marker")
     );
 }
+
+/// R2-B: a journal entry the distiller wrote on the protected route makes its
+/// sessions one client family, at the POST.
+#[tokio::test]
+async fn a_protected_entry_makes_its_sessions_client() {
+    let hub = spawn().await;
+    let s = sid();
+    let project = format!("/w/pe-{s}");
+    let mut row = session(&s);
+    row["project_path"] = json!(project);
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        row,
+        vec![msg(
+            &s,
+            text("lab, but term-protected"),
+            json!({"cwd": "/w/lab"}),
+        )],
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await.0.as_deref(),
+        Some("none")
+    );
+    let pk: i64 = sqlx::query_scalar("SELECT id FROM sessions WHERE session_id = $1")
+        .bind(&s)
+        .fetch_one(&hub.pool)
+        .await
+        .unwrap();
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/journal/entries", hub.base))
+        .bearer_auth(&hub.token)
+        .json(&json!({"entry_date": "2026-10-30", "project_path": project, "status": "entry",
+                      "headline": "h", "summary": "s", "topics": ["a", "b", "c"], "open_questions": [],
+                      "session_ids": [pk], "model": "claude-x", "route": "protected"}))
+        .send()
+        .await
+        .unwrap();
+    let status = r.status().as_u16();
+    assert_eq!(status, 200, "{}", r.text().await.unwrap());
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await.0.as_deref(),
+        Some("family:protected-entry")
+    );
+}
