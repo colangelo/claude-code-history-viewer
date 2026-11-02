@@ -28,6 +28,6 @@
       sweep and clear test; census on a read-only connection.
 - [x] 4.2b Single-reader re-check by security: U1-U7 MET (ac/security 007c6ef); V1 source allow-list
       and V2 `git cat-file` done.
-- [ ] 4.3 Census on pg1 with a candidate routing file (the six global-file versions); counts and ids to
-      manager-aruba.
+- [x] 4.3 Census on pg1 with a candidate routing file (the six global-file versions, two forms each);
+      counts and ids to manager-aruba (census 3: 761 client-stamped in 31 days, 187 to lab).
 - [ ] 4.4 Release; manager-aruba registers the blocks; infra runs `accept-routing` right after.
