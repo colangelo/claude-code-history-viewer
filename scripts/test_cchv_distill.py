@@ -1312,3 +1312,15 @@ def test_offered_thread_wording_has_the_tag_stripped(monkeypatch) -> None:
     hub, _ = _thread_hub(monkeypatch, body)
     got = hub.open_threads("/w/p", "2026-10-10", general=False)
     assert [t["question"] for t in got] == ["why is X slow", "plain"]
+
+
+# --- client scope (openspec hub-client-read-scope, D2): the hub ports `normalize` and
+# `marker_in`; this shared fixture is run by both suites, so a drift fails one of them.
+
+CLIENT_SCOPE = json.loads((Path(__file__).parent / "fixtures/client-scope-cases.json").read_text())
+
+
+@pytest.mark.parametrize("case", CLIENT_SCOPE["match_cases"], ids=lambda c: c["name"])
+def test_client_scope_match_cases_are_the_distillers_behaviour(case) -> None:
+    r = d.Routing(model="m", path_markers=CLIENT_SCOPE["markers"])
+    assert r.marker_in(d.normalize(case["text"])) is case["match"]
