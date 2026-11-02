@@ -1,7 +1,7 @@
 ## 0. Before building
 
 - [x] 0.1 Security reviews this change and rules on D3: (a), with conditions 1-4 (design D3).
-- [ ] 0.2 monitoring confirms the column definitions (D2) for its panel labels.
+- [x] 0.2 monitoring confirms the column definitions (D2) for its panel labels (bd5b8fad, 18:55Z; no column change; ac_messages not drawn).
 
 ## 1. Mirror
 
