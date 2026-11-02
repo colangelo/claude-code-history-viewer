@@ -200,3 +200,54 @@ pub async fn audit(
     .await?;
     Ok(())
 }
+
+/// `GET /v1/healthz/client-scope` (design R2-I): the effective mode of the
+/// running process, never a marker or a path. 503 when the policy is unknown,
+/// or when the latch overrides a config that says observe (a stale render).
+pub async fn healthz(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+) -> Result<(axum::http::StatusCode, axum::Json<serde_json::Value>), crate::error::HubError> {
+    use axum::http::StatusCode;
+    let Some(scope) = &state.client_scope else {
+        return Ok((
+            StatusCode::OK,
+            axum::Json(serde_json::json!({"mode": "off"})),
+        ));
+    };
+    let snap = scope.snapshot();
+    let (unscanned, client): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE client_gen IS DISTINCT FROM $1 OR client_class IS NULL),
+                count(*) FILTER (WHERE client_class IS NOT NULL AND client_class <> 'none')
+         FROM sessions",
+    )
+    .bind(snap.generation())
+    .fetch_one(&state.pool)
+    .await?;
+    let mode = if scope.enforcing() {
+        "enforce"
+    } else {
+        "observe"
+    };
+    let (policy, reason) = match &snap {
+        Snapshot::Ready(_) => ("ready", None),
+        Snapshot::Unknown(r) => ("unknown", Some(r.clone())),
+    };
+    let stale_render = scope.latch_overrides_config();
+    let status = if policy == "unknown" || stale_render {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        axum::Json(serde_json::json!({
+            "mode": mode,
+            "latched_over_config": stale_render,
+            "policy": policy,
+            "reason": reason,
+            "generation": snap.generation().map(|g| g[..12].to_string()),
+            "sessions_unscanned": unscanned,
+            "sessions_client": client,
+        })),
+    ))
+}

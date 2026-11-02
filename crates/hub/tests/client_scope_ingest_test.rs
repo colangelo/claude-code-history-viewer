@@ -425,3 +425,38 @@ async fn a_protected_entry_makes_its_sessions_client() {
         Some("family:protected-entry")
     );
 }
+
+/// R2-I: once the hub has enforced, a config that says observe (a stale
+/// render from the launcher's cached fallback) does not turn enforcement off.
+#[tokio::test]
+async fn the_latch_outlives_an_observe_config() {
+    let hub = spawn().await; // observe mode, latch cleared
+    let scope_cfg = |enforce: bool| {
+        let dir = &hub._dir.0;
+        toml::from_str::<hub::HubConfig>(&format!(
+            "database_url = \"unused\"\n[client_scope]\nrouting_file = \"{}\"\nfloor_file = \"{}\"\nenforce = {enforce}\n",
+            dir.join("routing.toml").display(),
+            dir.join("floor.json").display()
+        ))
+        .unwrap()
+    };
+    let observe = hub::AppState::from_config(hub.pool.clone(), &scope_cfg(false)).unwrap();
+    let s = observe.client_scope.clone().unwrap();
+    s.refresh(&hub.pool).await.unwrap();
+    assert!(!s.enforcing(), "observe before any enforcing start");
+
+    let enforce = hub::AppState::from_config(hub.pool.clone(), &scope_cfg(true)).unwrap();
+    enforce
+        .client_scope
+        .clone()
+        .unwrap()
+        .refresh(&hub.pool)
+        .await
+        .unwrap();
+
+    let stale = hub::AppState::from_config(hub.pool.clone(), &scope_cfg(false)).unwrap();
+    let s = stale.client_scope.clone().unwrap();
+    s.refresh(&hub.pool).await.unwrap();
+    assert!(s.enforcing(), "the latch holds");
+    assert!(s.latch_overrides_config(), "and says so");
+}

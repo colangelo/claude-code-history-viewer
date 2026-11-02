@@ -233,6 +233,11 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
         ),
         ("/v1/healthz/stats", "/v1/healthz/stats".into(), None),
         ("/v1/healthz/findings", "/v1/healthz/findings".into(), None),
+        (
+            "/v1/healthz/client-scope",
+            "/v1/healthz/client-scope".into(),
+            Some("\"mode\":\"enforce\"".into()),
+        ),
         ("/v1/findings/summary", "/v1/findings/summary".into(), None),
         ("/v1/search", format!("/v1/search?q={c}"), None),
         (
