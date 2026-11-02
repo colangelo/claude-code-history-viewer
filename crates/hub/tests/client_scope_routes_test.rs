@@ -133,7 +133,9 @@ async fn world() -> World {
             .bearer_auth(&machine_token)
             .json(&json!({
                 "machine": {"machine_id": machine, "hostname": format!("rt-{}", &r[..8]), "os": "macos"},
-                "projects": [{"provider": "claude", "project_path": path, "name": canary}],
+                "projects": [{"provider": "claude", "project_path": path, "name": canary,
+                              "git_root_commit": hex(path.as_bytes())[..40].to_string(),
+                              "git_remote_url": format!("https://example.test/{}.git", &hex(path.as_bytes())[..12])}],
                 "sessions": [{"provider": "claude", "session_id": sid, "project_path": path, "summary": canary}],
                 "messages": [{"provider": "claude", "session_id": sid, "message_key": Uuid::new_v4().to_string(),
                               "seq": 0, "timestamp": "2026-10-30T12:00:00Z", "type": "user", "role": "user",
@@ -293,7 +295,7 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
             format!("/v1/stats/sessions/{}", w.client_id),
             None,
         ),
-        ("/v1/identities", "/v1/identities".into(), None),
+        ("/v1/identities", "/v1/identities".into(), lab_path()),
     ]
 }
 

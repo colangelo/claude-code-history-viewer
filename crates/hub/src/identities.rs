@@ -107,32 +107,57 @@ struct AliasRow {
 }
 
 pub async fn list(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<ListIdentityParams>,
 ) -> Result<Json<Vec<Identity>>, HubError> {
-    let member_rows = sqlx::query_as::<_, MemberRow>(
+    // A lab reader sees a member only while its project has a visible session,
+    // an alias or a worktree main path only while some project at that path
+    // has one (design R2-K).
+    let vis = auth.visibility(&state);
+    let ok = vis.session_ok("vs");
+    let path_seen = |expr: &str| {
+        if vis.sees_all() {
+            "true".to_string()
+        } else {
+            format!(
+                "EXISTS (SELECT 1 FROM projects vp JOIN sessions vs ON vs.project_id = vp.id
+                         WHERE vp.project_path = {expr} AND {ok})"
+            )
+        }
+    };
+    let member_seen = if vis.sees_all() {
+        "true".to_string()
+    } else {
+        format!("EXISTS (SELECT 1 FROM sessions vs WHERE vs.project_id = p.id AND {ok})")
+    };
+    let member_rows = sqlx::query_as::<_, MemberRow>(&format!(
         r"
         SELECT p.identity_key,
                p.project_path,
                bool_and(p.git_worktree)          AS worktree,
-               max(p.git_main_path)              AS main_path,
+               max(CASE WHEN {main_seen} THEN p.git_main_path END) AS main_path,
                array_agg(DISTINCT p.provider)    AS providers,
                array_agg(DISTINCT mac.hostname)  AS machines,
                max(p.last_modified)              AS last_active
         FROM projects p
         JOIN machines mac ON p.machine_id = mac.machine_id
         WHERE p.identity_key IS NOT NULL
+          AND {member_seen}
         GROUP BY p.identity_key, p.project_path
         ",
-    )
+        main_seen = path_seen("p.git_main_path"),
+    ))
     .fetch_all(&state.pool)
     .await?;
 
-    let alias_rows = sqlx::query_as::<_, AliasRow>(
-        "SELECT id, project_path, identity_key, created_by, created_at
-         FROM project_identity_aliases ORDER BY id",
-    )
+    let alias_rows = sqlx::query_as::<_, AliasRow>(&format!(
+        "SELECT a.id, a.project_path, a.identity_key, a.created_by, a.created_at
+         FROM project_identity_aliases a
+         WHERE {}
+         ORDER BY a.id",
+        path_seen("a.project_path")
+    ))
     .fetch_all(&state.pool)
     .await?;
 
@@ -193,16 +218,18 @@ pub async fn list(
         // rows for it (other provider, pre-identity archive) carry a NULL
         // key: it is already a member somewhere, and an alias for it would
         // be redundant at best, conflicting at worst.
-        let orphan_paths = sqlx::query_scalar::<_, String>(
+        let orphan_paths = sqlx::query_scalar::<_, String>(&format!(
             r"
-            SELECT DISTINCT project_path FROM projects
-            WHERE identity_key IS NULL
-              AND project_path NOT IN (SELECT project_path FROM project_identity_aliases)
-              AND project_path NOT IN (
+            SELECT DISTINCT o.project_path FROM projects o
+            WHERE o.identity_key IS NULL
+              AND o.project_path NOT IN (SELECT project_path FROM project_identity_aliases)
+              AND o.project_path NOT IN (
                   SELECT project_path FROM projects WHERE identity_key IS NOT NULL
               )
+              AND {}
             ",
-        )
+            path_seen("o.project_path")
+        ))
         .fetch_all(&state.pool)
         .await?;
 
