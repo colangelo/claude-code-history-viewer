@@ -811,6 +811,38 @@ def test_a_group_over_the_read_budget_protects(tmp_path, monkeypatch, cap) -> No
     assert hit == "unreadable"
 
 
+# R9 (security E8 review): only the block types the hub serves are read; any other
+# type is a shape the router does not know, so the group is unreadable.
+@pytest.mark.parametrize("block", [
+    {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+    {"type": "document", "source": {"type": "text", "data": "neutral"}},
+    {"type": "redacted_thinking", "data": "opaque"},
+    {"type": "tool_addition", "tools": ["Read"]},
+    {"type": "tool_removal", "tools": ["Read"]},
+    {"type": "fallback", "text": "neutral"},
+])
+def test_r9_a_known_block_type_routes_general(tmp_path, block) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(content=[block], cwd=None)]})
+    assert hit is None
+
+
+@pytest.mark.parametrize("block", [
+    {"type": "server_tool_use", "input": {"q": "neutral"}},
+    {"type": "Text", "text": "neutral"},
+    {"text": "no type at all"},
+    {"type": None, "text": "neutral"},
+])
+def test_r9_an_unknown_block_type_is_unreadable(tmp_path, block) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(content=[block], cwd=None)]})
+    assert hit == "unreadable"
+
+
+def test_r9_a_marker_in_a_known_other_block_still_protects(tmp_path) -> None:
+    block = {"type": "document", "source": {"type": "text", "data": "/w/_clientx/plan.md"}}
+    hit, _ = _route(tmp_path, {1: [_msg(content=[block], cwd=None)]})
+    assert hit is not None
+
+
 def test_a_malformed_group_does_not_stop_the_next(tmp_path) -> None:
     r = _routing(tmp_path, ROUTING_FULL_TOML)
     hub = RoutingHub({1: [_msg(content=[42, "stray"], cwd=None)], 2: [_msg(_text("neutral"), cwd=None)]})

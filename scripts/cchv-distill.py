@@ -660,6 +660,14 @@ def _string_values(value) -> list[str]:
     return []
 
 
+# The block types besides text/thinking/tool_use/tool_result that the hub serves
+# (pg1 block census, all providers, 2026-11-02, plus the API's document and
+# redacted_thinking). Anything else makes `flatten` report `unknown` (R9).
+OTHER_BLOCK_TYPES = frozenset({
+    "image", "document", "redacted_thinking", "tool_addition", "tool_removal", "fallback",
+})
+
+
 def flatten(content) -> Flat:
     f = Flat()
     if content is None:
@@ -690,9 +698,13 @@ def flatten(content) -> Flat:
             c = item.get("content")
             text = c if isinstance(c, str) else json.dumps(c, ensure_ascii=False)
             f.add(text or "", cap=500, head="[tool_result] ")
-        else:
+        elif t in OTHER_BLOCK_TYPES:
             # Not in the prompt, as before; routing still reads it.
             f.full.append(json.dumps(item, ensure_ascii=False))
+        else:
+            # R9: a block type the hub does not serve today is a shape the
+            # router cannot vouch for, so the message is unreadable.
+            f.unknown = True
     return f
 
 
