@@ -503,7 +503,7 @@
       "class": "unreadable"
     },
     {
-      "name": "unknown block type, lab strings",
+      "name": "unknown block type, lab strings (E1: unreadable)",
       "project_path": "/Users/ac/_sync/dev/labrepo",
       "session": {},
       "messages": [
@@ -519,7 +519,7 @@
           }
         }
       ],
-      "class": "none"
+      "class": "unreadable"
     },
     {
       "name": "second message matches",
@@ -550,6 +550,139 @@
         }
       ],
       "class": "text_marker"
+    },
+    {
+      "name": "block with no type (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "lab only"
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "unreadable"
+    },
+    {
+      "name": "known other block, lab strings",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "data": "AAAA"
+              }
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "none"
+    },
+    {
+      "name": "tool_use top-level key holds the marker (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Bash",
+              "input": {},
+              "/w/clientco/x": true
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "text_marker"
+    },
+    {
+      "name": "tool_result top-level key holds the marker (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "ok",
+              "/w/clientco/x": 1
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "text_marker"
+    },
+    {
+      "name": "tool input path plus pattern (E1, the distiller's join)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Grep",
+              "input": {
+                "path": "/Work/",
+                "pattern": "Acme_Client"
+              }
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "tool_input"
+    },
+    {
+      "name": "path and pattern apart, in two tool calls (control)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Grep",
+              "input": {
+                "path": "/Work/"
+              }
+            },
+            {
+              "type": "tool_use",
+              "name": "Grep",
+              "input": {
+                "pattern": "Acme_Client"
+              }
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "none"
     }
   ],
   "_doc": "Shared client-scope matcher fixture (openspec/changes/hub-client-read-scope, D2, R2-A, R2-K). Made-up markers only. match_cases: normalize + marker_in, run by the hub (client_scope.rs) and the distiller (test_cchv_distill.py); expected values are the distiller's behaviour. extract_cases: the hub's one extractor (session class), hub only."

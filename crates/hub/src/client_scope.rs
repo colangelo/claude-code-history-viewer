@@ -210,8 +210,74 @@ fn take<'v>(s: &'v str, budget: &mut usize, f: &mut dyn FnMut(&'v str)) -> Resul
     Ok(())
 }
 
+/// The block types besides `tool_use` and `tool_result` that the hub serves
+/// (pg1 block census, all providers, plus the API's `document` and
+/// `redacted_thinking`). Any other type, or none, is unreadable (E1); the
+/// distiller's `OTHER_BLOCK_TYPES` holds the same list (R9).
+const READ_BLOCK_TYPES: [&str; 8] = [
+    "text",
+    "thinking",
+    "image",
+    "document",
+    "redacted_thinking",
+    "tool_addition",
+    "tool_removal",
+    "fallback",
+];
+
+/// Every object under `v` with a string `path` and a string `pattern` gives
+/// `path` + `/` + `pattern`, the distiller's join for search-tool inputs
+/// (`_string_values`): a client folder split across the two keys still hits.
+fn path_pattern_joins(
+    v: &Value,
+    depth: usize,
+    budget: &mut usize,
+    f: &mut dyn FnMut(&str),
+) -> Result<(), ()> {
+    if depth > MAX_DEPTH {
+        return Err(());
+    }
+    match v {
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|x| path_pattern_joins(x, depth + 1, budget, f)),
+        Value::Object(map) => {
+            if let (Some(Value::String(path)), Some(Value::String(pattern))) =
+                (map.get("path"), map.get("pattern"))
+            {
+                let joined = format!("{}/{}", path.trim_end_matches(['/', '\\']), pattern);
+                *budget = budget.checked_sub(joined.len()).ok_or(())?;
+                f(&joined);
+            }
+            map.values()
+                .try_for_each(|x| path_pattern_joins(x, depth + 1, budget, f))
+        }
+        Value::String(_) | Value::Null | Value::Bool(_) | Value::Number(_) => Ok(()),
+    }
+}
+
+/// A `tool_use` or `tool_result` block: its own keys and every value outside
+/// `inner` are text; the strings under `inner` go to `f_inner`.
+fn tool_block<'v>(
+    block: &'v serde_json::Map<String, Value>,
+    inner: &str,
+    budget: &mut usize,
+    f_text: &mut dyn FnMut(&'v str),
+    f_inner: &mut dyn FnMut(&'v str),
+) -> Result<(), ()> {
+    block.iter().try_for_each(|(k, x)| {
+        take(k, budget, f_text)?;
+        if k == inner {
+            leaves(x, 3, budget, f_inner)
+        } else {
+            leaves(x, 3, budget, f_text)
+        }
+    })
+}
+
 fn message_hits(m: &Markers, msg: MessageFields<'_>) -> Hits {
     let mut h = Hits::default();
+    // One budget for the whole message, `content` and `raw` together (E1).
     let mut budget = MAX_MESSAGE_BYTES;
     let hit = |s: &str| m.matches(&normalize(s));
 
@@ -226,29 +292,33 @@ fn message_hits(m: &Markers, msg: MessageFields<'_>) -> Hits {
                 return Err(());
             };
             match block.get("type").and_then(Value::as_str) {
-                Some("tool_use") => block.iter().try_for_each(|(k, x)| {
-                    let into_input = k == "input";
-                    let mut f = |s: &str| {
-                        if into_input {
+                Some("tool_use") => {
+                    tool_block(
+                        block,
+                        "input",
+                        &mut budget,
+                        &mut |s| h.text |= hit(s),
+                        &mut |s| h.tool_input |= hit(s),
+                    )?;
+                    match block.get("input") {
+                        Some(input) => path_pattern_joins(input, 3, &mut budget, &mut |s| {
                             h.tool_input |= hit(s);
-                        } else {
-                            h.text |= hit(s);
-                        }
-                    };
-                    leaves(x, 3, &mut budget, &mut f)
-                }),
-                Some("tool_result") => block.iter().try_for_each(|(k, x)| {
-                    let into_result = k == "content";
-                    let mut f = |s: &str| {
-                        if into_result {
-                            h.tool_result |= hit(s);
-                        } else {
-                            h.text |= hit(s);
-                        }
-                    };
-                    leaves(x, 3, &mut budget, &mut f)
-                }),
-                _ => leaves(item, 2, &mut budget, &mut |s| h.text |= hit(s)),
+                        }),
+                        None => Ok(()),
+                    }
+                }
+                Some("tool_result") => tool_block(
+                    block,
+                    "content",
+                    &mut budget,
+                    &mut |s| h.text |= hit(s),
+                    &mut |s| h.tool_result |= hit(s),
+                ),
+                Some(t) if READ_BLOCK_TYPES.contains(&t) => {
+                    leaves(item, 2, &mut budget, &mut |s| h.text |= hit(s))
+                }
+                // E1: an unknown type, or none, is a shape the extractor cannot vouch for.
+                _ => Err(()),
             }
         }),
         Value::Bool(_) | Value::Number(_) => Err(()),
@@ -259,8 +329,7 @@ fn message_hits(m: &Markers, msg: MessageFields<'_>) -> Hits {
     if let Some(cwd) = msg.raw.get("cwd").and_then(Value::as_str) {
         h.cwd |= hit(cwd);
     }
-    let mut raw_budget = MAX_MESSAGE_BYTES;
-    if leaves(msg.raw, 1, &mut raw_budget, &mut |s| h.raw |= hit(s)).is_err() {
+    if leaves(msg.raw, 1, &mut budget, &mut |s| h.raw |= hit(s)).is_err() {
         h.unreadable = true;
     }
     h
@@ -396,6 +465,33 @@ mod tests {
             })
             .collect();
         assert!(wrong.is_empty(), "cases that disagree: {wrong:?}");
+    }
+
+    /// E1: the 16 MiB budget is per message, `content` and `raw` together.
+    #[test]
+    fn the_byte_budget_spans_content_and_raw() {
+        let half = "a".repeat(MAX_MESSAGE_BYTES / 2 + 1);
+        let content = serde_json::json!([{"type": "text", "text": half}]);
+        let raw = serde_json::json!({"note": half});
+        let classify_one = |raw: &Value| {
+            classify(
+                &Markers::new(&["/clientco".to_string()]),
+                SessionFields {
+                    project_path: "/w/lab",
+                    ..Default::default()
+                },
+                [MessageFields {
+                    content: &content,
+                    raw,
+                }],
+            )
+        };
+        assert_eq!(
+            classify_one(&serde_json::json!({})),
+            Class::None,
+            "content alone fits"
+        );
+        assert_eq!(classify_one(&raw), Class::Unreadable);
     }
 
     /// Past the nesting limit the extractor gives up, and giving up is client.
