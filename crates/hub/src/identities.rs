@@ -281,11 +281,29 @@ pub struct CreateAlias {
 }
 
 /// Create (or re-point — a path belongs to at most one identity) an alias.
+/// Whether some project at `path` holds a session this reader may see.
+async fn path_visible(
+    state: &AppState,
+    vis: &crate::auth::Visibility,
+    path: &str,
+) -> Result<bool, HubError> {
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT EXISTS (SELECT 1 FROM projects vp JOIN sessions vs ON vs.project_id = vp.id
+                        WHERE vp.project_path = $1 AND {})",
+        vis.session_ok("vs")
+    ))
+    .bind(path)
+    .fetch_one(&state.pool)
+    .await?)
+}
+
 pub async fn create_alias(
-    Authenticated(principal, _): Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Json(payload): Json<CreateAlias>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), HubError> {
+    let vis = auth.visibility(&state);
+    let principal = auth.0;
     let path = payload.project_path.trim();
     let key = payload.identity_key.trim();
     if path.is_empty() || key.is_empty() {
@@ -293,14 +311,29 @@ pub async fn create_alias(
             "project_path and identity_key must be non-empty".into(),
         ));
     }
+    // A lab reader may alias only a path it can see a project at: a client
+    // path and a path with no project answer the same 404, before any other
+    // check (design R2-G).
+    if !vis.sees_all() && !path_visible(&state, &vis, path).await? {
+        return Err(HubError::NotFound(format!("no visible project at {path}")));
+    }
     // The key must exist on some project row: rows are never deleted
     // (cumulative archive), so a live identity always has carriers — this
-    // only rejects typos and stale clients.
-    let known: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE identity_key = $1)")
-            .bind(key)
-            .fetch_one(&state.pool)
-            .await?;
+    // only rejects typos and stale clients. A lab reader needs a visible one.
+    let carrier = if vis.sees_all() {
+        "true".to_string()
+    } else {
+        format!(
+            "EXISTS (SELECT 1 FROM sessions vs WHERE vs.project_id = projects.id AND {})",
+            vis.session_ok("vs")
+        )
+    };
+    let known: bool = sqlx::query_scalar(&format!(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE identity_key = $1 AND {carrier})"
+    ))
+    .bind(key)
+    .fetch_one(&state.pool)
+    .await?;
     if !known {
         return Err(HubError::BadRequest(format!(
             "unknown identity_key `{key}` (no project carries it)"
@@ -335,10 +368,25 @@ pub async fn create_alias(
 }
 
 pub async fn delete_alias(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, HubError> {
+    let vis = auth.visibility(&state);
+    if !vis.sees_all() {
+        let path: Option<String> =
+            sqlx::query_scalar("SELECT project_path FROM project_identity_aliases WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await?;
+        let seen = match path {
+            Some(p) => path_visible(&state, &vis, &p).await?,
+            None => false,
+        };
+        if !seen {
+            return Err(HubError::NotFound(format!("no alias with id {id}")));
+        }
+    }
     let result = sqlx::query("DELETE FROM project_identity_aliases WHERE id = $1")
         .bind(id)
         .execute(&state.pool)

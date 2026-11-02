@@ -397,3 +397,44 @@ async fn a_client_reader_sees_client_sessions() {
         .unwrap();
     assert_eq!(r.status().as_u16(), 401);
 }
+
+/// R2-G: a lab caller naming a client project in an alias write gets the
+/// same 404 as for a path with no project at all, before any other check.
+#[tokio::test]
+async fn alias_writes_do_not_reveal_client_projects() {
+    let w = world().await;
+    let key: String = {
+        let body = get(&w, "/v1/identities", "client").await.1;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        v.as_array().unwrap()[0]["identity_key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let post = |path: String| {
+        let base = w.base.clone();
+        let key = key.clone();
+        async move {
+            reqwest::Client::new()
+                .post(format!("{base}/v1/identities/aliases"))
+                .header("Tailscale-User-Login", LOGIN)
+                .json(&json!({"project_path": path, "identity_key": key}))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let missing_path = format!("/w/no-such-project-{}", Uuid::new_v4());
+    let client = post(w.client_path.clone()).await;
+    let missing = post(missing_path.clone()).await;
+    assert_eq!(client.status().as_u16(), 404);
+    assert_eq!(missing.status().as_u16(), 404);
+    let (a, b) = (client.text().await.unwrap(), missing.text().await.unwrap());
+    assert_eq!(
+        a.replace(&w.client_path, "<p>"),
+        b.replace(&missing_path, "<p>"),
+        "a client path and a missing one answer alike"
+    );
+    let lab = post(w.lab_path.clone()).await;
+    assert_eq!(lab.status().as_u16(), 201, "a lab path still aliases");
+}
