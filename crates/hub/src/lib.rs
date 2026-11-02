@@ -398,6 +398,25 @@ pub async fn run_client_scope_sweep(dry_run: bool, batch: i64) -> anyhow::Result
              (start or wait for the hub, or run client-scope accept-routing)"
         );
     }
+    if dry_run {
+        // The dry run is the effective-class census (security O3): every
+        // session, families closed, counts only.
+        let c = client_sweep::census(&pool, &policy, None).await?;
+        println!("client-scope census (dry run, nothing written)");
+        println!("sessions: {}", c.sessions);
+        println!("  client, own content: {}", c.local);
+        println!("  client, family only: {}", c.family_only);
+        println!(
+            "  client, protected journal entry only: {}",
+            c.protected_entry_only
+        );
+        println!("  lab: {}", c.lab);
+        println!(
+            "    of which the distiller's terms would protect (term-only): {}",
+            c.term_only
+        );
+        return Ok(());
+    }
     let report = client_sweep::sweep(
         &pool,
         &policy,

@@ -243,3 +243,85 @@ async fn sessions_of_a_protected_entry_turn_client() {
         Some("family:protected-entry")
     );
 }
+
+/// Security O3: the dry run's census and the real run's final classes agree:
+/// copies on two machines, a parent and its subagent child, the sessions of a
+/// protected entry, and a lab session the terms would protect.
+#[tokio::test]
+async fn the_census_matches_what_the_sweep_writes() {
+    let e = env().await;
+    let a = session(&e, &["see clientco."]).await; // local
+    let b = session(&e, &["lab"]).await; // copy of a, on another machine
+    let other = Uuid::new_v4();
+    sqlx::query("INSERT INTO machines (machine_id, hostname, os) VALUES ($1, $2, 'macos')")
+        .bind(other)
+        .bind(format!("sw2-{}", &other.simple().to_string()[..8]))
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE sessions SET machine_id = $1, session_id = (SELECT session_id FROM sessions WHERE id = $2) WHERE id = $3",
+    )
+    .bind(other)
+    .bind(a)
+    .bind(b)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let p = session(&e, &["lab"]).await; // parent
+    let c = session(&e, &["built clientco."]).await; // subagent child, local
+    sqlx::query(
+        "UPDATE sessions SET file_path = '/x/' || (SELECT session_id FROM sessions WHERE id = $1) || '/subagents/a.jsonl' WHERE id = $2",
+    )
+    .bind(p)
+    .bind(c)
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let e1 = session(&e, &["lab"]).await;
+    let e2 = session(&e, &["lab"]).await;
+    sqlx::query(
+        "INSERT INTO journal_entries (entry_date, project_path, status, model, headline, summary, session_ids, route, route_at, generated_at)
+         VALUES ('2026-10-30', $1, 'entry', 'claude-x', 'h', 's', $2, 'protected', now(), now())",
+    )
+    .bind(format!("/w/census-{}", Uuid::new_v4()))
+    .bind(vec![e1, e2])
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let t = session(&e, &["the clientword deal"]).await;
+    let l = session(&e, &["plain lab"]).await;
+    let ids = vec![a, b, p, c, e1, e2, t, l];
+
+    let census = hub::client_sweep::census(&e.pool, &e.policy, Some(&ids))
+        .await
+        .unwrap();
+    assert_eq!(
+        census,
+        hub::client_sweep::Census {
+            sessions: 8,
+            local: 2,
+            family_only: 2,
+            protected_entry_only: 2,
+            lab: 2,
+            term_only: 1
+        }
+    );
+    sweep(&e.pool, &e.policy, &only(&ids)).await.unwrap();
+    let classes: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT client_class FROM sessions WHERE id = ANY($1)")
+            .bind(&ids)
+            .fetch_all(&e.pool)
+            .await
+            .unwrap();
+    let count = |f: &dyn Fn(&str) -> bool| classes.iter().flatten().filter(|c| f(c)).count() as u64;
+    assert_eq!(count(&|c| c == "none"), census.lab);
+    assert_eq!(
+        count(&|c| c != "none" && !c.starts_with("family:")),
+        census.local
+    );
+    assert_eq!(
+        count(&|c| c.starts_with("family:")),
+        census.family_only + census.protected_entry_only
+    );
+}

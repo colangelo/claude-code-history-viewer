@@ -218,3 +218,123 @@ pub async fn sweep(
     }
     Ok(report)
 }
+
+/// The effective-class census (security O3): every session, read-only. Each
+/// session is counted once, under the first that applies: its own content
+/// hits (local), another member of its family does (family-only), a protected
+/// journal entry names it or its family (protected-entry-only), else lab, of
+/// which term-only counts the lab sessions the distiller's terms would protect.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Census {
+    pub sessions: u64,
+    pub local: u64,
+    pub family_only: u64,
+    pub protected_entry_only: u64,
+    pub lab: u64,
+    pub term_only: u64,
+}
+
+fn find(parent: &mut Vec<usize>, i: usize) -> usize {
+    let mut r = i;
+    while parent[r] != r {
+        r = parent[r];
+    }
+    let mut j = i;
+    while parent[j] != r {
+        let next = parent[j];
+        parent[j] = r;
+        j = next;
+    }
+    r
+}
+
+fn union(parent: &mut Vec<usize>, a: usize, b: usize) {
+    let (ra, rb) = (find(parent, a), find(parent, b));
+    if ra != rb {
+        parent[ra] = rb;
+    }
+}
+
+/// Read-only: classifies every session's full stored form and closes the
+/// families in memory. `only_sessions` limits it (tests).
+pub async fn census(
+    pool: &PgPool,
+    policy: &Policy,
+    only_sessions: Option<&[i64]>,
+) -> anyhow::Result<Census> {
+    let rows: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, provider, session_id, file_path FROM sessions
+         WHERE ($1::bigint[] IS NULL OR id = ANY($1)) ORDER BY id",
+    )
+    .bind(only_sessions)
+    .fetch_all(pool)
+    .await?;
+    let index: std::collections::HashMap<i64, usize> =
+        rows.iter().enumerate().map(|(i, r)| (r.0, i)).collect();
+    let mut parent: Vec<usize> = (0..rows.len()).collect();
+    let mut by_provider_id: std::collections::HashMap<(&str, &str), usize> =
+        std::collections::HashMap::new();
+    for (i, (_, provider, sid, _)) in rows.iter().enumerate() {
+        if let Some(&j) = by_provider_id.get(&(provider.as_str(), sid.as_str())) {
+            union(&mut parent, i, j);
+        } else {
+            by_provider_id.insert((provider.as_str(), sid.as_str()), i);
+        }
+    }
+    for (i, (_, provider, _, file_path)) in rows.iter().enumerate() {
+        if let Some(p) = file_path.as_deref().and_then(parent_from_path) {
+            if let Some(&j) = by_provider_id.get(&(provider.as_str(), p)) {
+                union(&mut parent, i, j);
+            }
+        }
+    }
+    let protected: Vec<Vec<i64>> = sqlx::query_scalar(
+        "SELECT session_ids FROM journal_entries WHERE route = 'protected' AND route_at = generated_at",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut named = vec![false; rows.len()];
+    for ids in &protected {
+        let members: Vec<usize> = ids.iter().filter_map(|id| index.get(id).copied()).collect();
+        for w in members.windows(2) {
+            union(&mut parent, w[0], w[1]);
+        }
+        for m in members {
+            named[m] = true;
+        }
+    }
+    let mut local = vec![false; rows.len()];
+    let mut term = vec![false; rows.len()];
+    for (i, (id, ..)) in rows.iter().enumerate() {
+        let (class, t) = classify_session(pool, policy, *id).await?;
+        local[i] = class != Class::None;
+        term[i] = t;
+    }
+    let mut comp_local: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
+    let mut comp_named: std::collections::HashMap<usize, bool> = std::collections::HashMap::new();
+    for i in 0..rows.len() {
+        let r = find(&mut parent, i);
+        *comp_local.entry(r).or_default() |= local[i];
+        *comp_named.entry(r).or_default() |= named[i];
+    }
+    let mut c = Census {
+        sessions: rows.len() as u64,
+        ..Census::default()
+    };
+    for i in 0..rows.len() {
+        let r = find(&mut parent, i);
+        if local[i] {
+            c.local += 1;
+        } else if comp_local[&r] {
+            c.family_only += 1;
+        } else if comp_named[&r] {
+            c.protected_entry_only += 1;
+        } else {
+            c.lab += 1;
+            if term[i] {
+                c.term_only += 1;
+            }
+        }
+    }
+    Ok(c)
+}
