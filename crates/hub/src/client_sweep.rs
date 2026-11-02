@@ -22,6 +22,10 @@ pub struct SweepOptions {
     pub batch: i64,
     /// Restrict to these session ids (tests, and a targeted re-scan).
     pub only_sessions: Option<Vec<i64>>,
+    /// Also read sessions already stamped lab at the current generation: the
+    /// extractor changed (E1) while the routing files did not. Raise-only, like
+    /// every sweep; a client session is never read again.
+    pub rescan: bool,
 }
 
 /// Counts only: never a path, a name or a text.
@@ -152,7 +156,8 @@ pub async fn sweep(
     loop {
         let rows: Vec<(i64, i64, String, String, Option<String>)> = sqlx::query_as(
             "SELECT id, client_rev, provider, session_id, file_path FROM sessions
-             WHERE id > $1 AND client_gen IS DISTINCT FROM $2
+             WHERE id > $1
+               AND (client_gen IS DISTINCT FROM $2 OR ($5 AND client_class = 'none'))
                AND ($3::bigint[] IS NULL OR id = ANY($3))
              ORDER BY id LIMIT $4",
         )
@@ -160,6 +165,7 @@ pub async fn sweep(
         .bind(&policy.generation)
         .bind(opts.only_sessions.as_deref())
         .bind(opts.batch.max(1))
+        .bind(opts.rescan)
         .fetch_all(pool)
         .await?;
         let Some(last) = rows.last() else { break };

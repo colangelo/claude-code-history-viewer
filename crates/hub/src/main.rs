@@ -40,11 +40,13 @@ USAGE:
                                          make pre-routing journal entries lab again where their
                                          text and sessions match nothing under the full router
                                          (markers and terms); the write is audited
-    hub client-scope sweep [--dry-run] [--batch N]
+    hub client-scope sweep [--dry-run] [--batch N] [--rescan]
                                          classify every session not scanned under the routing
                                          generation the hub accepted; raises classes only and
                                          stamps a session only if no ingest touched it meanwhile;
-                                         --dry-run is read-only and prints counts only
+                                         --dry-run is read-only and prints counts only;
+                                         --rescan also reads sessions already stamped lab
+                                         (run once after a release that changes the extractor)
 ";
 
 /// Every value of a repeatable `--flag V` / `--flag=V`.
@@ -298,7 +300,8 @@ async fn main() -> anyhow::Result<()> {
             Some("sweep") => {
                 let dry_run = args[2..].iter().any(|a| a == "--dry-run");
                 let batch = flag_i64(&args[2..], "--batch").unwrap_or(200);
-                hub::run_client_scope_sweep(dry_run, batch).await
+                let rescan = args[2..].iter().any(|a| a == "--rescan");
+                hub::run_client_scope_sweep(dry_run, batch, rescan).await
             }
             other => usage_error(&format!(
                 "unknown client-scope subcommand: {}",

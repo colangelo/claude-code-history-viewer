@@ -401,11 +401,15 @@ enforce      = false   # observe: classify and count, hide nothing
 ```
 
 - **The flag.** Every session gets a sticky client class.
-  - *What sets it:* the routing file's path markers, matched against the project path, the session
-    row, every `content` and `raw` string, `cwd`, tool inputs and results. Content terms are not
-    used for the flag.
-  - *When:* at ingest, in the batch transaction, and in the sweep
-    (`cchv-hub client-scope sweep [--dry-run]`).
+  - *What sets it:* the routing file's path markers, matched against the project path, the
+    project's name, git remote and main checkout path, the session row, every `content` and `raw`
+    string, `search_text`, `cwd`, tool inputs and results. An unknown content block type is
+    `unreadable`. Content terms are not used for the flag.
+  - *When:* at ingest, in the batch transaction (a batch that only updates a project row raises
+    that project's sessions too), and in the sweep (`cchv-hub client-scope sweep [--dry-run]`).
+  - *After a release that changes the extractor:* the generation does not move, so run
+    `cchv-hub client-scope sweep --rescan` once (dry run first). It reads the sessions already
+    stamped lab again, raise-only.
   - *Unscanned:* a session not scanned under the current generation counts as client.
   - *Bad routing file:* a missing, invalid, below-floor or changed file is `unknown`, and every
     session counts as client.

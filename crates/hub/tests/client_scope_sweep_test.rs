@@ -120,6 +120,7 @@ fn only(ids: &[i64]) -> SweepOptions {
         dry_run: false,
         batch: 10,
         only_sessions: Some(ids.to_vec()),
+        rescan: false,
     }
 }
 
@@ -162,6 +163,7 @@ async fn a_dry_run_counts_and_writes_nothing() {
             dry_run: true,
             batch: 10,
             only_sessions: Some(vec![lab, client, term]),
+            rescan: false,
         },
     )
     .await
@@ -378,4 +380,38 @@ async fn the_sweep_reads_project_fields_and_search_text() {
             "{column}"
         );
     }
+}
+
+/// E1 reaches history: a session already stamped lab at the current
+/// generation is not read again by a plain sweep, and `rescan` reads it under
+/// the current extractor, raise-only.
+#[tokio::test]
+async fn a_rescan_reads_sessions_already_stamped_lab() {
+    let e = env().await;
+    let s = session(&e, &["plain lab work"]).await;
+    sweep(&e.pool, &e.policy, &only(&[s])).await.unwrap();
+    assert_eq!(class_and_gen(&e, s).await.0.as_deref(), Some("none"));
+    // A record the old extractor did not read, already in the archive.
+    sqlx::query("UPDATE messages SET search_text = 'notes in /w/clientco/x' WHERE session_id = $1")
+        .bind(s)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let plain = sweep(&e.pool, &e.policy, &only(&[s])).await.unwrap();
+    assert_eq!(plain.scanned, 0, "a plain sweep skips a stamped session");
+    assert_eq!(class_and_gen(&e, s).await.0.as_deref(), Some("none"));
+
+    let rescan = SweepOptions {
+        rescan: true,
+        ..only(&[s])
+    };
+    let report = sweep(&e.pool, &e.policy, &rescan).await.unwrap();
+    assert_eq!(report.scanned, 1);
+    assert_eq!(
+        class_and_gen(&e, s).await,
+        (
+            Some("text_marker".into()),
+            Some(e.policy.generation.clone())
+        )
+    );
 }

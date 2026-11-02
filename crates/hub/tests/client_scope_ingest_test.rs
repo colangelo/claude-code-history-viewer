@@ -592,6 +592,7 @@ async fn ingest_during_a_policy_outage_leaves_the_session_unscanned() {
             dry_run: false,
             batch: 10,
             only_sessions: Some(vec![pk]),
+            rescan: false,
         },
     )
     .await

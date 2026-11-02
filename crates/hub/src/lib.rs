@@ -401,7 +401,7 @@ pub enum ClientScopeAdmin {
 /// under the generation the hub has accepted (openspec `hub-client-read-scope`,
 /// task 2.4). A dry run is read-only and prints counts only. Refuses when the
 /// routing file is unusable or is not the generation the hub accepted.
-pub async fn run_client_scope_sweep(dry_run: bool, batch: i64) -> anyhow::Result<()> {
+pub async fn run_client_scope_sweep(dry_run: bool, batch: i64, rescan: bool) -> anyhow::Result<()> {
     let config = HubConfig::load()?;
     let cs = config
         .client_scope
@@ -463,6 +463,7 @@ pub async fn run_client_scope_sweep(dry_run: bool, batch: i64) -> anyhow::Result
             dry_run,
             batch,
             only_sessions: None,
+            rescan,
         },
     )
     .await?;
