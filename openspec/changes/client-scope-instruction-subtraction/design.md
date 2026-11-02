@@ -95,4 +95,7 @@ read-only and stamps nothing.
   refuses such a file against the live markers.
 - **U6:** hashes are exactly 64 ASCII hex digits.
 - **U7:** `cwd` is matched without subtraction.
-
+- **V1 (re-check, ac/security 007c6ef):** `[client_scope].instruction_sources` in `hub.toml` lists
+  the allowed (repo, path) pairs; `accept-routing` and `instruction-entry` refuse any other source,
+  the repo compared after canonicalizing, the path exactly (relative, no `..`). The audit row names
+  the repo. **V2:** the file is read with `git cat-file blob` (no textconv or pager).

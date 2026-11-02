@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::client_scope::{
     normalize, search_form, InstructionBlock, InstructionBlocks, Markers, MIN_BLOCK_BYTES,
 };
-use crate::config::ClientScopeConfig;
+use crate::config::{ClientScopeConfig, InstructionSourceConfig};
 
 /// The prefix of a registered block's accepted-set row.
 const BLOCK_ROW: &str = "instruction:";
@@ -125,8 +125,10 @@ impl RegisteredBlock {
         )
     }
 
-    /// Re-derive the block from its source and compare (review U1).
-    pub fn verify(&self) -> anyhow::Result<()> {
+    /// Re-derive the block from its source and compare (review U1). The
+    /// source must be on the hub config's list (review V1).
+    pub fn verify(&self, allowed: &[InstructionSourceConfig]) -> anyhow::Result<()> {
+        source_allowed(&self.source.git_repo, &self.source.git_path, allowed)?;
         let text = git_show(
             &self.source.git_repo,
             &self.source.git_commit,
@@ -159,8 +161,33 @@ fn git(repo: &str, args: &[&str]) -> anyhow::Result<String> {
     String::from_utf8(out.stdout).map_err(|_| anyhow::anyhow!("git output is not UTF-8"))
 }
 
+/// The file's bytes at `commit`, with no textconv, filter or pager (review V2).
 fn git_show(repo: &str, commit: &str, path: &str) -> anyhow::Result<String> {
-    git(repo, &["show", &format!("{commit}:{path}")])
+    git(repo, &["cat-file", "blob", &format!("{commit}:{path}")])
+}
+
+/// Whether `repo` and `path` are an allowed source (review V1): the repo
+/// compared after canonicalizing both sides, the path exactly, relative and
+/// without `..` or empty components.
+pub fn source_allowed(
+    repo: &str,
+    path: &str,
+    allowed: &[InstructionSourceConfig],
+) -> anyhow::Result<()> {
+    let bad_path = path.starts_with('/') || path.split('/').any(|c| c == ".." || c.is_empty());
+    let repo_c = std::fs::canonicalize(repo).ok();
+    let listed = !bad_path
+        && repo_c.is_some()
+        && allowed
+            .iter()
+            .any(|a| a.git_path == path && std::fs::canonicalize(&a.git_repo).ok() == repo_c);
+    if listed {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "instruction source {repo} {path} is not in [client_scope].instruction_sources"
+        )
+    }
 }
 
 /// The entries for a file at a git revision, both forms, each checked
@@ -170,7 +197,9 @@ pub fn entries_from_git(
     rev: &str,
     path: &str,
     markers: &Markers,
+    allowed: &[InstructionSourceConfig],
 ) -> anyhow::Result<Vec<RegisteredBlock>> {
+    source_allowed(repo, path, allowed)?;
     let commit = git(
         repo,
         &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
@@ -794,18 +823,37 @@ content_terms = ["clientword"]
         let text = format!("## Rules\n{}see /clientco/notes\n", "lab line. ".repeat(30));
         let (_fs, repo) = repo_with(&text);
         let m = Markers::new(&["/clientco".to_string()]);
-        let entries = entries_from_git(&repo, "HEAD", "CLAUDE.md", &m).unwrap();
+        let allow = |repo: &str| {
+            vec![InstructionSourceConfig {
+                git_repo: repo.into(),
+                git_path: "CLAUDE.md".into(),
+            }]
+        };
+        let allowed = allow(&repo);
+        let entries = entries_from_git(&repo, "HEAD", "CLAUDE.md", &m, &allowed).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].source.git_commit.len(), 40);
         for e in &entries {
-            e.verify().unwrap();
+            e.verify(&allowed).unwrap();
         }
+        // Review V1: a repository or path not on the list is refused, the same
+        // file in another repository included.
+        let (_other, other_repo) = repo_with(&text);
+        assert!(entries_from_git(&other_repo, "HEAD", "CLAUDE.md", &m, &allowed).is_err());
+        let theirs =
+            entries_from_git(&other_repo, "HEAD", "CLAUDE.md", &m, &allow(&other_repo)).unwrap();
+        assert!(theirs[0].verify(&allowed).is_err());
+        for path in ["../CLAUDE.md", "/CLAUDE.md", "x//CLAUDE.md", "other.md"] {
+            assert!(source_allowed(&repo, path, &allowed).is_err(), "{path}");
+        }
+        // The repository is compared canonically.
+        assert!(source_allowed(&format!("{repo}/."), "CLAUDE.md", &allowed).is_ok());
         assert_eq!(entries[0].block, InstructionBlock::of(text.trim_end()));
         let mut forged = entries[0].clone();
         forged.block = InstructionBlock::of(&format!("{}\nmore", text.trim_end()));
-        assert!(forged.verify().is_err());
+        assert!(forged.verify(&allowed).is_err());
         // Review U5: a file whose end could start a marker is refused.
         let (_fs2, repo2) = repo_with(&format!("{text}see /cli"));
-        assert!(entries_from_git(&repo2, "HEAD", "CLAUDE.md", &m).is_err());
+        assert!(entries_from_git(&repo2, "HEAD", "CLAUDE.md", &m, &allow(&repo2)).is_err());
     }
 }

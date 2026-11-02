@@ -503,9 +503,23 @@ enforce      = false   # observe: classify and count, hide nothing
   - *Before registering:* `cchv-hub client-scope census --routing CANDIDATE --floor CANDIDATE_FLOOR
     --ids` (read-only) re-reads the sessions stamped client under the candidate and lists those
     that would be lab. The candidate must keep the live markers.
+  - *Allowed sources:* `hub.toml` lists the only git sources a block may come from (security
+    review V1); with none listed, no block can be accepted:
+
+    ```toml
+    [client_scope]
+    instruction_sources = [
+      { git_repo = "/Users/ac/.local/share/chezmoi", git_path = "private_dot_config/claude/CLAUDE.md" },
+    ]
+    ```
+
+    `[client_scope]` refuses unknown keys, so add this line only once the hub that knows it (the
+    release after 0.41.0) is live, never before the swap.
   - *Accepting:* a new block is a narrowing, and the hub never accepts one on its own, not even on
-    an empty accepted set. `client-scope accept-routing` re-derives every block from its `git_commit`
-    and refuses on any mismatch; its audit row lists each hash with its form, commit and path. The
+    an empty accepted set. `client-scope accept-routing` refuses a source not on the list (repo
+    compared canonically, path exactly), re-derives every block from its `git_commit` with
+    `git cat-file blob`, and refuses on any mismatch. Its audit row lists each hash with its form,
+    repo, commit and path. The
     owner writes the routing file and its floor record, then the pg1 writer runs `accept-routing`
     before the hub's next refresh, so there is no `unknown` window.
   - *Classes only rise:* sessions marked before the registration stay client. Each one goes back

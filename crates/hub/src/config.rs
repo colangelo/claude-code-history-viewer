@@ -76,6 +76,19 @@ pub struct ClientScopeConfig {
     /// enforcement off (the latch, design R2-I).
     #[serde(default)]
     pub enforce: bool,
+    /// The only git sources `accept-routing` takes instruction blocks from
+    /// (security review V1): the dotfiles repo and the path of ac's
+    /// instructions file in it. Empty: no block can be accepted.
+    #[serde(default)]
+    pub instruction_sources: Vec<InstructionSourceConfig>,
+}
+
+/// One allowed source of instruction blocks: a git repository and a path in it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstructionSourceConfig {
+    pub git_repo: PathBuf,
+    pub git_path: String,
 }
 
 /// `[redaction]` in `hub.toml`.

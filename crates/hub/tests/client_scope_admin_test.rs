@@ -164,7 +164,7 @@ async fn accept_routing_makes_a_narrowed_set_usable() {
     );
     scope.refresh(&pool).await.unwrap();
     assert!(scope.snapshot().generation().is_none(), "narrowed: unknown");
-    accept_routing(&pool, &narrow, "ac").await.unwrap();
+    accept_routing(&pool, &narrow, &[], "ac").await.unwrap();
     let scope = hub::client_state::ClientScope::new(
         toml::from_str(&format!(
             "routing_file = \"{}\"\nfloor_file = \"{}\"\n",
@@ -724,11 +724,16 @@ async fn instruction_blocks_need_a_verified_accept() {
     git(&["add", "CLAUDE.md"]);
     git(&["commit", "-q", "-m", "v1"]);
     let commit = git(&["rev-parse", "HEAD"]).trim().to_string();
+    let sources = vec![hub::config::InstructionSourceConfig {
+        git_repo: repo.clone(),
+        git_path: "CLAUDE.md".into(),
+    }];
     let entries = hub::client_policy::entries_from_git(
         repo.to_str().unwrap(),
         "HEAD",
         "CLAUDE.md",
         &live.markers,
+        &sources,
     )
     .unwrap();
     let with = |lines: &[String]| {
@@ -765,16 +770,64 @@ async fn instruction_blocks_need_a_verified_accept() {
         hub::client_scope::InstructionBlock::of(&format!("{}\nand /clientco/x", file.trim_end()));
     let (forged_policy, _fd) = policy(&with(&[forged.entry_line()]), 1);
     let before = audits(&pool, "accept-routing").await;
-    assert!(accept_routing(&pool, &forged_policy, "manager-aruba")
-        .await
-        .is_err());
+    // Review V1: the same file committed in a repository not on the list.
+    let other = std::env::temp_dir().join(format!("cchv-cs-git-{}", Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&other).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "CLAUDE.md"],
+        vec!["commit", "-q", "-m", "theirs"],
+    ] {
+        if args[0] == "add" {
+            std::fs::write(other.join("CLAUDE.md"), &file).unwrap();
+        }
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&other)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    }
+    let theirs = hub::client_policy::entries_from_git(
+        other.to_str().unwrap(),
+        "HEAD",
+        "CLAUDE.md",
+        &live.markers,
+        &[hub::config::InstructionSourceConfig {
+            git_repo: other.clone(),
+            git_path: "CLAUDE.md".into(),
+        }],
+    )
+    .unwrap();
+    let theirs_lines: Vec<String> = theirs
+        .iter()
+        .map(hub::client_policy::RegisteredBlock::entry_line)
+        .collect();
+    let (theirs_policy, _td) = policy(&with(&theirs_lines), 1);
+    assert!(
+        accept_routing(&pool, &theirs_policy, &sources, "manager-aruba")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        audits(&pool, "accept-routing").await,
+        before,
+        "nothing recorded"
+    );
+    assert!(
+        accept_routing(&pool, &forged_policy, &sources, "manager-aruba")
+            .await
+            .is_err()
+    );
     assert_eq!(
         audits(&pool, "accept-routing").await,
         before,
         "nothing recorded"
     );
 
-    accept_routing(&pool, &registered, "manager-aruba")
+    accept_routing(&pool, &registered, &sources, "manager-aruba")
         .await
         .unwrap();
     let detail: String = sqlx::query_scalar(
@@ -784,6 +837,10 @@ async fn instruction_blocks_need_a_verified_accept() {
     .await
     .unwrap();
     assert!(detail.contains(&commit), "{detail}");
+    assert!(
+        detail.contains(repo.to_str().unwrap()),
+        "the audit names the repository: {detail}"
+    );
     assert!(
         detail.contains("injected") && detail.contains("search"),
         "{detail}"

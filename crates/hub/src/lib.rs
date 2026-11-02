@@ -320,7 +320,7 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
     match action {
         ClientScopeAdmin::AcceptRouting { approved_by } => {
             let p = policy()?;
-            client_admin::accept_routing(&pool, &p, &approved_by).await?;
+            client_admin::accept_routing(&pool, &p, &cs.instruction_sources, &approved_by).await?;
             println!(
                 "accepted the routing generation ({} markers, {} instruction blocks); the hub adopts it at its next refresh",
                 p.marker_hashes.len(),
@@ -517,7 +517,9 @@ pub fn run_instruction_entry(repo: &str, rev_path: &str) -> anyhow::Result<()> {
         client_policy::Load::Ready(p) => p,
         client_policy::Load::Unknown(why) => anyhow::bail!("client scope policy unknown: {why}"),
     };
-    for e in client_policy::entries_from_git(repo, rev, path, &live.markers)? {
+    for e in
+        client_policy::entries_from_git(repo, rev, path, &live.markers, &cs.instruction_sources)?
+    {
         println!("  {},", e.entry_line());
     }
     Ok(())

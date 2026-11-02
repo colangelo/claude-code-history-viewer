@@ -15,21 +15,23 @@ use crate::client_state::{audit, record_set};
 pub async fn accept_routing(
     pool: &PgPool,
     policy: &Policy,
+    sources: &[crate::config::InstructionSourceConfig],
     approved_by: &str,
 ) -> anyhow::Result<()> {
     // Review U1: every block is re-derived from the commit it names before
     // anything is recorded; the audit row lists each hash with its source.
     for b in &policy.instruction_blocks {
-        b.verify()?;
+        b.verify(sources)?;
     }
     let blocks: Vec<String> = policy
         .instruction_blocks
         .iter()
         .map(|b| {
             format!(
-                "{} {} {}:{}",
+                "{} {} {} {}:{}",
                 &crate::client_policy::hex(&b.block.sha256)[..16],
                 b.source.form.as_str(),
+                b.source.git_repo,
                 b.source.git_commit,
                 b.source.git_path
             )

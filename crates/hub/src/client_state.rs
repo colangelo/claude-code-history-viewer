@@ -57,6 +57,7 @@ impl ClientScope {
             routing_file: std::path::PathBuf::new(),
             floor_file: std::path::PathBuf::new(),
             enforce: false,
+            instruction_sources: Vec::new(),
         });
         scope.no_section = true;
         // Enforcing from the first instant, before any refresh reads the latch

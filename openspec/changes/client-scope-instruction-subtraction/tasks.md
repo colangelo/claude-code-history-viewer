@@ -26,7 +26,8 @@
 - [x] 4.2a U1-U7 and T1: sourced entries verified at accept, no block bootstrap, conservative guard
       (differential test), union of occurrences, edge check, strict hex, exact cwd; end-to-end accept,
       sweep and clear test; census on a read-only connection.
-- [ ] 4.2b Single-reader re-check by security.
+- [x] 4.2b Single-reader re-check by security: U1-U7 MET (ac/security 007c6ef); V1 source allow-list
+      and V2 `git cat-file` done.
 - [ ] 4.3 Census on pg1 with a candidate routing file (the six global-file versions); counts and ids to
       manager-aruba.
 - [ ] 4.4 Release; manager-aruba registers the blocks; infra runs `accept-routing` right after.
