@@ -6,7 +6,10 @@
 //! `normalize` and `Routing.marker_in`), and the shared fixture
 //! `scripts/fixtures/client-scope-cases.json` pins that both sides agree.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// What the matcher compares (distiller `normalize`): percent-decoded once,
 /// backslashes as `/`, lower case.
@@ -60,6 +63,9 @@ fn hex(b: u8) -> Option<u8> {
 pub struct Markers {
     literal: Vec<String>,
     segments: Vec<String>,
+    /// Registered instruction text, subtracted from message strings
+    /// (openspec `client-scope-instruction-subtraction`).
+    instructions: InstructionBlocks,
 }
 
 impl Markers {
@@ -71,7 +77,19 @@ impl Markers {
             .map(|m| m.trim_matches('/').to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        Self { literal, segments }
+        Self {
+            literal,
+            segments,
+            instructions: InstructionBlocks::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_instructions(self, instructions: InstructionBlocks) -> Self {
+        Self {
+            instructions,
+            ..self
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -82,6 +100,109 @@ impl Markers {
     pub fn matches(&self, normalized: &str) -> bool {
         self.literal.iter().any(|m| normalized.contains(m.as_str()))
             || self.segments.iter().any(|s| segment_in(normalized, s))
+    }
+
+    /// Whether a message string holds a marker outside its registered
+    /// instruction blocks: each piece left between them is matched on its own.
+    pub fn hits_message_text(&self, text: &str) -> bool {
+        if !self.matches(&normalize(text)) {
+            return false;
+        }
+        match self.instructions.pieces(text) {
+            None => true,
+            Some(pieces) => pieces.iter().any(|p| self.matches(&normalize(p))),
+        }
+    }
+}
+
+/// How many leading bytes of a block its head hash covers.
+pub const HEAD_BYTES: usize = 64;
+/// The shortest block the routing file may register: a marker-sized block
+/// would blind the classifier to that marker.
+pub const MIN_BLOCK_BYTES: usize = 256;
+
+/// One registered instruction text, by hashes and length only (design D1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionBlock {
+    pub sha256: [u8; 32],
+    pub bytes: usize,
+    pub head_sha256: [u8; 32],
+}
+
+impl InstructionBlock {
+    /// The entry for `text` exactly as given.
+    pub fn of(text: &str) -> Self {
+        let b = text.as_bytes();
+        Self {
+            sha256: Sha256::digest(b).into(),
+            bytes: b.len(),
+            head_sha256: Sha256::digest(&b[..HEAD_BYTES.min(b.len())]).into(),
+        }
+    }
+}
+
+/// The registered blocks, indexed by the hash of their first [`HEAD_BYTES`].
+#[derive(Default)]
+pub struct InstructionBlocks {
+    by_head: HashMap<[u8; 32], Vec<(usize, [u8; 32])>>,
+}
+
+impl InstructionBlocks {
+    pub fn new(blocks: &[InstructionBlock]) -> Self {
+        let mut by_head: HashMap<[u8; 32], Vec<(usize, [u8; 32])>> = HashMap::new();
+        for b in blocks {
+            by_head
+                .entry(b.head_sha256)
+                .or_default()
+                .push((b.bytes, b.sha256));
+        }
+        Self { by_head }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_head.is_empty()
+    }
+
+    /// The length of a registered block that starts at byte `at` of `s`.
+    fn block_at(&self, s: &str, at: usize) -> Option<usize> {
+        let b = &s.as_bytes()[at..];
+        let head = b.get(..HEAD_BYTES)?;
+        let candidates = self.by_head.get(&<[u8; 32]>::from(Sha256::digest(head)))?;
+        candidates.iter().find_map(|&(len, sha)| {
+            (len <= b.len()
+                && s.is_char_boundary(at + len)
+                && <[u8; 32]>::from(Sha256::digest(&b[..len])) == sha)
+                .then_some(len)
+        })
+    }
+
+    /// The pieces of `s` outside every registered block that starts at the
+    /// string's start or right after a newline; `None` when there is none.
+    fn pieces<'s>(&self, s: &'s str) -> Option<Vec<&'s str>> {
+        if self.is_empty() {
+            return None;
+        }
+        let bytes = s.as_bytes();
+        let mut pieces = Vec::new();
+        let (mut from, mut at) = (0, 0);
+        while at < bytes.len() {
+            if let Some(len) = self.block_at(s, at) {
+                pieces.push(&s[from..at]);
+                at += len;
+                from = at;
+                if bytes[at - 1] == b'\n' {
+                    continue; // the block ended a line: `at` starts the next one
+                }
+            }
+            match bytes[at..].iter().position(|&c| c == b'\n') {
+                Some(i) => at += i + 1,
+                None => break,
+            }
+        }
+        (!pieces.is_empty()).then(|| {
+            pieces.push(&s[from..]);
+            pieces
+        })
     }
 }
 
@@ -303,7 +424,7 @@ fn message_hits(m: &Markers, msg: MessageFields<'_>) -> Hits {
     let mut h = Hits::default();
     // One budget for the whole message, `content` and `raw` together (E1).
     let mut budget = MAX_MESSAGE_BYTES;
-    let hit = |s: &str| m.matches(&normalize(s));
+    let hit = |s: &str| m.hits_message_text(s);
 
     // `content`: the normalized message, served by the browse and search routes.
     let content_ok = match msg.content {
@@ -559,5 +680,145 @@ mod tests {
             }],
         );
         assert_eq!(got, Class::Unreadable);
+    }
+
+    /// An instructions file as Claude Code injects it: a client folder named in
+    /// one of its lines, as in ac's global file.
+    fn block_text() -> String {
+        format!(
+            "## RULE #1\n{}\nClient questions go to the desk; their notes live in /ClientCo/notes.\n{}",
+            "Lab line about the desk. ".repeat(8),
+            "Closing lab line. ".repeat(6)
+        )
+    }
+
+    fn registered(blocks: &[&str]) -> Markers {
+        Markers::new(&["/clientco".to_string()]).with_instructions(InstructionBlocks::new(
+            &blocks
+                .iter()
+                .map(|b| InstructionBlock::of(b))
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn one(m: &Markers, content: &Value, raw: &Value, search_text: Option<&str>) -> Class {
+        classify(
+            m,
+            SessionFields {
+                project_path: "/w/lab",
+                ..Default::default()
+            },
+            [MessageFields {
+                content,
+                raw,
+                search_text,
+            }],
+        )
+    }
+
+    /// The request copy: the file after its heading line, at a line start.
+    fn request_copy(body: &str) -> Value {
+        serde_json::json!([{"type": "text", "text": format!(
+            "<system-reminder>\nContents of /Users/ac/.config/claude/CLAUDE.md (global):\n\n{body}\n\nContents of /w/lab/AGENTS.md:\n\nlab rules\n</system-reminder>"
+        )}])
+    }
+
+    fn instructions_attachment(files: &[&str]) -> Value {
+        serde_json::json!({
+            "type": "attachment",
+            "attachment": {"type": "instructions", "files": files.iter().enumerate()
+                .map(|(i, c)| serde_json::json!({"path": format!("/w/f{i}/CLAUDE.md"), "content": c, "type": "User"}))
+                .collect::<Vec<_>>()}
+        })
+    }
+
+    #[test]
+    fn a_registered_block_is_subtracted() {
+        let b = block_text();
+        assert!(b.len() >= MIN_BLOCK_BYTES);
+        let content = request_copy(&b);
+        let raw = instructions_attachment(&[&b]);
+        let none = serde_json::json!({});
+        // The control: unregistered, the injected copies mark the session.
+        assert_eq!(one(&registered(&[]), &content, &none, None), Class::TextMarker);
+        assert_eq!(one(&registered(&[]), &Value::Null, &raw, None), Class::Raw);
+        let m = registered(&[&b]);
+        assert_eq!(one(&m, &content, &none, None), Class::None);
+        assert_eq!(one(&m, &Value::Null, &raw, None), Class::None);
+        // The same text in `search_text` and in `raw`'s copy of the content.
+        let raw_copy = serde_json::json!({"content": content});
+        let st = content[0]["text"].as_str().unwrap();
+        assert_eq!(one(&m, &Value::Null, &raw_copy, Some(st)), Class::None);
+        // Twice in one string: both copies go.
+        let twice = request_copy(&format!("{b}\n{b}"));
+        assert_eq!(one(&m, &twice, &none, None), Class::None);
+    }
+
+    #[test]
+    fn one_changed_byte_is_still_scanned() {
+        let b = block_text();
+        let m = registered(&[&b]);
+        let changed = b.replacen("Closing", "closing", 1);
+        assert_eq!(changed.len(), b.len());
+        assert_eq!(
+            one(&m, &request_copy(&changed), &serde_json::json!({}), None),
+            Class::TextMarker
+        );
+        assert_eq!(
+            one(&m, &Value::Null, &instructions_attachment(&[&changed]), None),
+            Class::Raw
+        );
+    }
+
+    #[test]
+    fn client_text_appended_after_the_block_still_marks() {
+        let b = block_text();
+        let m = registered(&[&b]);
+        let none = serde_json::json!({});
+        for tail in ["\nnow open /clientco/q3.xlsx", "/clientco/q3.xlsx", " see /CLIENTCO"] {
+            assert_eq!(
+                one(&m, &request_copy(&format!("{b}{tail}")), &none, None),
+                Class::TextMarker,
+                "tail {tail:?}"
+            );
+        }
+        // Before the block, on its own line.
+        assert_eq!(
+            one(&m, &request_copy(&format!("cd /clientco\n{b}")), &none, None),
+            Class::TextMarker
+        );
+    }
+
+    #[test]
+    fn an_attachment_holding_a_client_file_still_raises() {
+        let b = block_text();
+        let m = registered(&[&b]);
+        let raw = instructions_attachment(&[&b, "# Project rules\nThe data sits in /clientco/exports.\n"]);
+        assert_eq!(one(&m, &Value::Null, &raw, None), Class::Raw);
+    }
+
+    /// A block counts only where a line starts: the injected file always does.
+    #[test]
+    fn a_block_inside_a_line_is_scanned() {
+        let b = block_text();
+        let m = registered(&[&b]);
+        let content = serde_json::json!([{"type": "text", "text": format!("quoted: {b}")}]);
+        assert_eq!(
+            one(&m, &content, &serde_json::json!({}), None),
+            Class::TextMarker
+        );
+    }
+
+    #[test]
+    fn versions_sharing_a_head_are_each_found() {
+        let old = block_text();
+        let new = format!("{old}\nOne more lab line.");
+        let m = registered(&[&old, &new]);
+        let none = serde_json::json!({});
+        assert_eq!(one(&m, &request_copy(&old), &none, None), Class::None);
+        assert_eq!(one(&m, &request_copy(&new), &none, None), Class::None);
+        // A tool input that only quotes the block is subtracted too (D3).
+        let tool = serde_json::json!([{"type": "tool_use", "name": "Write", "input": {"content": new}}]);
+        assert_eq!(one(&m, &tool, &none, None), Class::None);
     }
 }

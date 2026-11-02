@@ -12,20 +12,85 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::client_scope::{normalize, Markers};
+use crate::client_scope::{
+    normalize, InstructionBlock, InstructionBlocks, Markers, MIN_BLOCK_BYTES,
+};
 use crate::config::ClientScopeConfig;
+
+/// The accepted-set row of a registered instruction block: `instruction:<sha256>`.
+const BLOCK_ROW: &str = "instruction:";
 
 /// A usable policy generation.
 pub struct Policy {
     /// sha256 of (routing bytes ‖ floor bytes): any change to either file is a
     /// new generation.
     pub generation: String,
+    /// The path markers, with the registered instruction blocks they skip.
     pub markers: Markers,
     /// sha256 of each normalized path marker: what the hub keeps of the set.
     pub marker_hashes: BTreeSet<String>,
+    /// sha256 of each registered instruction block
+    /// (openspec `client-scope-instruction-subtraction`).
+    pub instruction_hashes: BTreeSet<String>,
     /// The distiller's content terms, normalized. Never used for the flag (Q1:
     /// not at launch); the sweep only COUNTS sessions they would protect.
     pub terms: Vec<String>,
+}
+
+impl Policy {
+    /// What the hub records as accepted: the marker hashes, and one
+    /// `instruction:<sha256>` row per registered block.
+    pub fn accepted_set(&self) -> BTreeSet<String> {
+        self.marker_hashes
+            .iter()
+            .cloned()
+            .chain(
+                self.instruction_hashes
+                    .iter()
+                    .map(|h| format!("{BLOCK_ROW}{h}")),
+            )
+            .collect()
+    }
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// `[protected].instruction_blocks`: absent is none; anything but a list of
+/// well-formed entries of at least [`MIN_BLOCK_BYTES`] is `None`.
+fn instruction_blocks(sect: &toml::Table) -> Option<Vec<InstructionBlock>> {
+    let Some(v) = sect.get("instruction_blocks") else {
+        return Some(Vec::new());
+    };
+    v.as_array()?
+        .iter()
+        .map(|e| {
+            let t = e.as_table()?;
+            let bytes = usize::try_from(t.get("bytes")?.as_integer()?).ok()?;
+            (bytes >= MIN_BLOCK_BYTES).then_some(())?;
+            Some(InstructionBlock {
+                sha256: unhex32(t.get("sha256")?.as_str()?)?,
+                bytes,
+                head_sha256: unhex32(t.get("head_sha256")?.as_str()?)?,
+            })
+        })
+        .collect()
 }
 
 /// The outcome of reading the two files. `Unknown` carries a reason that names
@@ -36,13 +101,7 @@ pub enum Load {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut s, b| {
-            let _ = write!(s, "{b:02x}");
-            s
-        })
+    hex(&Sha256::digest(bytes))
 }
 
 /// Read and check the routing file and its floor record.
@@ -89,6 +148,9 @@ pub fn load_paths(routing_file: &Path, floor_file: &Path) -> Load {
     {
         return unknown("[protected].model missing".into());
     }
+    let Some(blocks) = instruction_blocks(sect) else {
+        return unknown("instruction_blocks invalid".into());
+    };
 
     let Ok(rec) = serde_json::from_slice::<serde_json::Value>(&floor) else {
         return unknown("floor record is not JSON".into());
@@ -122,32 +184,46 @@ pub fn load_paths(routing_file: &Path, floor_file: &Path) -> Load {
             .iter()
             .map(|m| sha256_hex(normalize(m).as_bytes()))
             .collect(),
-        markers: Markers::new(&markers),
+        instruction_hashes: blocks.iter().map(|b| hex(&b.sha256)).collect(),
+        markers: Markers::new(&markers).with_instructions(InstructionBlocks::new(&blocks)),
         terms: terms.iter().map(|t| normalize(t)).collect(),
     })
 }
 
-/// How a new marker set relates to the accepted one (R2-D).
+/// How a new accepted set relates to the accepted one (R2-D).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Acceptance {
     /// Nothing accepted yet: the first set is accepted and audited.
     Bootstrap,
-    /// The same set, or only additions: access can only narrow, accept.
+    /// Markers added or blocks removed, nothing else: access can only narrow, accept.
     Widened { added: usize },
-    /// A marker was removed or replaced: unknown until `accept-routing`.
-    Narrowed { removed: usize, added: usize },
+    /// A marker removed or replaced, or an instruction block added: unknown
+    /// until `accept-routing`.
+    Narrowed {
+        removed: usize,
+        added: usize,
+        blocks_added: usize,
+    },
 }
 
+/// Compare accepted sets ([`Policy::accepted_set`]). A marker row lowers
+/// access when added; an `instruction:` row raises it when added.
 pub fn compare(accepted: &BTreeSet<String>, new: &BTreeSet<String>) -> Acceptance {
     if accepted.is_empty() {
         return Acceptance::Bootstrap;
     }
-    let removed = accepted.difference(new).count();
-    let added = new.difference(accepted).count();
-    if removed == 0 {
+    let is_block = |h: &&String| h.starts_with(BLOCK_ROW);
+    let removed = accepted.difference(new).filter(|h| !is_block(h)).count();
+    let added = new.difference(accepted).filter(|h| !is_block(h)).count();
+    let blocks_added = new.difference(accepted).filter(is_block).count();
+    if removed == 0 && blocks_added == 0 {
         Acceptance::Widened { added }
     } else {
-        Acceptance::Narrowed { removed, added }
+        Acceptance::Narrowed {
+            removed,
+            added,
+            blocks_added,
+        }
     }
 }
 
@@ -320,7 +396,8 @@ content_terms = ["clientword"]
             compare(&accepted, &set(&["a", "b"])),
             Acceptance::Narrowed {
                 removed: 1,
-                added: 0
+                added: 0,
+                blocks_added: 0
             }
         );
         // The same count with one marker replaced is still a narrowing.
@@ -328,8 +405,98 @@ content_terms = ["clientword"]
             compare(&accepted, &set(&["a", "b", "x"])),
             Acceptance::Narrowed {
                 removed: 1,
-                added: 1
+                added: 1,
+                blocks_added: 0
             }
+        );
+    }
+
+    fn block_entry(text: &str) -> String {
+        let b = InstructionBlock::of(text);
+        format!(
+            "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\" }}",
+            hex(&b.sha256),
+            b.bytes,
+            hex(&b.head_sha256)
+        )
+    }
+
+    fn with_blocks(entries: &str) -> String {
+        GOOD.replace(
+            "content_terms = [\"clientword\"]",
+            &format!("content_terms = [\"clientword\"]\ninstruction_blocks = [{entries}]"),
+        )
+    }
+
+    #[test]
+    fn registered_instruction_blocks_load_and_subtract() {
+        let fs = Files::new("blocks");
+        let text = format!("## Rules\n{}see /clientco/notes\n", "lab line. ".repeat(30));
+        let (r, f) = fs.write(&with_blocks(&block_entry(&text)), None);
+        let Load::Ready(p) = load_paths(&r, &f) else {
+            panic!("expected ready");
+        };
+        assert_eq!(p.instruction_hashes.len(), 1);
+        assert!(!p.markers.hits_message_text(&text), "the block is subtracted");
+        assert!(p.markers.hits_message_text(&format!("{text}/clientco")));
+        assert_eq!(
+            p.accepted_set().len(),
+            4,
+            "3 markers and 1 block in the accepted set"
+        );
+        // No key: no blocks, as before.
+        let (r, f) = fs.write(GOOD, None);
+        let Load::Ready(p) = load_paths(&r, &f) else {
+            panic!("expected ready");
+        };
+        assert!(p.instruction_hashes.is_empty());
+    }
+
+    #[test]
+    fn a_bad_instruction_entry_is_unknown() {
+        let fs = Files::new("badblocks");
+        let short = block_entry("## Rules\nsee /clientco\n");
+        let good = block_entry(&"lab line. ".repeat(30));
+        let bad = [
+            short.clone(),
+            good.replace("sha256 = \"", "sha256 = \"zz"),
+            good.replace("head_sha256", "head"),
+            good.replace("bytes = 300", "bytes = \"300\""),
+            "\"just a string\"".to_string(),
+        ];
+        for entry in bad {
+            let (r, f) = fs.write(&with_blocks(&entry), None);
+            assert_eq!(
+                reason(load_paths(&r, &f)),
+                "instruction_blocks invalid",
+                "{entry}"
+            );
+        }
+        let (r, f) = fs.write(&GOOD.replace("model", "instruction_blocks = 1\nmodel"), None);
+        assert_eq!(reason(load_paths(&r, &f)), "instruction_blocks invalid");
+    }
+
+    /// A block lowers what marks: adding one is a narrowing, removing one is not.
+    #[test]
+    fn adding_an_instruction_block_is_a_narrowing() {
+        let set = |xs: &[&str]| xs.iter().map(|s| (*s).to_string()).collect::<BTreeSet<_>>();
+        let accepted = set(&["a", "b", "instruction:x"]);
+        assert_eq!(
+            compare(&accepted, &set(&["a", "b", "instruction:x", "instruction:y"])),
+            Acceptance::Narrowed {
+                removed: 0,
+                added: 0,
+                blocks_added: 1
+            }
+        );
+        assert_eq!(
+            compare(&accepted, &set(&["a", "b"])),
+            Acceptance::Widened { added: 0 },
+            "a removed block marks more"
+        );
+        assert_eq!(
+            compare(&accepted, &set(&["a", "b", "c", "instruction:x"])),
+            Acceptance::Widened { added: 1 }
         );
     }
 }

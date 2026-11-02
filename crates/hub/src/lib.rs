@@ -321,7 +321,11 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
         ClientScopeAdmin::AcceptRouting { approved_by } => {
             let p = policy()?;
             client_admin::accept_routing(&pool, &p, &approved_by).await?;
-            println!("accepted the routing generation ({} markers); the hub adopts it at its next refresh", p.marker_hashes.len());
+            println!(
+                "accepted the routing generation ({} markers, {} instruction blocks); the hub adopts it at its next refresh",
+                p.marker_hashes.len(),
+                p.instruction_hashes.len()
+            );
         }
         ClientScopeAdmin::Clear {
             session,

@@ -1,0 +1,28 @@
+## 1. Classifier
+
+- [ ] 1.1 Tests first (`client_scope.rs`): a registered block is subtracted; one changed byte still
+      marks; text appended after the block marks; an attachment with a second, client file raises; a
+      block not at a line start marks; the same block in `search_text` and `raw` is subtracted.
+- [ ] 1.2 `InstructionBlocks` (head index, line-start search) and `Markers::with_instructions`; the
+      message extractor matches the pieces outside registered blocks.
+
+## 2. Policy
+
+- [ ] 2.1 Tests first (`client_policy.rs`): entries parse; short, malformed or non-hex entries make
+      the policy unknown; an added block is a narrowing, a removed block a widening.
+- [ ] 2.2 Parse `[protected].instruction_blocks`; `Policy::accepted_set` with `instruction:` rows;
+      `compare` reads the two kinds apart; `client_state` names the narrowing.
+
+## 3. CLI
+
+- [ ] 3.1 `hub client-scope instruction-entry FILE`: prints the TOML entry for the trimmed file.
+- [ ] 3.2 `hub client-scope census --routing FILE --floor FILE [--days N] [--ids]`: read-only,
+      counts by stamped → candidate class, ids that would be `none`. Test against the test database.
+
+## 4. Review and rollout
+
+- [ ] 4.1 Hub suite, clippy, fmt; `docs/archive/deployment.md` § client scope: registering a block.
+- [ ] 4.2 Diff to security (two-vendor review).
+- [ ] 4.3 Census on pg1 with a candidate routing file (the six global-file versions); counts and ids to
+      manager-aruba.
+- [ ] 4.4 Release; manager-aruba registers the blocks; infra runs `accept-routing` right after.

@@ -120,12 +120,17 @@ impl ClientScope {
                 .into_iter()
                 .collect();
         let gen = policy.generation.clone();
-        match client_policy::compare(&accepted, &policy.marker_hashes) {
-            Acceptance::Narrowed { removed, added } => {
-                let why = format!("routing narrowed: {removed} removed, {added} added; run client-scope accept-routing");
+        match client_policy::compare(&accepted, &policy.accepted_set()) {
+            Acceptance::Narrowed {
+                removed,
+                added,
+                blocks_added,
+            } => {
+                let why = format!("routing narrowed: {removed} removed, {added} added, {blocks_added} instruction blocks added; run client-scope accept-routing");
                 tracing::warn!(
                     removed,
                     added,
+                    blocks_added,
                     "client_scope policy change: narrowing, unknown until accepted"
                 );
                 audit(pool, "policy-narrowed", Some(&gen), Some(&why), None).await?;
@@ -133,7 +138,7 @@ impl ClientScope {
             }
             outcome => {
                 let (action, added) = match outcome {
-                    Acceptance::Bootstrap => ("policy-bootstrap", policy.marker_hashes.len()),
+                    Acceptance::Bootstrap => ("policy-bootstrap", policy.accepted_set().len()),
                     Acceptance::Widened { added } => ("policy-widened", added),
                     Acceptance::Narrowed { .. } => unreachable!(),
                 };
@@ -190,7 +195,7 @@ pub async fn record_set(pool: &PgPool, policy: &Policy, by: &str) -> anyhow::Res
     sqlx::query("DELETE FROM client_scope_policy")
         .execute(&mut *tx)
         .await?;
-    for h in &policy.marker_hashes {
+    for h in &policy.accepted_set() {
         sqlx::query(
             "INSERT INTO client_scope_policy (marker_hash, accepted_gen, accepted_by) VALUES ($1, $2, $3)",
         )

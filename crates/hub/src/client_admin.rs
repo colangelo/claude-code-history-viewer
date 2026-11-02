@@ -22,7 +22,11 @@ pub async fn accept_routing(
         pool,
         "accept-routing",
         Some(&policy.generation),
-        Some(&format!("{} markers", policy.marker_hashes.len())),
+        Some(&format!(
+            "{} markers, {} instruction blocks",
+            policy.marker_hashes.len(),
+            policy.instruction_hashes.len()
+        )),
         Some(approved_by),
     )
     .await
