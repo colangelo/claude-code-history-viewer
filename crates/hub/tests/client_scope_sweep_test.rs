@@ -250,8 +250,8 @@ async fn sessions_of_a_protected_entry_turn_client() {
 #[tokio::test]
 async fn the_census_matches_what_the_sweep_writes() {
     let e = env().await;
-    let a = session(&e, &["see clientco."]).await; // local
-    let b = session(&e, &["lab"]).await; // copy of a, on another machine
+    let s_local = session(&e, &["see clientco."]).await; // local
+    let s_copy = session(&e, &["lab"]).await; // copy of s_local, on another machine
     let other = Uuid::new_v4();
     sqlx::query("INSERT INTO machines (machine_id, hostname, os) VALUES ($1, $2, 'macos')")
         .bind(other)
@@ -263,18 +263,18 @@ async fn the_census_matches_what_the_sweep_writes() {
         "UPDATE sessions SET machine_id = $1, session_id = (SELECT session_id FROM sessions WHERE id = $2) WHERE id = $3",
     )
     .bind(other)
-    .bind(a)
-    .bind(b)
+    .bind(s_local)
+    .bind(s_copy)
     .execute(&e.pool)
     .await
     .unwrap();
-    let p = session(&e, &["lab"]).await; // parent
-    let c = session(&e, &["built clientco."]).await; // subagent child, local
+    let s_parent = session(&e, &["lab"]).await; // parent
+    let s_child = session(&e, &["built clientco."]).await; // subagent child, local
     sqlx::query(
         "UPDATE sessions SET file_path = '/x/' || (SELECT session_id FROM sessions WHERE id = $1) || '/subagents/a.jsonl' WHERE id = $2",
     )
-    .bind(p)
-    .bind(c)
+    .bind(s_parent)
+    .bind(s_child)
     .execute(&e.pool)
     .await
     .unwrap();
@@ -289,9 +289,9 @@ async fn the_census_matches_what_the_sweep_writes() {
     .execute(&e.pool)
     .await
     .unwrap();
-    let t = session(&e, &["the clientword deal"]).await;
-    let l = session(&e, &["plain lab"]).await;
-    let ids = vec![a, b, p, c, e1, e2, t, l];
+    let s_term = session(&e, &["the clientword deal"]).await;
+    let s_lab = session(&e, &["plain lab"]).await;
+    let ids = vec![s_local, s_copy, s_parent, s_child, e1, e2, s_term, s_lab];
 
     let census = hub::client_sweep::census(&e.pool, &e.policy, Some(&ids))
         .await
@@ -314,14 +314,20 @@ async fn the_census_matches_what_the_sweep_writes() {
             .fetch_all(&e.pool)
             .await
             .unwrap();
-    let count = |f: &dyn Fn(&str) -> bool| classes.iter().flatten().filter(|c| f(c)).count() as u64;
-    assert_eq!(count(&|c| c == "none"), census.lab);
+    let count = |f: &dyn Fn(&str) -> bool| {
+        classes
+            .iter()
+            .flatten()
+            .filter(|s_child| f(s_child))
+            .count() as u64
+    };
+    assert_eq!(count(&|s_child| s_child == "none"), census.lab);
     assert_eq!(
-        count(&|c| c != "none" && !c.starts_with("family:")),
+        count(&|s_child| s_child != "none" && !c.starts_with("family:")),
         census.local
     );
     assert_eq!(
-        count(&|c| c.starts_with("family:")),
+        count(&|s_child| c.starts_with("family:")),
         census.family_only + census.protected_entry_only
     );
 }
