@@ -58,6 +58,8 @@ struct World {
     client_id: i64,
     lab_id: i64,
     client_sid: String,
+    machine: Uuid,
+    machine_token: String,
     _dir: std::path::PathBuf,
 }
 
@@ -211,6 +213,8 @@ async fn world() -> World {
         client_id,
         lab_id,
         client_sid,
+        machine,
+        machine_token,
         _dir: dir,
     }
 }
@@ -594,4 +598,114 @@ async fn login_cookie_carries_the_tokens_scope_and_nothing_more() {
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 401);
+}
+
+/// Security O1: every predicate is total. An unscanned session (NULL class or
+/// generation) and a route-less entry are hidden from lab readers under NOT as
+/// well as under WHERE: entries, journal search, threads, pending and the
+/// health detail. The lab canary stays visible (positive control).
+#[tokio::test]
+async fn unscanned_sessions_and_route_less_entries_are_hidden() {
+    let w = world().await;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let r = Uuid::new_v4().simple().to_string();
+    let (unscanned, routeless) = (format!("unscannedcanary{r}"), format!("routelesscanary{r}"));
+    let two_days_ago = (chrono::Utc::now() - chrono::Duration::days(2))
+        .format("%Y-%m-%dT12:00:00Z")
+        .to_string();
+    // Three lab-looking sessions in three new projects.
+    let mut ids = Vec::new();
+    for (tag, ts) in [
+        ("u", "2026-10-29T12:00:00Z"),
+        ("n", "2026-10-29T12:00:00Z"),
+        ("p", two_days_ago.as_str()),
+    ] {
+        let (path, sid) = (format!("/w/o1-{tag}-{r}"), Uuid::new_v4().to_string());
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/ingest", w.base))
+            .bearer_auth(&w.machine_token)
+            .json(&json!({
+                "machine": {"machine_id": w.machine, "hostname": format!("rt-{}", &r[..8]), "os": "macos"},
+                "projects": [{"provider": "claude", "project_path": path, "name": "p"}],
+                "sessions": [{"provider": "claude", "session_id": sid, "project_path": path}],
+                "messages": [{"provider": "claude", "session_id": sid, "message_key": Uuid::new_v4().to_string(),
+                              "seq": 0, "timestamp": ts, "type": "user", "role": "user",
+                              "content": [{"type": "text", "text": "lab work"}], "raw": {"cwd": path}}],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_success());
+        let id: i64 = sqlx::query_scalar("SELECT id FROM sessions WHERE session_id = $1")
+            .bind(&sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        ids.push((path, id));
+    }
+    // "u" and "p" become unscanned: NULL generation (as before any sweep).
+    for k in [0, 2] {
+        sqlx::query("UPDATE sessions SET client_gen = NULL WHERE id = $1")
+            .bind(ids[k].1)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    // "u": a GENERAL entry over the unscanned session. "n": a ROUTE-LESS entry.
+    for (k, canary, route) in [(0, &unscanned, Some("general")), (1, &routeless, None)] {
+        let mut body = json!({
+            "entry_date": "2026-10-29", "project_path": ids[k].0, "status": "entry",
+            "headline": format!("entry {canary}"), "summary": format!("summary {canary}"),
+            "topics": ["one", "two", "three"], "open_questions": [format!("question {canary}")],
+            "session_ids": [ids[k].1], "model": "m",
+        });
+        if let Some(route) = route {
+            body["route"] = json!(route);
+        }
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/journal/entries", w.base))
+            .bearer_auth(&w.machine_token)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+    }
+    let hidden_path = &ids[2].0;
+    let mut leaks = Vec::new();
+    for url in [
+        "/v1/journal/entries?from=2026-10-01".to_string(),
+        format!("/v1/search?q={unscanned}&scope=journal"),
+        format!("/v1/search?q={routeless}&scope=journal"),
+        "/v1/journal/open-questions?days=3650".to_string(),
+        format!(
+            "/v1/journal/open-questions?days=3650&project={}",
+            urlencode(&ids[1].0)
+        ),
+        "/v1/journal/pending?from=2026-10-01&limit=500".to_string(),
+        "/v1/healthz/journal?within_days=7".to_string(),
+    ] {
+        for who in ["lab", "tailscale"] {
+            let (status, body) = get(&w, &url, who).await;
+            if body.contains(&unscanned)
+                || body.contains(&routeless)
+                || body.contains(hidden_path.as_str())
+            {
+                leaks.push(format!("{who} {url} -> {status}"));
+            }
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "unscanned / route-less material served to lab readers: {leaks:?}"
+    );
+    let (_, body) = get(&w, "/v1/journal/entries?from=2026-10-01", "lab").await;
+    assert!(
+        body.contains(&w.lab_canary),
+        "positive control: the stamped lab entry is still served"
+    );
 }

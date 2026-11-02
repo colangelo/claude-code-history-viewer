@@ -52,9 +52,11 @@ impl Visibility {
         match self {
             Visibility::All => "true".into(),
             Visibility::Lab(None) => "false".into(),
-            Visibility::Lab(Some(g)) => {
-                format!("({alias}.client_class = 'none' AND {alias}.client_gen = '{g}')")
-            }
+            // Total (security O1): an unscanned session (NULL class or
+            // generation) is NOT visible, under NOT as well as under WHERE.
+            Visibility::Lab(Some(g)) => format!(
+                "COALESCE({alias}.client_class = 'none' AND {alias}.client_gen = '{g}', false)"
+            ),
         }
     }
 
@@ -75,10 +77,10 @@ impl Visibility {
         match self {
             Visibility::All => "true".into(),
             Visibility::Lab(_) => format!(
-                "(cardinality({ids_expr}) > 0 AND NOT EXISTS (
+                "COALESCE(cardinality({ids_expr}) > 0 AND NOT EXISTS (
                     SELECT 1 FROM unnest({ids_expr}) AS vid(id)
                     LEFT JOIN sessions vs ON vs.id = vid.id
-                    WHERE vs.id IS NULL OR NOT {}))",
+                    WHERE vs.id IS NULL OR NOT {}), false)",
                 self.session_ok("vs")
             ),
         }
@@ -96,7 +98,7 @@ impl Visibility {
             Visibility::All => "true".into(),
             Visibility::Lab(None) => "false".into(),
             Visibility::Lab(Some(_)) => format!(
-                "({p}route IN ('general', 'general-restamped') AND {p}route_at = {p}generated_at AND {})",
+                "COALESCE({p}route IN ('general', 'general-restamped') AND {p}route_at = {p}generated_at AND {}, false)",
                 self.all_sessions_ok(&format!("{p}session_ids"))
             ),
         }
@@ -114,7 +116,7 @@ mod tests {
         let g = "a".repeat(64);
         assert_eq!(
             Visibility::Lab(Some(g.clone())).session_ok("s"),
-            format!("(s.client_class = 'none' AND s.client_gen = '{g}')")
+            format!("COALESCE(s.client_class = 'none' AND s.client_gen = '{g}', false)")
         );
     }
 }
