@@ -278,6 +278,38 @@ def resolve_token() -> str:
     sys.exit(1)
 
 
+# The distiller's own CLIENT-READ token (openspec hub-client-read-scope, D5,
+# R2-H): with it, an enforcing hub serves client sessions to the distiller,
+# which sends them only to the protected Claude route. Bao first, then a 0600
+# last-known-good cache. NEVER from the environment: an environment variable
+# is readable by every child process, a model CLI included.
+CLIENT_TOKEN_CACHE = Path.home() / ".config/cchv/distill-client-token"
+CLIENT_TOKEN_KV = "agents/cchv-client-readers/distiller"
+
+
+def resolve_client_token() -> str | None:
+    if os.environ.get("CCHV_HUB_CLIENT_TOKEN"):
+        log("ignoring CCHV_HUB_CLIENT_TOKEN: the client-read token is never taken from the environment")
+    client_token = bao_login()
+    tok = bao_kv_field(client_token, CLIENT_TOKEN_KV, "token") if client_token else None
+    if tok:
+        try:
+            CLIENT_TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            CLIENT_TOKEN_CACHE.write_text(tok)
+            CLIENT_TOKEN_CACHE.chmod(0o600)
+        except OSError as e:
+            log(f"could not cache the client-read token: {e}")
+        return tok
+    if CLIENT_TOKEN_CACHE.is_file():
+        cached = CLIENT_TOKEN_CACHE.read_text().strip()
+        if cached:
+            log("bao unavailable — using the last-known-good client-read token")
+            return cached
+    log("WARN: no client-read token: reading as a lab reader; under an enforcing hub, "
+        "client groups are not listed and stay undistilled")
+    return None
+
+
 # CLIProxyAPI "agents" Bearer key (headless coding agents class), same
 # resolution shape as the hub token: env → bao → last-known-good 0600 cache.
 # The bao path `kv/infra/aiproxy/proxy-keys` is infra-owned; the cchv-daemon
@@ -363,15 +395,20 @@ class Hub:
     url: str
     token: str
     session: requests.Session = field(default_factory=requests.Session)
+    # Reads go with the client-read token when there is one; writes (entries,
+    # ticks) always go with the machine token above.
+    read_token: str | None = None
 
     def __post_init__(self) -> None:
         self.session.headers["Authorization"] = f"Bearer {self.token}"
 
     def get(self, path: str, **params) -> requests.Response:
+        headers = {"Authorization": f"Bearer {self.read_token}"} if self.read_token else None
         r = self.session.get(
             f"{self.url}{path}",
             params={k: v for k, v in params.items() if v is not None},
             timeout=HTTP_TIMEOUT_SECS,
+            headers=headers,
         )
         r.raise_for_status()
         return r
@@ -1328,7 +1365,7 @@ def main() -> int:
         log(f"routing: protected → {r.model}; {len(r.path_markers)} path marker(s), "
             f"{len(r.content_terms)} content term(s)")
 
-    hub = Hub(args.hub_url, resolve_token())
+    hub = Hub(args.hub_url, resolve_token(), read_token=resolve_client_token())
     try:
         groups = hub.pending(from_date, limit)
     except requests.RequestException as e:

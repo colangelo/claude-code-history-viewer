@@ -1324,3 +1324,40 @@ CLIENT_SCOPE = json.loads((Path(__file__).parent / "fixtures/client-scope-cases.
 def test_client_scope_match_cases_are_the_distillers_behaviour(case) -> None:
     r = d.Routing(model="m", path_markers=CLIENT_SCOPE["markers"])
     assert r.marker_in(d.normalize(case["text"])) is case["match"]
+
+
+# --- client scope (D5, R2-H): reads with the client-read token, writes with the machine token,
+# and the client-read token never comes from the environment.
+
+def test_hub_reads_with_the_client_token_and_writes_with_the_machine_token(monkeypatch) -> None:
+    hub = d.Hub("http://hub.invalid", "machine-tok", read_token="client-tok")
+    seen = {}
+
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return []
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        seen["get"] = (headers or {}).get("Authorization") or hub.session.headers["Authorization"]
+        return R()
+
+    monkeypatch.setattr(hub.session, "get", fake_get)
+    hub.get("/v1/journal/pending")
+    assert seen["get"] == "Bearer client-tok"
+    assert hub.session.headers["Authorization"] == "Bearer machine-tok", "posts use the session default"
+    lab = d.Hub("http://hub.invalid", "machine-tok")
+    monkeypatch.setattr(lab.session, "get", fake_get)
+    lab.get("/v1/journal/pending")
+    assert seen["get"] == "Bearer machine-tok", "no client token: reads as before"
+
+
+def test_the_client_token_is_never_taken_from_the_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCHV_HUB_CLIENT_TOKEN", "from-env")
+    monkeypatch.setattr(d, "bao_login", lambda: None)
+    monkeypatch.setattr(d, "CLIENT_TOKEN_CACHE", tmp_path / "none")
+    assert d.resolve_client_token() is None
+    cache = tmp_path / "cache"
+    cache.write_text("cached-tok")
+    monkeypatch.setattr(d, "CLIENT_TOKEN_CACHE", cache)
+    assert d.resolve_client_token() == "cached-tok"
