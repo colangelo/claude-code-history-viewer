@@ -1,63 +1,91 @@
-# Tasks: hub client-read scope
+# Tasks: hub client-read scope (Revision 2)
 
-Nothing below starts until security's two-vendor review of `design.md` is OK (stage 0).
+Nothing below starts until security's re-check of design Revision 2 is OK.
 
-## 1. Matcher (D2)
+L1 (`/v1/healthz/journal` paths) is already fixed in v0.38.1.
 
-- [ ] 1.1 Write `scripts/fixtures/client-scope-cases.json`, made-up markers only:
-      - normalisation: URL-encoded, backslash, case;
-      - segment boundaries: punctuation and wrappers match, longer names do not, `.git` matches;
-      - classes: path, cwd, tool_input, text_marker, unreadable, none.
-- [ ] 1.2 Red: hub unit tests and the distiller's test both run the fixture. The hub side fails.
-- [ ] 1.3 Green: `crates/hub/src/client_scope.rs`, made of `normalize`, `Markers::load` (with the
-      floor check) and `classify_message`.
-- [ ] 1.4 Mutation check: drop the segment rule, and drop the decode. Both suites go red.
+## 1. Matcher and extractor (D2, R2-A, R2-K)
 
-## 2. Storage and flag (D1, D3, D4)
+- [ ] 1.1 Write `scripts/fixtures/client-scope-cases.json`, made-up markers only. It covers:
+      - normalisation: percent-decoding once, backslashes, Unicode case;
+      - segment boundaries;
+      - literal-substring-first behaviour;
+      - every content block shape: text, thinking, nested tool_use and tool_result, images and
+        documents, an unknown shape (unreadable);
+      - `raw` leaves, metadata fields, a marker past 64 KiB.
+- [ ] 1.2 Red: the hub and the distiller suites both run the fixture, plus property tests (a marker
+      inserted at a random place in a random block).
+- [ ] 1.3 Green: `client_scope.rs`, with `normalize`, `Markers`, `Extract` (one extractor for ingest
+      and sweep: full `content`, full `raw`, session and project fields; size, depth and shape limits
+      mean unreadable) and `classify`.
+- [ ] 1.4 Mutation check: drop the segment rule, the decode, the tool_result walk and the `raw`
+      walk. Each one turns a suite red.
+
+## 2. Storage, policy, family (R2-B, R2-C, R2-D)
 
 - [ ] 2.1 Migration:
-      - `sessions.client_class TEXT NULL` plus `client_scanned_sha TEXT NULL`;
-      - table `client_scope_state` (routing_sha, swept_at);
-      - table `client_scope_clears` (session, class, approved_by, at).
-- [ ] 2.2 Red, then green: ingest sets the class in the batch transaction. The flag is sticky: a
-      later `none` never clears a client class.
-- [ ] 2.3 Red, then green: CLI `client-scope sweep [--dry-run] [--batch N]`. It prints counts by
-      class only, and it is re-entrant.
-- [ ] 2.4 Red, then green: CLI `client-scope clear --session <id> --approved-by <who>`. It is
-      audited and refuses without an approval.
-- [ ] 2.5 Fail-closed tests:
-      - a missing routing file, one below floor, or one whose hash changed puts the hub in
-        `unknown`, and every session counts as client under enforce;
-      - an unscanned session counts as client;
-      - `/v1/healthz/client-scope` answers 503 when unknown.
+      - `sessions`: `client_class`, `client_gen`, `client_scanned_upto`, `row_rev`;
+      - new tables `client_scope_policy` (marker hashes, generation), `client_scope_state` (mode,
+        `enforced_at`) and `client_scope_audit`.
+- [ ] 2.2 Policy snapshot, re-validated every 60 s and per batch:
+      - a generation change withdraws lab visibility first;
+      - markers only added: accept;
+      - any marker removed or replaced: `unknown` until `accept-routing`.
 
-## 3. Scopes and routes (D5, D6)
+      Tests: delete, corrupt, extend, replace, and a same-count swap.
+- [ ] 2.3 Ingest:
+      - classify every batch in its own transaction, metadata-only updates included;
+      - the watermark rule;
+      - family propagation (copies, parent and child, orphan quarantine).
+
+      Tests per R2-A and R2-B.
+- [ ] 2.4 Sweep: `client-scope sweep [--dry-run]`. Writes are monotonic and conditional on the
+      revision; it survives a crash and a resume, and two sweeps at once are safe. Its counts are
+      per session, by class, plus term-only sessions the hub would leave lab (this one needs the
+      terms read-only, counted, never used for the flag).
+- [ ] 2.5 Audited CLIs: `accept-routing`, `clear`, `unlatch`, `restamp-history [--dry-run]`.
+      Each refuses to run without `--approved-by`.
+
+## 3. Scopes and routes (D5, D6, R2-E, R2-F, R2-G)
 
 - [ ] 3.1 Config:
-      - `client_read` on `[[tokens]]` and `[[readers]]` (`deny_unknown_fields` kept);
+      - `client_read` on token entries, carried as a **hash** in the rendered config;
       - `[client_scope] routing_file`, `floor_file`, `enforce`.
-- [ ] 3.2 `Reader { principal, scope }` replaces `Authenticated`, and the Tailscale identity is
-      always `Lab`. Each statement takes `Visibility` with no default, and the predicate helper
-      builds the filter.
-- [ ] 3.3 Every route in the D6 table, each with a test for its lab-read behaviour.
-- [ ] 3.4 Route-walk canary test over every registered GET route. Mutation: remove one predicate,
-      and the test goes red.
-- [ ] 3.5 Alias writes: a lab-read caller naming a client project gets 404.
+- [ ] 3.2 `Reader { principal, scope }`. The Tailscale identity is always `Lab`. `Visibility` is an
+      argument with no default on every statement, and one predicate helper builds the filter.
+- [ ] 3.3 Routes: search (every mode, pagination), browse, session messages, journal entries and
+      threads (full-history provenance), stats (from visible rows; the mirror's class and
+      generation, 503 when stale), identities and aliases, and the journal health detail.
+- [ ] 3.4 One missing-resource contract. Visibility is applied before id resolution (ambiguity
+      400s), and writes are authorized before validation.
+- [ ] 3.5 Request-case registry (fails when a route has no case), differential tests (hidden rows
+      deleted), HEAD, the Tailscale header, positive controls. Mutation: remove one predicate, and
+      it goes red.
+- [ ] 3.6 `POST /v1/login`: the HttpOnly cookie exchange for a client-read token; the webapp drops
+      its `localStorage` copy after it.
 
-## 4. Consumers
+## 4. Consumers and enforcement latch (R2-H, R2-I)
 
-- [ ] 4.1 Launcher: render `kv/agents/cchv-client-readers/*` with `client_read = true`; any
-      duplicate is fatal. Extend the e2e harness.
-- [ ] 4.2 Distiller:
-      - reads with the client-read token and writes with the machine token;
-      - `route_group` asks the hub's class first;
-      - the fixture test from 1.2 runs on the distiller side.
-- [ ] 4.3 Docs: `docs/archive/deployment.md` (scopes, the bao paths, enforce and rollback).
+- [ ] 4.1 Launcher: render the `cchv-client-readers` children as hashes with `client_read = true`;
+      duplicates are fatal; a minimum hub version once `enforced_at` is set. Extend the e2e
+      harness: bao down, an observe-era cache, a revoked token.
+- [ ] 4.2 The enforcement latch, and a health field `client_scope.mode`.
+- [ ] 4.3 Distiller:
+      - its own client token file;
+      - it refuses a client token from the environment;
+      - it reads the hub's class first;
+      - the fixture test.
+- [ ] 4.4 Docs: `deployment.md`, covering scopes, where credentials rest (the R2-H table), the
+      latch, rollback to an enforcing version, and the audited CLIs.
 
-## 5. Rollout (D7)
+## 5. Rollout (R2-I)
 
-- [ ] 5.1 Gate green, then send security the code review. Release in observe mode.
-- [ ] 5.2 infra runs the sweep dry run, then the sweep. Counts go to security and manager-aruba.
-- [ ] 5.3 Tokens minted on ac's row; the distiller switches; read-back.
-- [ ] 5.4 `enforce = true`, then the probes from D7 stage 4.
-- [ ] 5.5 Blog client audience on its own token (context). Security closes the hub half of R5.
+- [ ] 5.1 Gate green, then security's code review, then release in observe mode.
+- [ ] 5.2 infra runs the sweep dry run, then the sweep. Per-session counts go to security and
+      manager-aruba, and manager-aruba re-decides on terms. infra also runs the `restamp-history`
+      dry run, counts to security and manager-aruba.
+- [ ] 5.3 Tokens minted on ac's row; the distiller switches; read-back (no 404 expected).
+- [ ] 5.4 Enforce: probe the effective mode, then the lab, Tailscale and blog probes, and the
+      client-token probes.
+- [ ] 5.5 Blog client audience (context). GPT denyRead covers every R2-H place, with a live check
+      from a GPT session. Security closes the hub half of R5.

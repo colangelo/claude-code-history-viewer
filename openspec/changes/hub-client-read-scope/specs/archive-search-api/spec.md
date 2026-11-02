@@ -51,3 +51,32 @@ every session SHALL count as client.
 - **WHEN** the route-walk test calls every registered GET route as a lab reader with a client
   canary seeded
 - **THEN** the canary appears in no response
+
+#### Scenario: Classification reads the full stored form
+- **WHEN** a marker occurs only past 64 KiB of text, only in a tool result, only in thinking, only
+  in `raw`, only in the session summary or file path, or only in a metadata-only update
+- **THEN** the session is client, both at ingest and in the sweep
+
+#### Scenario: A session family is protected together
+- **WHEN** one member of a family (copies of one provider session id, a parent and its sidechains,
+  or the sessions of a protected journal entry) is client
+- **THEN** every member is client for lab readers
+
+### Requirement: Client scope cannot silently lapse
+
+A removed or replaced marker SHALL put the hub in `unknown` until an audited accept. Once the hub
+has enforced, a configuration that says `enforce = false` SHALL NOT turn enforcement off without an
+audited unlatch. Lab-read stats SHALL be computed from visible sessions only, and SHALL answer 503
+when the stats mirror cannot prove the current client state.
+
+#### Scenario: Same-count marker swap
+- **WHEN** a marker is replaced by another and the floor record is updated to match
+- **THEN** every session counts as client for lab readers until `accept-routing` records the new set
+
+#### Scenario: Stale observe-era config after enforcement
+- **WHEN** the hub restarts with `enforce = false` after it has enforced once
+- **THEN** it keeps enforcing, logs an alert line, and its health route answers 503
+
+#### Scenario: Client-only names stay out of lab stats
+- **WHEN** a skill, tool, model or date occurs only in client sessions
+- **THEN** no lab-read stats response contains it

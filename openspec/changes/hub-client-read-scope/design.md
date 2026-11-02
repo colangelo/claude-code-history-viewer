@@ -1,10 +1,279 @@
 # Design: hub client-read scope
 
-Status: DRAFT for security's two-vendor review. No code until it is OK'd.
+Status: REVISION 2, for security's single-reader re-check. No code until it is OK'd.
+
+- Revision 1 (0757504b) had security's two-vendor review: ac/security
+  `docs/reviews/2026-11-02-cchv-hub-client-read-scope.md`. The verdict was that the shape holds, the
+  design needs revising, and then the build can start.
+- The section **Revision 2** below answers the review's items D-A to D-J and the P3 notes.
+- Where Revision 2 and D1–D7 disagree, **Revision 2 wins**.
 
 Author: cchv, 2026-11-02.
 
 Origin: security R5 ruling, relayed by manager-lab (bell c78fc25a).
+
+## Revision 2 (security review, 2026-11-02)
+
+**Live finding L1** (`/v1/healthz/journal` gave `project_path` to callers without a credential) is
+fixed separately, in v0.38.1. A group's `project_path` now goes only to a read principal. Once this
+change lands, that detail also passes through `Visibility`: a lab reader gets no path of a client
+group.
+
+### R2-A. Classify everything a route can serve, from the full stored form (D-A, P1)
+
+**One extractor, `client_scope::Extract`, used by both ingest and the sweep.** It yields every
+string a read route can serve:
+
+| source | what is extracted |
+|---|---|
+| a message's `content` | in full, walked recursively: text, thinking, tool_use inputs (every string leaf), tool_result content (every string leaf, nested arrays included), and image or document blocks' names and paths |
+| a message's `raw` | in full: every string leaf, keys included, so that `cwd`, `gitBranch`, `toolUseResult` and attachment paths are covered |
+| the session row | `summary`, `file_path`, `entrypoint`, the project path |
+| the project row | `project_path`, `name`, and the identity fields served by `/v1/identities` (git remote, worktree main path) |
+
+- **What is not read:** the sweep never reads `search_text`. That copy is clamped at 64 KiB
+  (`ingest.rs SEARCH_TEXT_MAX_BYTES`), and the routes serve `content` and `raw` in full.
+- **Limits:**
+  - per message: 16 MiB of extracted text, and a nesting depth of 64;
+  - per session at ingest: no limit, because each batch is classified as it arrives.
+
+  Past a limit, or for a JSON shape it does not know, the extractor returns `unreadable`, which is
+  client. A field the hub stores clamped or truncated is classified from the unclamped value it
+  received. If only a clamped copy exists, it is `unreadable`.
+- **Metadata-only updates:** a batch that only upserts a session or project row (a new summary, a
+  new file path) is classified in the same transaction as the update.
+
+**Tests.** A marker in each of these places hides the session, both at ingest and in the sweep:
+
+- past 64 KiB of text;
+- only in a nested tool_result;
+- only in thinking;
+- only in `raw` (`cwd`);
+- only in the summary;
+- only in `file_path`;
+- only in a metadata-only update to a lab session;
+- in an unknown block shape (counts as unreadable).
+
+### R2-B. Protection propagates across a session family (D-B, P2)
+
+A session's *family* is every session that shares any of these:
+
+- the same `(provider, provider session_id)`, from any machine (copies);
+- a parent or child link: a sidechain or subagent transcript whose `raw` names the parent's
+  provider session id, and the parent itself;
+- a distiller group (`entry_date`, `project_path`) that a journal entry marked `route = protected`.
+  Every session in that entry's `session_ids` is in the family.
+
+**Rules:**
+
+- A client class on any member makes every member client, with class `family:<member class>`.
+- Propagation runs in the same transaction as the flag, at ingest and in the sweep, so the family
+  can only grow.
+- A link the hub cannot verify (a parent id that names no stored session) quarantines the child as
+  `family:unverified` until the parent arrives and is classified.
+
+**Tests:**
+
+- two machine copies with the marker in one only: both are hidden;
+- a sidechain-only hit hides the parent;
+- a parent-only hit hides the sidechain;
+- a protected journal entry hides all of its sessions;
+- an orphan child stays hidden until its parent is ingested lab.
+
+### R2-C. Policy freshness and scan coverage (D-C, P2)
+
+- **Policy generation.** The routing file and the floor file are read as one snapshot:
+  - generation = sha256 of (routing bytes ‖ floor bytes);
+  - they are re-validated every 60 s, and at the start of each ingest batch.
+- **A generation change** (the file is deleted, corrupted, extended or replaced) moves the hub to
+  the new generation *before* any read under it. Every session scanned under an older generation
+  stops being lab at that moment.
+- **Scan watermark.** Each session keeps `client_gen` and `client_scanned_upto`: the highest message
+  id and the session row revision covered by a complete scan under `client_gen`. A session is lab
+  only when all three hold:
+  - `client_class = 'none'`;
+  - `client_gen` is the current generation;
+  - the watermark covers every stored message and the current row revision.
+
+  A harmless new message classified at ingest moves the watermark only when the session was already
+  complete under the current generation. Otherwise the session stays unscanned until the sweep
+  reaches it.
+- **Sweep writes:**
+  - `UPDATE … WHERE client_gen IS DISTINCT FROM $gen AND row_rev = $seen_rev`;
+  - each write is monotonic (class only rises, from `none` to client), so a crash, a resume, or two
+    sweeps at once cannot lower a flag.
+- **Tests:**
+  - delete, corrupt, extend and replace the file under a running hub: lab visibility is withdrawn
+    within one interval;
+  - add a marker that matches an old message, then ingest a harmless message into that session
+    before the sweep: the session stays hidden;
+  - pause a sweep around a matching ingest: the session ends client.
+
+### R2-D. Narrowing: the hub keeps its own accepted marker set (D-D, P2)
+
+- **The record.** Table `client_scope_policy` holds the accepted marker set as one sha256 per
+  marker, plus the generation.
+- **What the hub does at a generation change:**
+  - markers only added: accept automatically; access only narrows;
+  - any marker removed or replaced, same count included: the hub goes `unknown` (every session
+    client, the health route 503) until `cchv-hub client-scope accept-routing --approved-by <who>`
+    records the new set.
+- **Logging and approval:**
+  - every generation change logs one line, `client_scope policy change: added N removed M`, which
+    monitoring can alert on;
+  - the approval name is attribution, not authentication (as security says).
+- **Who approves a narrowing:**
+  - for any session under the client tree, or carrying a client marker: ac, on the client desk's
+    row (manager-aruba, Q4);
+  - never a lab session, a lab token or a lab desk row alone;
+  - the audit table records the session or marker hash, the policy generation, the reason and the
+    approver, and security reads it at each review.
+- **Test:** a same-count marker swap with a matching floor record goes `unknown`.
+
+### R2-E. Stats from visible rows only (D-E, P2)
+
+- **Lab aggregates are built from visible sessions only,** before grouping and ranking. That covers
+  totals, `most_used_tools`, `most_used_skills`, `most_used_subagents`, model names, date buckets,
+  per-project and per-session stats. This replaces my earlier answer to Q2 (counts-only totals)
+  for everything except true totals.
+- **The DuckDB stats mirror carries `client_class` and `client_gen` per session.**
+  - A lab stats query filters on them.
+  - If the mirror's generation is not the hub's current one, or its refresh is older than the last
+    flag change, lab stats answer 503 with the reason. They never serve a stale view.
+- **Tests:**
+  - a skill name used only in a client session is absent from lab stats;
+  - a date with only client activity is absent;
+  - a mirror frozen across a client flip stops serving that session to lab readers.
+
+### R2-F. Journal provenance (D-F, P2)
+
+**Entries.** An entry is client when any of these holds:
+
+- any of its `session_ids` is client;
+- `session_ids` is empty or names a missing session;
+- `route` is `protected`;
+- `route` is missing (every entry before v0.34.0);
+- `route_at != generated_at`.
+
+So every entry from before v0.34.0 (no route stamp) is hidden from lab readers. That is
+fail-closed, and it follows Q3 (hidden, no redaction). The same goes for 11-01, whose entries
+were all protected (review H6).
+
+**The cost:** lab readers, the blog included, lose the whole journal history until it is
+re-proven.
+
+**The way back is one audited step per entry:**
+
+- **The command:** `cchv-hub client-scope restamp-history --dry-run | --approved-by <who>` runs the
+  distiller's current whole-session router over each historical entry's sessions. That is the full
+  router: path, cwd, tool input, text marker and **content terms**. It is the same procedure as the
+  10-21..10-31 dry re-route of 2026-11-02.
+- **Only an entry where nothing matches** gets `route = 'general-restamped'` plus a current
+  `route_at`. Anything else stays hidden.
+- **Before it writes:** the dry run's counts go to security and manager-aruba first.
+
+**Threads (open questions).** A thread's protection is computed over its full source history, before
+the display window and the filters apply. The thread is client if any entry that opened, continued
+or resolved it is client.
+
+**Tests:**
+
+- a route-less entry;
+- a stale stamp;
+- a missing session reference;
+- a thread whose earlier source entry turns client after the thread was shown.
+
+### R2-G. No existence oracles (D-G, P2)
+
+- **Visibility is applied before id resolution:**
+  - a provider session id that is ambiguous across machines counts only visible candidates, and the
+    400 lists only visible numeric ids;
+  - a provider id whose only matches are client gets the same 404 as an unknown id.
+- **One missing-resource contract:** 404 with body `{"error":"not found"}`, the same for a hidden
+  row and a missing row, with or without a time window.
+- **Writes are authorized on their target before any data-dependent validation:**
+  - journal POST, ticks: machine token, unchanged;
+  - alias create and delete: a lab-read caller naming a client project gets that 404 before any
+    duplicate or cycle check.
+- **Tests:** differential (R2-J). Each response is compared with the same request after the hidden
+  rows are physically deleted.
+
+### R2-H. Where client-read credentials rest (D-H, P2, a gate on closing R5)
+
+| place | change |
+|---|---|
+| bao `kv/agents/cchv-client-readers/*` | readable by the launcher AppRole and ac only (infra's policy) |
+| the launcher's bao authority (AppRole `cchv-daemon`, creds `~/.config/cchv/bao-approle`) | named here; on the never-read list |
+| rendered `hub.runtime.toml` | holds **sha256 hashes** of client-read tokens, never the tokens; the hub compares hashes |
+| the distiller's token cache | its own file, `~/.config/cchv/distill-client-token` (mode 600); on the never-read list |
+| environment overrides (`CCHV_HUB_TOKEN`) | the distiller refuses a client-read token from the environment |
+| ac's browser | **`POST /v1/login`** exchanges the pasted token for an HttpOnly, Secure, SameSite=Strict session cookie (8 h); the webapp then deletes its `localStorage` copy |
+
+- **Closing R5** needs context's GPT denyRead to cover every row above, including browser profile
+  folders.
+- **Live check from a GPT-routed session:** each place is unreadable, and the hub is unreachable.
+
+### R2-I. Rollout and rollback (D-I, P2)
+
+| stage | what | gate |
+|---|---|---|
+| 1 | build, gate, code review | security's code review |
+| 2 | release in observe mode; sweep dry run, then sweep | counts to security and manager-aruba, **per session**: by class, plus the term-only sessions the hub would leave lab (Q1, H10) |
+| 3 | mint the client-read tokens (ac's row); the distiller switches tokens | read-back: the distiller reads a client session **with the client token**, and a client token sees what a lab token sees plus the client rows. No 404 is expected in observe mode |
+| 4 | enforce | probe the running process's **effective mode** on the health route (`client_scope.mode: enforce`), then lab, Tailscale and blog probes get 404 or absence, and client tokens see the rows |
+| 5 | blog client audience | security closes the hub half of R5 |
+
+- **Enforcement latch.** The first start with `enforce = true` writes `client_scope_state.enforced_at`.
+  After that, a config saying `enforce = false` (a stale observe-era `hub.runtime.toml` from the
+  launcher's cached fallback, for example) does **not** turn it off. The hub enforces, logs an
+  alert line, and the health route answers 503.
+- **Turning it off** needs `cchv-hub client-scope unlatch --approved-by <who>`: audited, an
+  emergency switch only.
+- **Rollback is to an enforcing version.** A binary older than this change cannot enforce, so the
+  rollback copy kept at stage 4 is the previous enforcing build.
+- **Tests:** each stage with bao down, with an observe-era cached config, with a revoked token, and
+  with an older binary (the latch survives, and an older binary is refused by the launcher's minimum
+  version check once enforced).
+
+### R2-J. The oracle: request-case registry plus differential tests (D-J, P2)
+
+- **The registry.** `tests/client_scope_cases.rs` holds one case per registered route and method.
+  A test enumerates the router and fails when a route has no case.
+- **Each case runs** as:
+  - a lab token;
+  - the trusted Tailscale header;
+  - a client token;
+  - no credential;
+  - a HEAD request where GET exists.
+- **Search runs in every mode** (text, hybrid, journal) and across pagination.
+- **Differential.** For each lab-read response, the same request runs against a copy of the DB
+  where the hidden rows are physically deleted. Status, headers (`X-Total-Count` included), body,
+  ids, counts, ranks and order must be equal. This catches leaks of ids, counts and ordering, not
+  only of strings.
+- **Positive controls.** Each case asserts that it reached its handler: the lab canary is present
+  where it should be.
+- **Mutation check:** remove one `Visibility` predicate, and the registry goes red.
+
+### R2-K. P3 notes
+
+- **Matcher spec (Astra 18).** `client_scope.rs` documents:
+  - byte decoding (UTF-8 with replacement; percent-decoding once);
+  - case folding (Unicode lowercase);
+  - the literal-substring-first behaviour of `marker_in`;
+  - path joins;
+  - unknown block shapes (unreadable).
+
+  The shared fixture file adds property tests: a random lab string plus a marker inserted at a
+  random place, in a random block, is client.
+- **R6 restated (Astra 8).** A session stays lab until its first marked message arrives, and that may
+  be never: R6 is the same residual as R4, not "about 5 minutes".
+- **Project metadata (H7, Astra 14).**
+  - When the project path itself matches a marker, the project's rows, aliases, worktree main paths
+    and suggestions are hidden.
+  - Otherwise they are shown, with counts over visible sessions only.
+- **Content terms: not at launch** (Q1, manager-aruba; Astra disagrees, recorded). Stage 2 counts,
+  per session, the sessions the distiller protected by a term only that the hub would leave lab.
+  manager-aruba decides again with that number.
 
 ## Context
 
