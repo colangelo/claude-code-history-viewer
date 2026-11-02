@@ -1136,7 +1136,7 @@ def test_a_general_day_after_a_protected_day_offers_none_of_its_threads(tmp_path
     assert hub.entries[1]["route"] == "general"
 
 
-# --- log hygiene on protected groups (#84 security-aruba #18, review 3 M9) -----
+# --- log hygiene on protected groups (#84 the client's security review #18, review 3 M9) -----
 #
 # On a protected group no log line or raised message carries a slice of model
 # or CLI output: lengths, exit codes, a hash and the class only.

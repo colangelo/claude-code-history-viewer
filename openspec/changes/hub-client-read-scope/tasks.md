@@ -48,7 +48,7 @@ L1 (`/v1/healthz/journal` paths) is already fixed in v0.38.1.
 - [ ] 2.5 Audited CLIs: `accept-routing`, `clear`, `unlatch`, `restamp-history [--dry-run]`.
       Each refuses to run without `--approved-by`. `restamp-history` classifies the entry's own text
       (summary, threads, every served field) and its sessions with the full router, terms included,
-      and restamps only when both match nothing. Its write waits for ac's row and manager-aruba's
+      and restamps only when both match nothing. Its write waits for ac's row and the client manager's
       word.
 
 ## 3. Scopes and routes (D5, D6, R2-E, R2-F, R2-G)
@@ -87,8 +87,8 @@ L1 (`/v1/healthz/journal` paths) is already fixed in v0.38.1.
 
 - [ ] 5.1 Gate green, then security's code review, then release in observe mode.
 - [ ] 5.2 infra runs the sweep dry run, then the sweep. Per-session counts go to security and
-      manager-aruba, and manager-aruba re-decides on terms. infra also runs the `restamp-history`
-      dry run, counts to security and manager-aruba.
+      the client manager, and the client manager re-decides on terms. infra also runs the `restamp-history`
+      dry run, counts to security and the client manager.
 - [ ] 5.3 Tokens minted on ac's row; the distiller switches; read-back (no 404 expected).
 - [ ] 5.4 Enforce: probe the effective mode, then the lab, Tailscale and blog probes, and the
       client-token probes.

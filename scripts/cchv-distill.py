@@ -517,7 +517,7 @@ class Hub:
                 # retries a 5xx but re-raises a 4xx; keep the body in the message
                 # for the failure log either way.
                 # A protected (or route-less) entry's error body may echo its
-                # text: describe it instead (security-aruba #18).
+                # text: describe it instead (the client's security review #18).
                 body = r.text[:500] if payload.get("route") == "general" else describe(r.text)
                 raise requests.HTTPError(
                     f"POST /v1/journal/entries {r.status_code}: {body}",
@@ -958,7 +958,7 @@ PROXY_ENV = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN")
 
 def describe(text: str) -> str:
     """Text as length and hash only: what a protected group's log may carry
-    instead of a slice of model or CLI output (security-aruba #18)."""
+    instead of a slice of model or CLI output (the client's security review #18)."""
     return f"<{len(text)} chars, sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]}>"
 
 
@@ -967,7 +967,7 @@ def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str
 
     `direct` strips the proxy variables, so the call cannot leave the direct login.
     It is the protected call, so its errors describe the CLI's output by length
-    and hash and never quote it (security-aruba #18).
+    and hash and never quote it (the client's security review #18).
     """
     env = {k: v for k, v in os.environ.items() if not (direct and k in PROXY_ENV)}
 

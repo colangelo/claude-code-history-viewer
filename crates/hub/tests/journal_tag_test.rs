@@ -1,4 +1,4 @@
-//! Journal read protection (#84 review 3 M2, security-aruba #19;
+//! Journal read protection (#84 review 3 M2, the client's security review #19;
 //! openspec/changes/journal-read-protection-tag): every journal read carries
 //! the counted `route`, and every text field of a non-general row starts with
 //! the protection tag. Helpers copied from `journal_threads_test.rs`.

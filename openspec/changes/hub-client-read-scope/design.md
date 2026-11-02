@@ -124,7 +124,7 @@ A session's *family* is every session that shares any of these:
   - the approval name is attribution, not authentication (as security says).
 - **Who approves a narrowing:**
   - for any session under the client tree, or carrying a client marker: ac, on the client desk's
-    row (manager-aruba, Q4);
+    row (the client manager, Q4);
   - never a lab session, a lab token or a lab desk row alone;
   - the audit table records the session or marker hash, the policy generation, the reason and the
     approver, and security reads it at each review.
@@ -170,11 +170,11 @@ re-proven.
   10-21..10-31 dry re-route of 2026-11-02.
 - **Only an entry where nothing matches** gets `route = 'general-restamped'` plus a current
   `route_at`. Anything else stays hidden.
-- **Before it writes:** the dry run's counts go to security and manager-aruba first.
+- **Before it writes:** the dry run's counts go to security and the client manager first.
 - **Security's additions (re-check of Revision 2, 2026-11-02):**
   - **The entry's own text** is classified too: summary, threads and every served field. An entry
     is restamped only when both its own text and its sessions match nothing.
-  - **The write** happens only after ac approves it on one row, with manager-aruba's word. It makes
+  - **The write** happens only after ac approves it on one row, with the client manager's word. It makes
     material lab that is hidden today (Q4).
 - **Stage 2 also counts** sessions hidden *only* by family from a term-protected entry (R2-B). Most
   sessions since 11-01 are in that set: fail-closed, and expected.
@@ -228,7 +228,7 @@ or resolved it is client.
 | stage | what | gate |
 |---|---|---|
 | 1 | build, gate, code review | security's code review |
-| 2 | release in observe mode; sweep dry run, then sweep | counts to security and manager-aruba, **per session**: by class, plus the term-only sessions the hub would leave lab (Q1, H10) |
+| 2 | release in observe mode; sweep dry run, then sweep | counts to security and the client manager, **per session**: by class, plus the term-only sessions the hub would leave lab (Q1, H10) |
 | 3 | mint the client-read tokens (ac's row); the distiller switches tokens | read-back: the distiller reads a client session **with the client token**, and a client token sees what a lab token sees plus the client rows. No 404 is expected in observe mode |
 | 4 | enforce | probe the running process's **effective mode** on the health route (`client_scope.mode: enforce`), then lab, Tailscale and blog probes get 404 or absence, and client tokens see the rows |
 | 5 | blog client audience | security closes the hub half of R5 |
@@ -281,9 +281,9 @@ or resolved it is client.
   - When the project path itself matches a marker, the project's rows, aliases, worktree main paths
     and suggestions are hidden.
   - Otherwise they are shown, with counts over visible sessions only.
-- **Content terms: not at launch** (Q1, manager-aruba; Astra disagrees, recorded). Stage 2 counts,
+- **Content terms: not at launch** (Q1, the client manager; Astra disagrees, recorded). Stage 2 counts,
   per session, the sessions the distiller protected by a term only that the hub would leave lab.
-  manager-aruba decides again with that number.
+  the client manager decides again with that number.
 
 ## Context
 
@@ -455,7 +455,7 @@ Client-read holders at launch:
 3. **The blog's client audience.** A second reader token, `kv/agents/cchv-client-readers/blog-client`,
    used only by the blog's Claude-only writer. The blog's existing `agents-blog` token stays lab
    read.
-4. **Claude-only client sessions that need archive search** (manager-aruba's fleet, through
+4. **Claude-only client sessions that need archive search** (the client manager's fleet, through
    cchv-find). One token per session family, each added on ac's row. None is minted at launch.
 
 The launcher renders the `cchv-client-readers` children with `client_read = true`. It applies the
@@ -516,7 +516,7 @@ that names a client project. They answer 404.
 |---|---|---|
 | 0 | this design | security two-vendor review (Claude Opus plus GPT Astra on code and fake fixtures only) |
 | 1 | build: migration, matcher plus fixtures, ingest flag, sweep CLI, `Reader`/`Visibility`, every route, route-walk test, launcher, distiller token | gate green; security review of the code |
-| 2 | release in `observe` mode: flags computed, nothing hidden; infra runs `client-scope sweep --dry-run`, then the sweep | security reads the counts by class (no names, to manager-aruba too) |
+| 2 | release in `observe` mode: flags computed, nothing hidden; infra runs `client-scope sweep --dry-run`, then the sweep | security reads the counts by class (no names, to the client manager too) |
 | 3 | infra mints the client-read tokens (distiller, ac-browser, blog-client) on ac's row; the distiller switches tokens | read-back: the distiller still reads client sessions, the lab token gets 404 |
 | 4 | `enforce = true` in `hub.toml` | probes: lab token, Tailscale identity and blog `agents-blog` get the client canary 404 or absent; client-read tokens see it |
 | 5 | context points the blog's client audience at its own token | security closes R5 (hub half) |
@@ -537,7 +537,7 @@ computed.
 - **R2. Matcher drift between Python and Rust.** Mitigated by D2's shared fixtures. A marker form
   one side does not know fails both test suites.
 - **R3. Over-hiding.** `text_marker` may hide lab sessions that discuss a client folder (for
-  example cchv's own sessions answering manager-aruba). This is acceptable, and it is fail-closed.
+  example cchv's own sessions answering the client manager). This is acceptable, and it is fail-closed.
   The stage 2 counts show how much. Narrowing goes through D3's audited clear.
 - **R4. Under-hiding.** A client session with no marker anywhere (the client never named in path,
   cwd or text) stays lab. The distiller has the same limit, apart from its terms. The stage 2
@@ -572,9 +572,9 @@ computed.
 
 ### Answers so far
 
-manager-aruba, 2026-11-02 00:10Z (bell 312663ad), for the client side:
+The client manager, 2026-11-02 00:10Z (bell 312663ad), for the client side:
 
-- **Q1 (terms):** security's call. manager-aruba's view: path markers only at launch, and R4
+- **Q1 (terms):** security's call. The client manager's view: path markers only at launch, and R4
   accepted while the distiller keeps its own term check. Revisit with the observe-mode counts.
 - **Q2 (totals):** counts-only totals are fine for lab readers.
 - **Q3 (pre-routing entries):** hiding them by the session rule is enough, with no redaction. ac
@@ -582,4 +582,4 @@ manager-aruba, 2026-11-02 00:10Z (bell 312663ad), for the client side:
 - **Q4 (narrowing):** for a client session, ac approves through the client desk's row. Never a lab
   session, a lab token or a lab desk row alone.
 - **D5:** OK that `blog-client` (its Claude-only writer) is a client reader.
-- **D7:** the observe-mode sweep counts go to manager-aruba, as written.
+- **D7:** the observe-mode sweep counts go to the client manager, as written.

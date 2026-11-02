@@ -6,7 +6,7 @@ ac approved archiving the sessions of `agent1`, a fenced homelab agent guest, li
 sessions (asks a1020-03), with the condition **"ingest only; reading the archive from the
 guest: no"**. Today every hub token is a full-scope machine token. The read extractor accepts
 any valid bearer, so an ingest token for the guest would also read every machine's archived
-history, Aruba client sessions included, and could write journal entries and distiller ticks.
+history, client sessions included, and could write journal entries and distiller ticks.
 
 ## What Changes
 
