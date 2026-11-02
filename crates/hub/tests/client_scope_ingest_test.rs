@@ -26,7 +26,7 @@ struct Hub {
     token: String,
     machine: Uuid,
     pool: PgPool,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 struct TempDir(std::path::PathBuf);
@@ -101,7 +101,7 @@ async fn spawn() -> Hub {
         token,
         machine,
         pool,
-        _dir: TempDir(dir),
+        dir: TempDir(dir),
     }
 }
 
@@ -432,7 +432,7 @@ async fn a_protected_entry_makes_its_sessions_client() {
 async fn the_latch_outlives_an_observe_config() {
     let hub = spawn().await; // observe mode, latch cleared
     let scope_cfg = |enforce: bool| {
-        let dir = &hub._dir.0;
+        let dir = &hub.dir.0;
         toml::from_str::<hub::HubConfig>(&format!(
             "database_url = \"unused\"\n[client_scope]\nrouting_file = \"{}\"\nfloor_file = \"{}\"\nenforce = {enforce}\n",
             dir.join("routing.toml").display(),
