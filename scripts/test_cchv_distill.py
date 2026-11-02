@@ -1433,3 +1433,160 @@ def _hub_class_case(tmp_path, monkeypatch, hub_class):
 def test_the_hubs_class_routes_before_the_distillers_own_check(tmp_path, monkeypatch, hub_class, route, posted) -> None:
     got_route, got_posted = _hub_class_case(tmp_path, monkeypatch, hub_class)
     assert (got_route, got_posted) == (route, posted)
+
+
+# --- E8: restamp-history classify (design R3-E8) ------------------------------
+
+AFTER = "2026-10-25T12:00:00Z"  # generated after protected routing went live
+BEFORE = "2026-09-01T12:00:00Z"
+GEN = "a" * 64
+
+
+class RestampHub:
+    """Entries pages, sessions, and the client-scope health the classify step asks for."""
+
+    def __init__(self, entries, sessions, health=None, page=2) -> None:
+        self.entries, self.sessions, self.page = entries, sessions, page
+        self.health = health or {"mode": "observe", "generation": GEN[:12], "caller_scope": "lab"}
+        self.reads = []
+
+    def client_scope_health(self):
+        return self.health
+
+    def journal_entries(self, offset, limit):
+        return self.entries[offset:offset + min(limit, self.page)]
+
+    def session_messages(self, session_id, window=None):
+        self.reads.append(session_id)
+        return self.sessions[session_id]
+
+
+def _entry(n, *, model="gpt-6.1-sol", at=BEFORE, project=LAB, sids=(1,), route=None, **text):
+    e = {"entry_date": f"2026-09-{n:02d}", "project_path": project, "status": "entry",
+         "headline": "lab work", "summary": "did lab things", "topics": ["lab"],
+         "open_questions": [], "session_ids": list(sids), "model": model,
+         "generated_at": at, "route": route}
+    e.update(text)
+    return e
+
+
+def _classify(tmp_path, entries, sessions, health=None, out=None):
+    r = _routing(tmp_path, ROUTING_FULL_TOML)
+    hub = RestampHub(entries, sessions, health)
+    out = out or tmp_path / "restamp.json"
+    counts = d.restamp_classify(hub, r, GEN, out, allowed_dirs=(tmp_path,))
+    return counts, out, hub
+
+
+LAB_SESSION = [_msg(_text("neutral"), cwd="/Users/ac/_sync/dev/lab")]
+
+
+@pytest.mark.parametrize("entry, sessions, want", [
+    (_entry(1, model="claude-haiku-5-5", at=AFTER), {1: LAB_SESSION}, "was_protected"),
+    (_entry(2, headline="work for _clientx today"), {1: LAB_SESSION}, "entry_text"),
+    (_entry(3, topics=["BuildThing rollout"]), {1: LAB_SESSION}, "entry_text"),
+    (_entry(4, open_questions=["see %2F_clientx%2F"]), {1: LAB_SESSION}, "entry_text"),
+    (_entry(5, project="/Users/ac/_sync/dev/_clientx/app"), {1: LAB_SESSION}, "path"),
+    (_entry(6), {1: [_msg(_text("open C:\\work\\_clientx\\x"), cwd=None)]}, "text_marker"),
+    (_entry(7), {1: [_msg(_text("see %2F_clientx%2Fnotes"), cwd=None)]}, "text_marker"),
+    (_entry(8), {1: [_msg(_text("neutral"), cwd="/Users/ac/_sync/dev/_clientx/r")]}, "cwd"),
+    (_entry(9), {1: [_msg({"type": "tool_use", "name": "Read",
+                           "input": {"file_path": "/x/_clientx/a"}}, cwd=None)]}, "tool_input"),
+    (_entry(10), {1: [_msg(_text("neutral"))]}, "cwd_unavailable"),
+    (_entry(11), {1: [_msg(content=7, cwd=None)]}, "unreadable"),
+    (_entry(12, sids=()), {}, "no_sessions"),
+    (_entry(13, summary=["not", "a", "string"]), {1: LAB_SESSION}, "unreadable"),
+])
+def test_restamp_each_check_keeps_an_entry_hidden(tmp_path, entry, sessions, want) -> None:
+    counts, out, _ = _classify(tmp_path, [entry], sessions)
+    assert counts == {"checked": 1, f"class:{want}": 1}
+    assert json.loads(out.read_text())["restampable"] == []
+
+
+@pytest.mark.parametrize("model, at", [
+    ("gpt-6.1-sol", AFTER),          # general after routing: re-proven by the router
+    ("haiku", BEFORE),               # Claude before routing: the model says nothing
+    (None, BEFORE),                  # no model: before-routing evidence, goes on to the router
+])
+def test_restamp_a_clean_entry_is_restampable(tmp_path, model, at) -> None:
+    counts, out, _ = _classify(tmp_path, [_entry(1, model=model, at=at)], {1: LAB_SESSION})
+    assert counts == {"checked": 1, "restampable": 1}
+    rec = json.loads(out.read_text())
+    assert [(e["entry_date"], e["project_path"], e["session_ids"]) for e in rec["restampable"]] == [
+        ("2026-09-01", LAB, [1])]
+    assert rec["generation"] == GEN and rec["distiller_version"] == d.DISTILL_VERSION
+    assert rec["started_at"] <= rec["finished_at"]
+
+
+def test_restamp_pages_to_the_end_and_skips_stamped_rows(tmp_path) -> None:
+    entries = [_entry(n) for n in range(1, 6)] + [_entry(6, route="protected"),
+                                                  _entry(7, status="skip")]
+    counts, out, hub = _classify(tmp_path, entries, {1: LAB_SESSION})
+    assert counts == {"checked": 5, "restampable": 5}
+    assert hub.reads == [1], "a session shared by many entries is read once per run"
+
+
+def test_restamp_file_names_no_hidden_entry(tmp_path) -> None:
+    entries = [_entry(1), _entry(2, project="/Users/ac/_sync/dev/_clientx/app")]
+    _, out, _ = _classify(tmp_path, entries, {1: LAB_SESSION})
+    text = out.read_text()
+    assert "_clientx" not in text
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.parametrize("health, why", [
+    ({"mode": "observe", "generation": "b" * 12, "caller_scope": "lab"}, "generation"),
+    ({"mode": "enforce", "generation": GEN[:12], "caller_scope": "lab"}, "lab caller"),
+    ({"mode": "enforce", "generation": GEN[:12], "caller_scope": None}, "lab caller"),
+    ({"mode": "off"}, "not on"),
+])
+def test_restamp_refuses_to_start(tmp_path, health, why) -> None:
+    with pytest.raises(d.RestampRefused, match=why):
+        _classify(tmp_path, [_entry(1)], {1: LAB_SESSION}, health)
+    assert not (tmp_path / "restamp.json").exists()
+
+
+def test_restamp_reads_as_a_client_reader_under_enforce(tmp_path) -> None:
+    health = {"mode": "enforce", "generation": GEN[:12], "caller_scope": "client"}
+    counts, _, _ = _classify(tmp_path, [_entry(1)], {1: LAB_SESSION}, health)
+    assert counts["restampable"] == 1
+
+
+def test_restamp_refuses_protect_all_routing(tmp_path) -> None:
+    r = d.load_routing(tmp_path / "missing.toml")
+    with pytest.raises(d.RestampRefused, match="protect-all"):
+        d.restamp_classify(RestampHub([], {}), r, GEN, tmp_path / "o.json", allowed_dirs=(tmp_path,))
+
+
+def test_restamp_refuses_an_existing_file_or_a_link(tmp_path) -> None:
+    out = tmp_path / "restamp.json"
+    out.write_text("old")
+    with pytest.raises(FileExistsError):
+        _classify(tmp_path, [_entry(1)], {1: LAB_SESSION}, out=out)
+    assert out.read_text() == "old"
+    link = tmp_path / "link.json"
+    link.symlink_to(tmp_path / "elsewhere.json")
+    with pytest.raises(FileExistsError):
+        _classify(tmp_path, [_entry(1)], {1: LAB_SESSION}, out=link)
+    assert not (tmp_path / "elsewhere.json").exists()
+
+
+def test_restamp_refuses_a_file_outside_the_allowed_folders(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_FULL_TOML)
+    inside = tmp_path / "ok"
+    inside.mkdir()
+    with pytest.raises(d.RestampRefused, match="outside"):
+        d.restamp_classify(RestampHub([_entry(1)], {1: LAB_SESSION}), r, GEN,
+                           tmp_path / "restamp.json", allowed_dirs=(inside,))
+
+
+def test_restamp_allowed_folders_are_the_gpt_denied_ones() -> None:
+    home = Path.home()
+    assert d.RESTAMP_DIRS == (home / ".config" / "cchv", home / ".local" / "state" / "cchv")
+
+
+def test_restamp_generation_is_the_hubs_formula(tmp_path) -> None:
+    (tmp_path / "r.toml").write_bytes(b"routing")
+    (tmp_path / "f.json").write_bytes(b"floor")
+    assert d.routing_generation(tmp_path / "r.toml", tmp_path / "f.json") == \
+        hashlib.sha256(b"routingfloor").hexdigest()
