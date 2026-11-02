@@ -28,6 +28,11 @@ USAGE:
                                          reported as acked_by_rule; refuses before writing on an
                                          empty selection, more than N findings, or a note the
                                          detector flags. FROM and TO are RFC 3339 times
+    hub client-scope sweep [--dry-run] [--batch N]
+                                         classify every session not scanned under the routing
+                                         generation the hub accepted; raises classes only and
+                                         stamps a session only if no ingest touched it meanwhile;
+                                         --dry-run is read-only and prints counts only
 ";
 
 /// Every value of a repeatable `--flag V` / `--flag=V`.
@@ -212,6 +217,17 @@ async fn main() -> anyhow::Result<()> {
             Some("ack") => hub::run_findings_ack(ack_options(&args[2..])).await,
             other => usage_error(&format!(
                 "unknown findings subcommand: {}",
+                other.unwrap_or("(none)")
+            )),
+        },
+        Some("client-scope") => match args.get(1).map(String::as_str) {
+            Some("sweep") => {
+                let dry_run = args[2..].iter().any(|a| a == "--dry-run");
+                let batch = flag_i64(&args[2..], "--batch").unwrap_or(200);
+                hub::run_client_scope_sweep(dry_run, batch).await
+            }
+            other => usage_error(&format!(
+                "unknown client-scope subcommand: {}",
                 other.unwrap_or("(none)")
             )),
         },

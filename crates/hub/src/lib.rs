@@ -11,6 +11,7 @@ pub mod client_ingest;
 pub mod client_policy;
 pub mod client_scope;
 pub mod client_state;
+pub mod client_sweep;
 pub mod config;
 pub mod db_watchdog;
 pub mod embed;
@@ -265,6 +266,81 @@ pub async fn run_findings_dry_run(opts: findings::DryRunOptions) -> anyhow::Resu
         .await?;
     let report = findings::dry_run(&pool, &opts).await?;
     print!("{}", report.render());
+    Ok(())
+}
+
+/// `hub client-scope sweep [--dry-run]`: classify every session not scanned
+/// under the generation the hub has accepted (openspec `hub-client-read-scope`,
+/// task 2.4). A dry run is read-only and prints counts only. Refuses when the
+/// routing file is unusable or is not the generation the hub accepted.
+pub async fn run_client_scope_sweep(dry_run: bool, batch: i64) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let cs = config
+        .client_scope
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no [client_scope] in the hub config"))?;
+    let policy = match client_policy::load(cs) {
+        client_policy::Load::Ready(p) => p,
+        client_policy::Load::Unknown(why) => anyhow::bail!("client scope policy unknown: {why}"),
+    };
+    let read_only = dry_run;
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(move |conn, _meta| {
+            Box::pin(async move {
+                if read_only {
+                    sqlx::query("SET default_transaction_read_only = on")
+                        .execute(&mut *conn)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    let accepted: Option<String> = sqlx::query_scalar("SELECT generation FROM client_scope_state")
+        .fetch_optional(&pool)
+        .await?
+        .flatten();
+    if accepted.as_deref() != Some(policy.generation.as_str()) {
+        anyhow::bail!(
+            "the hub has not accepted this routing generation yet \
+             (start or wait for the hub, or run client-scope accept-routing)"
+        );
+    }
+    let report = client_sweep::sweep(
+        &pool,
+        &policy,
+        &client_sweep::SweepOptions {
+            dry_run,
+            batch,
+            only_sessions: None,
+        },
+    )
+    .await?;
+    println!(
+        "client-scope sweep{}",
+        if dry_run {
+            " (dry run, nothing written)"
+        } else {
+            ""
+        }
+    );
+    println!("sessions scanned: {}", report.scanned);
+    for (class, n) in &report.by_class {
+        println!("  class {class}: {n}");
+    }
+    println!(
+        "term-only (left lab; the distiller's terms would protect): {}",
+        report.term_only
+    );
+    println!(
+        "family, protected journal entry: {}",
+        report.family_protected_entry
+    );
+    println!("family, other members: {}", report.family_other);
+    println!("not stamped (ingest raced; re-run): {}", report.not_stamped);
     Ok(())
 }
 

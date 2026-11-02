@@ -102,12 +102,12 @@ pub fn parent_from_path(file_path: &str) -> Option<&str> {
 
 /// The family predicate: same provider session id on any machine, the parent a
 /// subagent path names, or children whose path names this session.
-const FAMILY: &str = "provider = $1
+pub(crate) const FAMILY: &str = "provider = $1
       AND (session_id = $2 OR session_id = $3
            OR file_path LIKE '%/' || $2 || '/subagents/%')
       AND id <> $4";
 
-fn base(class: &str) -> &str {
+pub(crate) fn base(class: &str) -> &str {
     class.strip_prefix("family:").unwrap_or(class)
 }
 

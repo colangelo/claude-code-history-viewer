@@ -23,6 +23,9 @@ pub struct Policy {
     pub markers: Markers,
     /// sha256 of each normalized path marker: what the hub keeps of the set.
     pub marker_hashes: BTreeSet<String>,
+    /// The distiller's content terms, normalized. Never used for the flag (Q1:
+    /// not at launch); the sweep only COUNTS sessions they would protect.
+    pub terms: Vec<String>,
 }
 
 /// The outcome of reading the two files. `Unknown` carries a reason that names
@@ -120,6 +123,7 @@ pub fn load_paths(routing_file: &Path, floor_file: &Path) -> Load {
             .map(|m| sha256_hex(normalize(m).as_bytes()))
             .collect(),
         markers: Markers::new(&markers),
+        terms: terms.iter().map(|t| normalize(t)).collect(),
     })
 }
 

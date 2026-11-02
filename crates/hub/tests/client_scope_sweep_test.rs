@@ -1,0 +1,245 @@
+//! The client-scope sweep (openspec `hub-client-read-scope`, R2-C, task 2.4).
+//!
+//! Requires `TEST_DATABASE_URL`; run with `--test-threads=1`.
+
+use hub::client_sweep::{stamp, sweep, SweepOptions};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+const ROUTING: &str = r#"
+[protected]
+model = "claude-x"
+path_markers = ["/clientco"]
+content_terms = ["clientword"]
+"#;
+
+fn hex(b: &[u8]) -> String {
+    use std::fmt::Write;
+    Sha256::digest(b).iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
+}
+
+struct Env {
+    pool: PgPool,
+    policy: hub::client_policy::Policy,
+    machine: Uuid,
+    project: i64,
+    _dir: std::path::PathBuf,
+}
+
+async fn env() -> Env {
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    hub::MIGRATOR.run(&pool).await.unwrap();
+    let dir = std::env::temp_dir().join(format!("cchv-cs-sweep-{}", Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("r.toml"), ROUTING).unwrap();
+    std::fs::write(
+        dir.join("f.json"),
+        json!({"sha256": hex(ROUTING.as_bytes()), "plain_path_markers": 1,
+               "encoded_path_markers": 0, "content_terms": 1})
+        .to_string(),
+    )
+    .unwrap();
+    let hub::client_policy::Load::Ready(policy) =
+        hub::client_policy::load_paths(&dir.join("r.toml"), &dir.join("f.json"))
+    else {
+        panic!("policy")
+    };
+    let machine = Uuid::new_v4();
+    sqlx::query("INSERT INTO machines (machine_id, hostname, os) VALUES ($1, $2, 'macos')")
+        .bind(machine)
+        .bind(format!("sw-{}", &machine.simple().to_string()[..8]))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project: i64 = sqlx::query_scalar(
+        "INSERT INTO projects (machine_id, provider, project_path, name) VALUES ($1, 'claude', '/w/lab', 'p') RETURNING id",
+    )
+    .bind(machine)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    Env {
+        pool,
+        policy,
+        machine,
+        project,
+        _dir: dir,
+    }
+}
+
+/// An unscanned session (as if it predates client scope) with these texts.
+async fn session(e: &Env, texts: &[&str]) -> i64 {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO sessions (machine_id, provider, session_id, project_id) VALUES ($1, 'claude', $2, $3) RETURNING id",
+    )
+    .bind(e.machine)
+    .bind(Uuid::new_v4().to_string())
+    .bind(e.project)
+    .fetch_one(&e.pool)
+    .await
+    .unwrap();
+    for (i, t) in texts.iter().enumerate() {
+        let content = json!([{"type": "text", "text": t}]);
+        sqlx::query(
+            "INSERT INTO messages (session_id, machine_id, provider, message_key, seq, content, raw, search_text)
+             VALUES ($1, $6, 'claude', $2, $3, $4, $5, '')",
+        )
+        .bind(id)
+        .bind(Uuid::new_v4().to_string())
+        .bind(i32::try_from(i).unwrap())
+        .bind(&content)
+        .bind(json!({"cwd": "/w/lab", "message": {"content": content}}))
+        .bind(e.machine)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    }
+    id
+}
+
+async fn class_and_gen(e: &Env, id: i64) -> (Option<String>, Option<String>) {
+    sqlx::query_as("SELECT client_class, client_gen FROM sessions WHERE id = $1")
+        .bind(id)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap()
+}
+
+fn only(ids: &[i64]) -> SweepOptions {
+    SweepOptions {
+        dry_run: false,
+        batch: 10,
+        only_sessions: Some(ids.to_vec()),
+    }
+}
+
+#[tokio::test]
+async fn the_sweep_classifies_and_stamps_unscanned_sessions() {
+    let e = env().await;
+    let lab = session(&e, &["plain lab work"]).await;
+    let client = session(
+        &e,
+        &["a", &format!("{} then clientco.", "x".repeat(70_000))],
+    )
+    .await;
+    let report = sweep(&e.pool, &e.policy, &only(&[lab, client]))
+        .await
+        .unwrap();
+    assert_eq!(report.scanned, 2);
+    assert_eq!(
+        class_and_gen(&e, lab).await,
+        (Some("none".into()), Some(e.policy.generation.clone()))
+    );
+    assert_eq!(
+        class_and_gen(&e, client).await,
+        (
+            Some("text_marker".into()),
+            Some(e.policy.generation.clone())
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_counts_and_writes_nothing() {
+    let e = env().await;
+    let lab = session(&e, &["lab"]).await;
+    let client = session(&e, &["see clientco."]).await;
+    let term = session(&e, &["the clientword thing"]).await;
+    let report = sweep(
+        &e.pool,
+        &e.policy,
+        &SweepOptions {
+            dry_run: true,
+            batch: 10,
+            only_sessions: Some(vec![lab, client, term]),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.by_class.get("none"), Some(&2));
+    assert_eq!(report.by_class.get("text_marker"), Some(&1));
+    assert_eq!(
+        report.term_only, 1,
+        "a session the distiller's terms protect but the hub leaves lab"
+    );
+    for id in [lab, client, term] {
+        assert_eq!(
+            class_and_gen(&e, id).await,
+            (None, None),
+            "dry run wrote nothing"
+        );
+    }
+}
+
+/// An ingest between the sweep's read and its write leaves the session
+/// unscanned: the stamp is conditional on the revision it read.
+#[tokio::test]
+async fn a_stale_revision_does_not_stamp() {
+    let e = env().await;
+    let id = session(&e, &["lab"]).await;
+    sqlx::query("UPDATE sessions SET client_rev = 5 WHERE id = $1")
+        .bind(id)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    stamp(&e.pool, id, "none", &e.policy.generation, 4)
+        .await
+        .unwrap();
+    assert_eq!(
+        class_and_gen(&e, id).await,
+        (Some("none".into()), None),
+        "class set, not stamped"
+    );
+    // A hit still raises the class even with a stale revision.
+    stamp(&e.pool, id, "text_marker", &e.policy.generation, 4)
+        .await
+        .unwrap();
+    assert_eq!(
+        class_and_gen(&e, id).await.0.as_deref(),
+        Some("text_marker")
+    );
+    // And nothing lowers it.
+    stamp(&e.pool, id, "none", &e.policy.generation, 5)
+        .await
+        .unwrap();
+    assert_eq!(
+        class_and_gen(&e, id).await,
+        (
+            Some("text_marker".into()),
+            Some(e.policy.generation.clone())
+        )
+    );
+}
+
+/// R2-B: the sessions of a protected journal entry are one family.
+#[tokio::test]
+async fn sessions_of_a_protected_entry_turn_client() {
+    let e = env().await;
+    let a = session(&e, &["lab"]).await;
+    let b = session(&e, &["lab"]).await;
+    sqlx::query(
+        "INSERT INTO journal_entries (entry_date, project_path, status, model, headline, summary, session_ids, route, route_at, generated_at)
+         VALUES ('2026-10-30', $1, 'entry', 'claude-x', 'h', 's', $2, 'protected', now(), now())",
+    )
+    .bind(format!("/w/sweep-{}", Uuid::new_v4()))
+    .bind(vec![a, b])
+    .execute(&e.pool)
+    .await
+    .unwrap();
+    let report = sweep(&e.pool, &e.policy, &only(&[a, b])).await.unwrap();
+    assert_eq!(report.family_protected_entry, 2);
+    assert_eq!(
+        class_and_gen(&e, a).await.0.as_deref(),
+        Some("family:protected-entry")
+    );
+}

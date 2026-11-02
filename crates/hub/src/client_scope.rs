@@ -122,6 +122,11 @@ pub enum Class {
 }
 
 impl Class {
+    /// Position in the order classes are picked (lower wins).
+    pub fn rank(self) -> u8 {
+        self as u8
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Class::Path => "path",
