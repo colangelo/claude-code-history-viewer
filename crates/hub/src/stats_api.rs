@@ -151,17 +151,50 @@ impl StatsParams {
                 )));
             }
         }
-        Ok(Window { from, to, tz })
+        Ok(Window {
+            from,
+            to,
+            tz,
+            sessions_visible: None,
+        })
     }
+}
+
+/// The window, limited to the sessions a lab reader may see (R2-E). A client
+/// reader, or a hub without client scope, gets the window unchanged.
+async fn lab_window(
+    state: &AppState,
+    auth: &Authenticated,
+    mut w: Window,
+) -> Result<Window, HubError> {
+    let vis = auth.visibility(state);
+    if vis.sees_all() {
+        return Ok(w);
+    }
+    // Refuse rather than serve a mirror that cannot prove the current flags.
+    let as_of = state.mirror.as_ref().and_then(|m| m.client_flags_as_of());
+    let behind: bool = sqlx::query_scalar(
+        "SELECT $1::text IS NULL OR flags_changed_at > $1::timestamptz FROM client_scope_state",
+    )
+    .bind(as_of)
+    .fetch_one(&state.pool)
+    .await?;
+    if behind {
+        return Err(HubError::MirrorBehind(
+            "statistics mirror is older than the last client-scope change; retry after the next refresh".into(),
+        ));
+    }
+    w.sessions_visible = Some(vis.session_ok("s"));
+    Ok(w)
 }
 
 /// Archive-wide statistics.
 pub async fn global(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<GlobalStatsSummary>), HubError> {
-    let w = params.window()?;
+    let w = lab_window(&state, &auth, params.window()?).await?;
     let (headers, summary) = with_mirror(&state, move |c| Ok(stats::global(c, &w)?)).await?;
     Ok((headers, Json(summary)))
 }
@@ -174,15 +207,21 @@ pub async fn global(
 /// Both halves are mirrored for it: the fingerprinted project rows and the
 /// manual alias table.
 pub async fn project(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(identity_key): Path<String>,
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<ProjectStatsSummary>), HubError> {
-    let w = params.window()?;
+    let w = lab_window(&state, &auth, params.window()?).await?;
     let include_worktrees = params.include_worktrees.unwrap_or(true);
     let (headers, summary) = with_mirror(&state, move |c| {
-        let paths = stats::resolve_identity_paths(c, &identity_key, include_worktrees)?;
+        let mut paths = stats::resolve_identity_paths(c, &identity_key, include_worktrees)?;
+        if let Some(visible) = &w.sessions_visible {
+            // A lab reader's identity expands only to paths it may see; none
+            // left is the same 404 as an unknown identity (R2-G).
+            let seen = stats::visible_paths(c, visible)?;
+            paths.retain(|p| seen.contains(p));
+        }
         if paths.is_empty() {
             // An unknown identity expands to nothing. Returning zeroed
             // statistics would be indistinguishable from a real-but-idle
@@ -201,15 +240,34 @@ pub async fn project(
 /// Statistics for one session, by hub row id or by provider session id
 /// (Gitea #26).
 pub async fn session(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Path(session_ref): Path<String>,
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<SessionTokenStats>), HubError> {
-    let w = params.window()?;
+    let w = lab_window(&state, &auth, params.window()?).await?;
     let (headers, stats) = with_mirror(&state, move |c| {
         let absent = || HubError::NotFound(format!("no session {session_ref}"));
-        let pk = match stats::resolve_session_ref(c, &session_ref)? {
+        let found = stats::resolve_session_ref(c, &session_ref)?;
+        // Visibility before resolution (R2-G): hidden candidates do not exist.
+        let found = match (&w.sessions_visible, found) {
+            (Some(visible), SessionRef::Found(pk)) => {
+                if stats::visible_ids(c, visible, &[pk])?.is_empty() {
+                    SessionRef::Absent
+                } else {
+                    SessionRef::Found(pk)
+                }
+            }
+            (Some(visible), SessionRef::Ambiguous(ids)) => {
+                match stats::visible_ids(c, visible, &ids)?.as_slice() {
+                    [] => SessionRef::Absent,
+                    [pk] => SessionRef::Found(*pk),
+                    many => SessionRef::Ambiguous(many.to_vec()),
+                }
+            }
+            (_, other) => other,
+        };
+        let pk = match found {
             SessionRef::Found(pk) => pk,
             SessionRef::Absent => return Err(absent()),
             SessionRef::Ambiguous(ids) => {

@@ -54,6 +54,9 @@ pub struct Window {
     pub from: Option<NaiveDate>,
     pub to: Option<NaiveDate>,
     pub tz: chrono_tz::Tz,
+    /// A SQL predicate over the mirrored session `s` that a lab reader's
+    /// statistics are limited to (client scope, R2-E); `None` = every session.
+    pub sessions_visible: Option<String>,
 }
 
 impl Default for Window {
@@ -62,6 +65,7 @@ impl Default for Window {
             from: None,
             to: None,
             tz: chrono_tz::UTC,
+            sessions_visible: None,
         }
     }
 }
@@ -200,6 +204,10 @@ fn materialize_scope(conn: &Connection, scope: &Scope, w: &Window) -> duckdb::Re
             ins.execute([p])?;
         }
         scope_preds.push("p.project_path IN (SELECT path FROM scope_paths)");
+    }
+    if let Some(visible) = &w.sessions_visible {
+        // Before grouping and ranking: every rollup reads `stats_scope`.
+        scope_preds.push(visible);
     }
     if let Some(session_id) = scope.session() {
         scope_preds.push("m.session_id = ?");
@@ -828,6 +836,35 @@ pub enum SessionRef {
 /// Unlike the browse version, a numeric reference is *checked* rather than
 /// trusted: there is a mirror row to check it against right here, and the
 /// alternative is discovering the absence further down as an empty rollup.
+/// The project paths holding at least one session that satisfies `visible`
+/// (a predicate over the mirrored session `s`).
+pub fn visible_paths(
+    conn: &Connection,
+    visible: &str,
+) -> duckdb::Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT p.project_path FROM sessions s JOIN projects p ON p.id = s.project_id WHERE {visible}"
+    ))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    rows.collect()
+}
+
+/// The ids among `ids` whose mirrored session satisfies `visible`.
+pub fn visible_ids(conn: &Connection, visible: &str, ids: &[i64]) -> duckdb::Result<Vec<i64>> {
+    let mut out = Vec::new();
+    for id in ids {
+        let n: i64 = conn.query_row(
+            &format!("SELECT count(*) FROM sessions s WHERE s.id = ? AND {visible}"),
+            [id],
+            |r| r.get(0),
+        )?;
+        if n > 0 {
+            out.push(*id);
+        }
+    }
+    Ok(out)
+}
+
 pub fn resolve_session_ref(conn: &Connection, reference: &str) -> duckdb::Result<SessionRef> {
     if let Ok(id) = reference.parse::<i64>() {
         let found: Option<i64> = conn

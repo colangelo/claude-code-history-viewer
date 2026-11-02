@@ -54,3 +54,25 @@ ALTER TABLE journal_entries DROP CONSTRAINT IF EXISTS journal_entries_route_chec
 ALTER TABLE journal_entries
     ADD CONSTRAINT journal_entries_route_check
     CHECK (route IN ('general', 'protected', 'general-restamped'));
+
+-- Stats freshness (R2-E): the time a session last turned client. The stats
+-- mirror records the value it copied; lab statistics answer 503 while the
+-- mirror is older than this, so a session that just turned client is never
+-- served from a stale mirror. Only a RISE to a client class stamps it.
+ALTER TABLE client_scope_state
+    ADD COLUMN IF NOT EXISTS flags_changed_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE OR REPLACE FUNCTION client_scope_flag_rose() RETURNS trigger AS $$
+BEGIN
+    IF NEW.client_class IS DISTINCT FROM OLD.client_class
+       AND NEW.client_class IS NOT NULL AND NEW.client_class <> 'none' THEN
+        UPDATE client_scope_state SET flags_changed_at = clock_timestamp();
+    END IF;
+    RETURN NEW;
+END
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS sessions_client_flag_rose ON sessions;
+CREATE TRIGGER sessions_client_flag_rose
+    AFTER UPDATE OF client_class ON sessions
+    FOR EACH ROW EXECUTE FUNCTION client_scope_flag_rose();

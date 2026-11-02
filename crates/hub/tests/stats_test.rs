@@ -583,6 +583,7 @@ async fn date_window_narrows_the_aggregate() {
         from: Some("2026-07-15".parse().unwrap()),
         to: Some("2026-07-25".parse().unwrap()),
         tz: chrono_tz::UTC,
+        sessions_visible: None,
     };
     let s = project_stats_in(&hub, &w).await;
     assert_eq!(s.total_messages, 1);
@@ -939,6 +940,7 @@ async fn a_group_straddling_the_window_edge_attributes_usage_outside_it() {
             from: Some("2026-07-24".parse().unwrap()),
             to: Some("2026-07-24".parse().unwrap()),
             tz: chrono_tz::UTC,
+            sessions_visible: None,
         },
     )
     .await
@@ -1023,6 +1025,7 @@ async fn project_scope_reports_a_model_distribution() {
             from: Some("2026-07-21".parse().unwrap()),
             to: None,
             tz: chrono_tz::UTC,
+            sessions_visible: None,
         },
     )
     .await;
@@ -1030,4 +1033,95 @@ async fn project_scope_reports_a_model_distribution() {
         later.model_distribution.is_empty(),
         "no messages inside the window, so no per-model rows"
     );
+}
+
+/// Client scope (R2-E): lab statistics are built from visible sessions only,
+/// before grouping and ranking, so a name used only in a client session never
+/// reaches a lab reader.
+#[tokio::test]
+async fn lab_statistics_leave_client_sessions_out() {
+    let hub = spawn().await;
+    let skill = |session: &str, key: &str, name: &str| {
+        tok_msg(
+            session,
+            key,
+            "2026-07-20T10:00:00Z",
+            Some(key),
+            None,
+            1,
+            1,
+            None,
+            json!([{ "type": "tool_use", "id": key, "name": "Skill", "input": { "skill": name } }]),
+        )
+    };
+    assert_eq!(
+        post_ingest(
+            &hub,
+            &batch(
+                &hub,
+                "lab-s",
+                vec![skill("lab-s", "k-lab", "lab-only-skill")]
+            )
+        )
+        .await,
+        200
+    );
+    assert_eq!(
+        post_ingest(
+            &hub,
+            &batch(
+                &hub,
+                "client-s",
+                vec![skill("client-s", "k-client", "client-only-skill")]
+            )
+        )
+        .await,
+        200
+    );
+    let generation = "a".repeat(64);
+    for (session, class) in [("lab-s", "none"), ("client-s", "text_marker")] {
+        sqlx::query("UPDATE sessions SET client_class = $1, client_gen = $2 WHERE machine_id = $3 AND session_id = $4")
+            .bind(class)
+            .bind(&generation)
+            .bind(hub.machine_id)
+            .bind(session)
+            .execute(&hub.pool)
+            .await
+            .unwrap();
+    }
+    let names = |s: &ProjectStatsSummary| {
+        s.most_used_skills
+            .iter()
+            .map(|t| t.tool_name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let all = project_stats(&hub).await;
+    assert!(
+        names(&all).contains(&"client-only-skill".to_string()),
+        "a client reader sees it"
+    );
+
+    let lab = Window {
+        sessions_visible: Some(
+            hub::visibility::Visibility::Lab(Some(generation.clone())).session_ok("s"),
+        ),
+        ..Window::default()
+    };
+    let s = project_stats_in(&hub, &lab).await;
+    assert_eq!(names(&s), vec!["lab-only-skill".to_string()]);
+    let g = {
+        let conn = mirrored(&hub).await;
+        stats::global(&conn, &lab).unwrap()
+    };
+    assert!(
+        !format!("{g:?}").contains("client-only-skill"),
+        "nor in global statistics"
+    );
+    // An unknown policy (no generation) sees nothing.
+    let none = Window {
+        sessions_visible: Some(hub::visibility::Visibility::Lab(None).session_ok("s")),
+        ..Window::default()
+    };
+    assert!(names(&project_stats_in(&hub, &none).await).is_empty());
 }

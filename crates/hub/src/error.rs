@@ -22,6 +22,9 @@ pub enum HubError {
     /// to the old Postgres rollups (design D4): one degraded shape, with a
     /// `Retry-After` telling the caller when to come back.
     StatsWarming { retry_after_secs: u64 },
+    /// Lab statistics refused: the mirror is older than the last client-scope
+    /// change (design R2-E). Transient, 503.
+    MirrorBehind(String),
     /// Any other server-side failure.
     Internal(String),
 }
@@ -35,6 +38,7 @@ impl std::fmt::Display for HubError {
             HubError::Db(e) => write!(f, "database error: {e}"),
             HubError::Mirror(e) => write!(f, "stats mirror error: {e}"),
             HubError::StatsWarming { .. } => write!(f, "statistics mirror is warming up"),
+            HubError::MirrorBehind(m) => write!(f, "{m}"),
             HubError::Internal(m) => write!(f, "internal error: {m}"),
         }
     }
@@ -60,6 +64,7 @@ impl IntoResponse for HubError {
             HubError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             HubError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             HubError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
+            HubError::MirrorBehind(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
             HubError::Db(e) => {
                 // Log the detail server-side; do not leak it to the client.
                 tracing::error!(error = %e, "database error");

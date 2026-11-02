@@ -200,6 +200,18 @@ impl Mirror {
         Ok(conn)
     }
 
+    /// The `client_scope_state.flags_changed_at` value the mirror's sessions
+    /// were copied after, as Postgres text; `None` before the first copy.
+    pub fn client_flags_as_of(&self) -> Option<String> {
+        let conn = self.conn.lock().expect("mirror connection poisoned");
+        conn.query_row(
+            "SELECT v FROM mirror_meta WHERE k = 'client_flags_as_of'",
+            [],
+            |r| r.get(0),
+        )
+        .ok()
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -541,13 +553,31 @@ impl Mirror {
     }
 
     async fn refresh_sessions(&self, pg: &PgPool) -> anyhow::Result<()> {
+        // Read BEFORE the sessions: a flag that rises after this read is
+        // newer than what the mirror records, so lab stats wait for the next
+        // refresh (R2-E). Absent table (client scope never migrated) = none.
+        let flags_as_of: Option<String> =
+            sqlx::query_scalar("SELECT flags_changed_at::text FROM client_scope_state")
+                .fetch_optional(pg)
+                .await
+                .ok()
+                .flatten();
         let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT id, project_id, session_id, summary FROM sessions",
+            "SELECT id, project_id, session_id, summary, client_class, client_gen FROM sessions",
         )
         .fetch_all(pg)
         .await?;
         let conn = self.conn.lock().expect("mirror connection poisoned");
-        in_transaction(&conn, || insert_all(&conn, &rows))
+        in_transaction(&conn, || {
+            insert_all(&conn, &rows)?;
+            if let Some(t) = &flags_as_of {
+                conn.execute(
+                    "INSERT OR REPLACE INTO mirror_meta (k, v) VALUES ('client_flags_as_of', ?)",
+                    [t],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     async fn refresh_tool_uses(&self, pg: &PgPool, from_id: i64) -> anyhow::Result<usize> {
@@ -1018,6 +1048,11 @@ CREATE TABLE IF NOT EXISTS message_tool_results (
 );
 
 CREATE TABLE IF NOT EXISTS mirror_meta (k VARCHAR PRIMARY KEY, v VARCHAR);
+-- Client scope (openspec hub-client-read-scope, R2-E): lab statistics count
+-- only sessions whose mirrored class is 'none' under the generation in force.
+-- Added after the fact, so an existing mirror file gains them here.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_class VARCHAR;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_gen VARCHAR;
 "#;
 
 #[derive(sqlx::FromRow)]
@@ -1133,12 +1168,14 @@ struct SessionRow {
     project_id: Option<i64>,
     session_id: Option<String>,
     summary: Option<String>,
+    client_class: Option<String>,
+    client_gen: Option<String>,
 }
 
 impl Mirrored for SessionRow {
     const INSERT_PREFIX: &'static str =
-        "INSERT OR REPLACE INTO sessions (id, project_id, session_id, summary) VALUES ";
-    const ROW: &'static str = "(?, ?, ?, ?)";
+        "INSERT OR REPLACE INTO sessions (id, project_id, session_id, summary, client_class, client_gen) VALUES ";
+    const ROW: &'static str = "(?, ?, ?, ?, ?, ?)";
 
     fn binds(&self) -> Vec<Value> {
         vec![
@@ -1146,6 +1183,8 @@ impl Mirrored for SessionRow {
             int(self.project_id),
             text(self.session_id.as_deref()),
             text(self.summary.as_deref()),
+            text(self.client_class.as_deref()),
+            text(self.client_gen.as_deref()),
         ]
     }
 }
