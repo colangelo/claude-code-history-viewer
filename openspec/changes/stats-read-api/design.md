@@ -62,7 +62,7 @@ The options as written before the ruling:
 
 ### D4. `/v1/stats/tool-calls?prefix=<name>&since=<RFC3339>`
 
-The answer is `{since, last_ingest, by_tool: [{tool, server, count}], by_host: [{host, count}]}`.
+The answer is `{since, last_message_at, by_tool: [{tool, server, count}], by_host: [{host, count}]}`. `last_message_at` is the newest message the caller may see since `since`, not the machines' `last_seen`, which client-only ingest moves (security review T1).
 - **Where it reads:** Postgres (`message_tool_uses` ⋈ `messages` ⋈ `machines`), bounded by `since` (at most 31 days; the same bound on `/v1/stats/daily`) and an index on `messages."timestamp"`. The mirror has no host.
 - **Matching:** the name's last `__` segment equals `prefix`, or `prefix` is a full name.
 - **Client sessions:** lab sessions only (D3).

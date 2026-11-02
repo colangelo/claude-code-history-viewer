@@ -18,7 +18,7 @@ The hub SHALL serve `GET /v1/stats/daily?from&to&tz` to an authenticated reader.
 
 ### Requirement: Tool-call counts
 
-The hub SHALL serve `GET /v1/stats/tool-calls?prefix&since` to an authenticated reader. It answers counts per tool name (with its MCP server) and per host since `since`, at most 31 days back, and the time of the last ingest. A tool name SHALL match when its last `__` segment equals `prefix`.
+The hub SHALL serve `GET /v1/stats/tool-calls?prefix&since` to an authenticated reader. It answers counts per tool name (with its MCP server) and per host since `since`, at most 31 days back, and the time of the newest message the reader may see. A tool name SHALL match when its last `__` segment equals `prefix`.
 
 #### Scenario: Claude and Codex Exa calls count together
 - **WHEN** one Claude session calls `mcp__exa__web_search_exa` and one Codex session completes an Exa `McpToolCall` after this change

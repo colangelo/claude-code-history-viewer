@@ -33,7 +33,7 @@ use serde::Deserialize;
 
 use crate::auth::{Authenticated, Visibility};
 use crate::error::HubError;
-use crate::mirror::MirrorState;
+use crate::mirror::{Mirror, MirrorState};
 use crate::state::AppState;
 use crate::stats::{self, SessionRef, Window};
 
@@ -68,38 +68,70 @@ fn staleness_headers(refreshed_at: DateTime<Utc>) -> StatsHeaders {
     ]
 }
 
-type StatsHeaders = [(HeaderName, String); 2];
+#[doc(hidden)]
+pub type StatsHeaders = [(HeaderName, String); 2];
 
-/// Run `f` against a private connection to the statistics mirror, on a blocking
-/// worker, and pair its result with the staleness headers.
+/// One private connection to the statistics mirror per request, with the
+/// readiness and the client-flag watermark read **through that same
+/// connection** (security T2). The check in [`restrict`] and the aggregation in
+/// [`MirrorSnapshot::run`] therefore see one database: a `hub mirror rebuild`
+/// adopted between them swaps the mirror's own handle, not this one.
 ///
-/// Every stats handler goes through here, which is what makes the three
-/// properties in the module docs structural rather than remembered: the warming
-/// `503`, the staleness headers, and the `spawn_blocking` hop are impossible to
-/// forget in a new endpoint because there is no other way to reach the mirror.
-///
-/// One blocking hop per request, not one per query: `f` receives the connection
-/// and does all of its work — reference resolution, identity expansion, and the
-/// rollups — inside it. The connection is cloned per request, which is also what
-/// keeps each request's `stats_scope` temp table private to it.
-async fn with_mirror<T, F>(state: &AppState, f: F) -> Result<(StatsHeaders, T), HubError>
-where
-    F: FnOnce(&Connection) -> Result<T, HubError> + Send + 'static,
-    T: Send + 'static,
-{
-    let mirror = state.mirror.as_ref().ok_or(warming())?;
-    // Read the state *before* the rollup so the headers describe the data the
-    // response was computed from, not a refresh that landed while it ran.
-    let MirrorState::Ready { refreshed_at, .. } = mirror.state() else {
-        return Err(warming());
-    };
-    let conn = mirror
-        .connection()
-        .map_err(|e| HubError::Internal(format!("cloning a stats mirror connection: {e}")))?;
-    let out = tokio::task::spawn_blocking(move || f(&conn))
-        .await
-        .map_err(|e| HubError::Internal(format!("stats rollup task failed: {e}")))??;
-    Ok((staleness_headers(refreshed_at), out))
+/// Every stats handler goes through here, which is what makes the module-doc
+/// properties structural rather than remembered: the warming `503`, the
+/// staleness headers, and the `spawn_blocking` hop. The connection is cloned
+/// per request, which also keeps each request's `stats_scope` temp table
+/// private to it.
+#[doc(hidden)]
+pub struct MirrorSnapshot {
+    conn: Connection,
+    refreshed_at: DateTime<Utc>,
+    flags_as_of: Option<String>,
+}
+
+impl MirrorSnapshot {
+    #[doc(hidden)]
+    pub fn take(state: &AppState) -> Result<Self, HubError> {
+        let mirror = state.mirror.as_ref().ok_or(warming())?;
+        let conn = mirror
+            .connection()
+            .map_err(|e| HubError::Internal(format!("cloning a stats mirror connection: {e}")))?;
+        // Read the state *before* the rollup so the headers describe the data
+        // the response was computed from, not a refresh that landed while it ran.
+        let MirrorState::Ready { refreshed_at, .. } = Mirror::state_on(&conn) else {
+            return Err(warming());
+        };
+        let flags_as_of = Mirror::client_flags_as_of_on(&conn);
+        Ok(Self {
+            conn,
+            refreshed_at,
+            flags_as_of,
+        })
+    }
+
+    /// The client-flag watermark of this snapshot's connection.
+    #[doc(hidden)]
+    pub fn flags_as_of(&self) -> Option<String> {
+        self.flags_as_of.clone()
+    }
+
+    /// Run `f` on this snapshot's connection, on a blocking worker, and pair
+    /// its result with the staleness headers. One blocking hop per request: `f`
+    /// does reference resolution, identity expansion and the rollups inside it.
+    #[doc(hidden)]
+    pub async fn run<T, F>(self, f: F) -> Result<(StatsHeaders, T), HubError>
+    where
+        F: FnOnce(&Connection) -> Result<T, HubError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let Self {
+            conn, refreshed_at, ..
+        } = self;
+        let out = tokio::task::spawn_blocking(move || f(&conn))
+            .await
+            .map_err(|e| HubError::Internal(format!("stats rollup task failed: {e}")))??;
+        Ok((staleness_headers(refreshed_at), out))
+    }
 }
 
 fn warming() -> HubError {
@@ -161,23 +193,25 @@ impl StatsParams {
     }
 }
 
-/// The window, limited to the sessions a lab reader may see (R2-E). A client
-/// reader, or a hub without client scope, gets the window unchanged.
-async fn lab_window(state: &AppState, auth: &Authenticated, w: Window) -> Result<Window, HubError> {
-    restrict(state, auth.visibility(state), w).await
-}
-
-/// The window limited to what `vis` lets the caller see.
-async fn restrict(state: &AppState, vis: Visibility, mut w: Window) -> Result<Window, HubError> {
+/// The window limited to what `vis` lets the caller see (R2-E), checked
+/// against `flags_as_of`, the watermark of the snapshot the request will
+/// aggregate on (security T2). A caller that sees everything gets the window
+/// unchanged.
+#[doc(hidden)]
+pub async fn restrict(
+    state: &AppState,
+    vis: Visibility,
+    mut w: Window,
+    flags_as_of: Option<String>,
+) -> Result<Window, HubError> {
     if vis.sees_all() {
         return Ok(w);
     }
     // Refuse rather than serve a mirror that cannot prove the current flags.
-    let as_of = state.mirror.as_ref().and_then(|m| m.client_flags_as_of());
     let behind: bool = sqlx::query_scalar(
         "SELECT $1::text IS NULL OR flags_changed_at > $1::timestamptz FROM client_scope_state",
     )
-    .bind(as_of)
+    .bind(flags_as_of)
     .fetch_one(&state.pool)
     .await?;
     if behind {
@@ -189,14 +223,27 @@ async fn restrict(state: &AppState, vis: Visibility, mut w: Window) -> Result<Wi
     Ok(w)
 }
 
+/// What a stats-read route's caller may see (D3 (a)), or 503 when a lab or
+/// stats-only caller asks a hub that has no client scope to filter with
+/// (security T3): fail closed rather than serve every session.
+fn stats_read_visibility(state: &AppState, auth: &Authenticated) -> Result<Visibility, HubError> {
+    Visibility::stats_read(state, auth.1).ok_or_else(|| {
+        HubError::Unavailable(
+            "client scope is not configured on this hub; the stats-read routes need it to serve a lab reader".into(),
+        )
+    })
+}
+
 /// Archive-wide statistics.
 pub async fn global(
     auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<GlobalStatsSummary>), HubError> {
-    let w = lab_window(&state, &auth, params.window()?).await?;
-    let (headers, summary) = with_mirror(&state, move |c| Ok(stats::global(c, &w)?)).await?;
+    let w = params.window()?;
+    let snap = MirrorSnapshot::take(&state)?;
+    let w = restrict(&state, auth.visibility(&state), w, snap.flags_as_of()).await?;
+    let (headers, summary) = snap.run(move |c| Ok(stats::global(c, &w)?)).await?;
     Ok((headers, Json(summary)))
 }
 
@@ -213,28 +260,31 @@ pub async fn project(
     Path(identity_key): Path<String>,
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<ProjectStatsSummary>), HubError> {
-    let w = lab_window(&state, &auth, params.window()?).await?;
+    let w = params.window()?;
+    let snap = MirrorSnapshot::take(&state)?;
+    let w = restrict(&state, auth.visibility(&state), w, snap.flags_as_of()).await?;
     let include_worktrees = params.include_worktrees.unwrap_or(true);
-    let (headers, summary) = with_mirror(&state, move |c| {
-        let mut paths = stats::resolve_identity_paths(c, &identity_key, include_worktrees)?;
-        if let Some(visible) = &w.sessions_visible {
-            // A lab reader's identity expands only to paths it may see; none
-            // left is the same 404 as an unknown identity (R2-G).
-            let seen = stats::visible_paths(c, visible)?;
-            paths.retain(|p| seen.contains(p));
-        }
-        if paths.is_empty() {
-            // An unknown identity expands to nothing. Returning zeroed
-            // statistics would be indistinguishable from a real-but-idle
-            // project, so this is a 404 rather than an empty success.
-            return Err(HubError::NotFound(format!(
-                "no project identity {identity_key}"
-            )));
-        }
-        let name = stats::identity_display_name(c, &identity_key, &paths)?;
-        Ok(stats::project(c, name, paths, &w)?)
-    })
-    .await?;
+    let (headers, summary) = snap
+        .run(move |c| {
+            let mut paths = stats::resolve_identity_paths(c, &identity_key, include_worktrees)?;
+            if let Some(visible) = &w.sessions_visible {
+                // A lab reader's identity expands only to paths it may see; none
+                // left is the same 404 as an unknown identity (R2-G).
+                let seen = stats::visible_paths(c, visible)?;
+                paths.retain(|p| seen.contains(p));
+            }
+            if paths.is_empty() {
+                // An unknown identity expands to nothing. Returning zeroed
+                // statistics would be indistinguishable from a real-but-idle
+                // project, so this is a 404 rather than an empty success.
+                return Err(HubError::NotFound(format!(
+                    "no project identity {identity_key}"
+                )));
+            }
+            let name = stats::identity_display_name(c, &identity_key, &paths)?;
+            Ok(stats::project(c, name, paths, &w)?)
+        })
+        .await?;
     Ok((headers, Json(summary)))
 }
 
@@ -246,45 +296,48 @@ pub async fn session(
     Path(session_ref): Path<String>,
     Query(params): Query<StatsParams>,
 ) -> Result<(StatsHeaders, Json<SessionTokenStats>), HubError> {
-    let w = lab_window(&state, &auth, params.window()?).await?;
-    let (headers, stats) = with_mirror(&state, move |c| {
-        let absent = || HubError::NotFound(format!("no session {session_ref}"));
-        let found = stats::resolve_session_ref(c, &session_ref)?;
-        // Visibility before resolution (R2-G): hidden candidates do not exist.
-        let found = match (&w.sessions_visible, found) {
-            (Some(visible), SessionRef::Found(pk)) => {
-                if stats::visible_ids(c, visible, &[pk])?.is_empty() {
-                    SessionRef::Absent
-                } else {
-                    SessionRef::Found(pk)
+    let w = params.window()?;
+    let snap = MirrorSnapshot::take(&state)?;
+    let w = restrict(&state, auth.visibility(&state), w, snap.flags_as_of()).await?;
+    let (headers, stats) = snap
+        .run(move |c| {
+            let absent = || HubError::NotFound(format!("no session {session_ref}"));
+            let found = stats::resolve_session_ref(c, &session_ref)?;
+            // Visibility before resolution (R2-G): hidden candidates do not exist.
+            let found = match (&w.sessions_visible, found) {
+                (Some(visible), SessionRef::Found(pk)) => {
+                    if stats::visible_ids(c, visible, &[pk])?.is_empty() {
+                        SessionRef::Absent
+                    } else {
+                        SessionRef::Found(pk)
+                    }
                 }
-            }
-            (Some(visible), SessionRef::Ambiguous(ids)) => {
-                match stats::visible_ids(c, visible, &ids)?.as_slice() {
-                    [] => SessionRef::Absent,
-                    [pk] => SessionRef::Found(*pk),
-                    many => SessionRef::Ambiguous(many.to_vec()),
+                (Some(visible), SessionRef::Ambiguous(ids)) => {
+                    match stats::visible_ids(c, visible, &ids)?.as_slice() {
+                        [] => SessionRef::Absent,
+                        [pk] => SessionRef::Found(*pk),
+                        many => SessionRef::Ambiguous(many.to_vec()),
+                    }
                 }
-            }
-            (_, other) => other,
-        };
-        let pk = match found {
-            SessionRef::Found(pk) => pk,
-            SessionRef::Absent => return Err(absent()),
-            SessionRef::Ambiguous(ids) => {
-                return Err(HubError::BadRequest(format!(
-                    "session id {session_ref} is ambiguous across machines; use a numeric \
+                (_, other) => other,
+            };
+            let pk = match found {
+                SessionRef::Found(pk) => pk,
+                SessionRef::Absent => return Err(absent()),
+                SessionRef::Ambiguous(ids) => {
+                    return Err(HubError::BadRequest(format!(
+                        "session id {session_ref} is ambiguous across machines; use a numeric \
                      session id from /v1/sessions (candidates: {})",
-                    ids.iter()
-                        .map(i64::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )))
-            }
-        };
-        stats::session(c, pk, &w)?.ok_or_else(absent)
-    })
-    .await?;
+                        ids.iter()
+                            .map(i64::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )))
+                }
+            };
+            stats::session(c, pk, &w)?.ok_or_else(absent)
+        })
+        .await?;
     Ok((headers, Json(stats)))
 }
 
@@ -348,13 +401,17 @@ pub async fn daily(
     Query(params): Query<DailyParams>,
 ) -> Result<(StatsHeaders, Json<DailyAnswer>), HubError> {
     let w = params.window()?;
-    let w = restrict(&state, Visibility::stats_read(&state, auth.1), w).await?;
+    let vis = stats_read_visibility(&state, &auth)?;
+    let snap = MirrorSnapshot::take(&state)?;
+    let w = restrict(&state, vis, w, snap.flags_as_of()).await?;
     let (from, to, tz) = (
         w.from.expect("set by DailyParams::window"),
         w.to.expect("set by DailyParams::window"),
         w.tz.name().to_string(),
     );
-    let (headers, rows) = with_mirror(&state, move |c| Ok(stats::daily_by_project(c, &w)?)).await?;
+    let (headers, rows) = snap
+        .run(move |c| Ok(stats::daily_by_project(c, &w)?))
+        .await?;
     Ok((headers, Json(DailyAnswer { from, to, tz, rows })))
 }
 
@@ -385,8 +442,10 @@ pub struct HostCount {
 #[derive(Debug, serde::Serialize)]
 pub struct ToolCallsAnswer {
     pub since: DateTime<Utc>,
-    /// When any machine last ingested (`machines.last_seen`).
-    pub last_ingest: Option<DateTime<Utc>>,
+    /// The newest message the caller may see at or after `since`: how fresh
+    /// the counts are. Not the machines' `last_seen`, which client-only ingest
+    /// moves (security T1).
+    pub last_message_at: Option<DateTime<Utc>>,
     pub by_tool: Vec<ToolCount>,
     pub by_host: Vec<HostCount>,
 }
@@ -432,7 +491,7 @@ pub async fn tool_calls(
             "since is more than {MAX_WINDOW_DAYS} days back"
         )));
     }
-    let visible = Visibility::stats_read(&state, auth.1).session_ok("s");
+    let visible = stats_read_visibility(&state, &auth)?.session_ok("s");
     let sql = format!(
         r#"WITH hits AS (
                SELECT u.tool_name, m.machine_id
@@ -453,10 +512,17 @@ pub async fn tool_calls(
         .bind(&prefix)
         .fetch_all(&state.pool)
         .await?;
-    let last_ingest: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT max(last_seen) FROM machines")
-            .fetch_one(&state.pool)
-            .await?;
+    // Security T1: the newest message the caller may see, not the machines'
+    // last_seen, which moves on client-only ingest (a shared machine too).
+    let last_message_at: Option<DateTime<Utc>> = sqlx::query_scalar(&format!(
+        r#"SELECT m."timestamp" FROM messages m JOIN sessions s ON s.id = m.session_id
+            WHERE m."timestamp" >= $1 AND {visible}
+            ORDER BY m."timestamp" DESC LIMIT 1"#
+    ))
+    .bind(since)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
     let (mut by_tool, mut by_host) = (Vec::new(), Vec::new());
     for (kind, key, count) in rows {
         if kind == "tool" {
@@ -473,7 +539,7 @@ pub async fn tool_calls(
     by_host.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.host.cmp(&b.host)));
     Ok(Json(ToolCallsAnswer {
         since,
-        last_ingest,
+        last_message_at,
         by_tool,
         by_host,
     }))

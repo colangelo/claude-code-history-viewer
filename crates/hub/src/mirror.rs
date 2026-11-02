@@ -210,6 +210,14 @@ impl Mirror {
     /// were copied after, as Postgres text; `None` before the first copy.
     pub fn client_flags_as_of(&self) -> Option<String> {
         let conn = self.conn.lock().expect("mirror connection poisoned");
+        Self::client_flags_as_of_on(&conn)
+    }
+
+    /// [`Mirror::client_flags_as_of`] read through a given handle, so a
+    /// request checks the watermark of the very connection it aggregates on
+    /// (security T2: a rebuild adopted in between cannot slip older flags under
+    /// a check made on the old handle).
+    pub fn client_flags_as_of_on(conn: &Connection) -> Option<String> {
         conn.query_row(
             "SELECT v FROM mirror_meta WHERE k = 'client_flags_as_of'",
             [],
@@ -285,6 +293,12 @@ impl Mirror {
             Ok(c) => c,
             Err(_) => return MirrorState::Warming,
         };
+        Self::state_on(&conn)
+    }
+
+    /// [`Mirror::state`] read through a given handle (see
+    /// [`Mirror::client_flags_as_of_on`] for why).
+    pub fn state_on(conn: &Connection) -> MirrorState {
         let refreshed_at: Option<String> = conn
             .query_row(
                 "SELECT v FROM mirror_meta WHERE k = 'refreshed_at'",

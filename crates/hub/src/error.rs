@@ -27,6 +27,8 @@ pub enum HubError {
     /// Lab statistics refused: the mirror is older than the last client-scope
     /// change (design R2-E). Transient, 503.
     MirrorBehind(String),
+    /// A feature this request needs is not configured on this hub. 503.
+    Unavailable(String),
     /// Any other server-side failure.
     Internal(String),
 }
@@ -42,6 +44,7 @@ impl std::fmt::Display for HubError {
             HubError::Mirror(e) => write!(f, "stats mirror error: {e}"),
             HubError::StatsWarming { .. } => write!(f, "statistics mirror is warming up"),
             HubError::MirrorBehind(m) => write!(f, "{m}"),
+            HubError::Unavailable(m) => write!(f, "unavailable: {m}"),
             HubError::Internal(m) => write!(f, "internal error: {m}"),
         }
     }
@@ -69,6 +72,7 @@ impl IntoResponse for HubError {
             HubError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             HubError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             HubError::MirrorBehind(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
+            HubError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
             HubError::Db(e) => {
                 // Log the detail server-side; do not leak it to the client.
                 tracing::error!(error = %e, "database error");

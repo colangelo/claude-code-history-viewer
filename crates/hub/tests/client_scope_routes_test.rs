@@ -63,6 +63,10 @@ struct World {
     client_sid: String,
     machine: Uuid,
     machine_token: String,
+    /// A second machine that ingests only client sessions (security T1).
+    client_machine: Uuid,
+    client_machine_token: String,
+    state: hub::AppState,
     /// The statistics mirror this hub serves from, refreshed once the world
     /// is ingested (openspec stats-read-api: the stats routes join the walk).
     mirror: Arc<hub::mirror::Mirror>,
@@ -108,6 +112,7 @@ async fn world_with(enforce: bool) -> World {
 
     let r = Uuid::new_v4().simple().to_string();
     let (machine, machine_token) = (Uuid::new_v4(), format!("tok-m-{r}"));
+    let (client_machine, client_machine_token) = (Uuid::new_v4(), format!("tok-cm-{r}"));
     let lab_reader = format!("tok-lab-{r}");
     let stats_reader = format!("tok-stats-{r}");
     let client_reader = format!("tok-client-{r}");
@@ -115,6 +120,7 @@ async fn world_with(enforce: bool) -> World {
         "database_url = \"unused\"\n\
          trust_tailscale_identity = [\"{LOGIN}\"]\n\
          [[tokens]]\ntoken = \"{machine_token}\"\nmachine_id = \"{machine}\"\nlabel = \"m\"\n\
+         [[tokens]]\ntoken = \"{client_machine_token}\"\nmachine_id = \"{client_machine}\"\nlabel = \"cm\"\n\
          [[readers]]\ntoken = \"{lab_reader}\"\nmachine_id = \"{}\"\nlabel = \"blog\"\n\
          [[readers]]\ntoken = \"{stats_reader}\"\nmachine_id = \"{}\"\nlabel = \"monitoring\"\nstats_only = true\n\
          [[client_readers]]\ntoken_sha256 = \"{}\"\nmachine_id = \"{}\"\nlabel = \"distiller\"\n\
@@ -145,7 +151,7 @@ async fn world_with(enforce: bool) -> World {
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let router = hub::router(state, None);
+    let router = hub::router(state.clone(), None);
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
     let lab_canary = format!("labcanary{r}");
@@ -267,6 +273,9 @@ async fn world_with(enforce: bool) -> World {
         client_sid,
         machine,
         machine_token,
+        client_machine,
+        client_machine_token,
+        state,
         mirror,
         mirror_cfg,
         daily_url,
@@ -917,4 +926,171 @@ async fn client_scope_health_names_the_callers_scope() {
             "none=null"
         ]
     );
+}
+
+/// Security T1: client-only ingest, on a machine of its own AND on the machine
+/// that also carries the lab session, leaves every stats-read response a lab
+/// reader gets byte-identical, freshness fields included.
+#[tokio::test]
+async fn client_only_ingest_moves_no_stats_read_answer() {
+    let w = world().await;
+    let urls = [w.daily_url.clone(), w.tool_calls_url.clone()];
+    let view = |w: &World| {
+        let urls = urls.clone();
+        let base = w.base.clone();
+        let token = w.lab_reader.clone();
+        async move {
+            let mut out = Vec::new();
+            for url in urls {
+                let r = reqwest::Client::new()
+                    .get(format!("{base}{url}"))
+                    .bearer_auth(&token)
+                    .send()
+                    .await
+                    .unwrap();
+                out.push((url, r.status().as_u16(), r.text().await.unwrap()));
+            }
+            out
+        }
+    };
+    let before = view(&w).await;
+    assert!(before.iter().all(|(_, s, _)| *s == 200), "{before:?}");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let tool = format!(
+        "mcp__exa__{}",
+        w.tool_calls_url
+            .split("prefix=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap()
+    );
+    let shared_host = format!("rt-{}", tool.rsplit("rt_").next().unwrap());
+    for (machine, token, host, hostname) in [
+        (w.machine, &w.machine_token, "shared", shared_host.clone()),
+        (
+            w.client_machine,
+            &w.client_machine_token,
+            "dedicated",
+            "t1-dedicated".to_string(),
+        ),
+    ] {
+        let sid = Uuid::new_v4().to_string();
+        let path = format!("{}-{host}", w.client_path);
+        let resp = reqwest::Client::new()
+            .post(format!("{}/v1/ingest", w.base))
+            .bearer_auth(token)
+            .json(&json!({
+                // Each machine sends its own name, as a real Mac does: the
+                // shared one the name its lab ingest used.
+                "machine": {"machine_id": machine, "hostname": hostname, "os": "macos"},
+                "projects": [{"provider": "claude", "project_path": path, "name": "p"}],
+                "sessions": [{"provider": "claude", "session_id": sid, "project_path": path, "summary": "s"}],
+                "messages": [{"provider": "claude", "session_id": sid, "message_key": Uuid::new_v4().to_string(),
+                              "seq": 0, "timestamp": now, "type": "assistant", "role": "assistant",
+                              "content": [{"type": "tool_use", "id": "t1", "name": tool, "input": {}}],
+                              "raw": {"cwd": path}}],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_success(), "{host} ingest");
+    }
+    w.mirror.refresh(&w.state.pool).await.unwrap();
+
+    let after = view(&w).await;
+    assert_eq!(
+        before, after,
+        "client-only ingest changed a lab stats-read answer"
+    );
+    // The control: a client reader does see the new calls.
+    let (_, client_body) = get(&w, &w.tool_calls_url, "client").await;
+    assert!(client_body.contains("\"count\":4"), "{client_body}");
+}
+
+/// Security T2: the client-flag check and the aggregation use one mirror
+/// handle. A snapshot checked before an older mirror is adopted keeps
+/// aggregating on what it checked; a request after the adoption refuses.
+#[tokio::test]
+async fn the_flag_check_and_the_rollup_share_one_mirror_handle() {
+    let w = world().await;
+    let vis = hub::auth::Visibility::stats_read(&w.state, hub::auth::ReadScope::Lab).unwrap();
+    let window = || hub::stats::Window {
+        from: Some(chrono::Utc::now().date_naive() - chrono::Duration::days(30)),
+        to: Some(chrono::Utc::now().date_naive()),
+        tz: chrono_tz::UTC,
+        sessions_visible: None,
+    };
+    let checked = hub::stats_api::MirrorSnapshot::take(&w.state).unwrap();
+    let checked_flags = checked.flags_as_of();
+    let before_rows = {
+        let wn = hub::stats_api::restrict(&w.state, vis.clone(), window(), checked.flags_as_of())
+            .await
+            .expect("current mirror passes the check");
+        let snap = hub::stats_api::MirrorSnapshot::take(&w.state).unwrap();
+        snap.run(move |c| Ok(hub::stats::daily_by_project(c, &wn)?))
+            .await
+            .unwrap()
+            .1
+    };
+
+    // An older mirror: built now, then made to look like one copied before
+    // the client sessions were raised (every class `none`, flags from long
+    // ago), and swapped in beneath the live hub as `hub mirror rebuild` does.
+    let older = w.mirror_cfg.resolved_path().with_extension("older");
+    {
+        let m = hub::mirror::Mirror::open_or_create(&hub::config::MirrorConfig {
+            path: Some(older.clone()),
+            ..hub::config::MirrorConfig::default()
+        })
+        .unwrap();
+        m.refresh(&w.state.pool).await.unwrap();
+        let c = m.connection().unwrap();
+        c.execute_batch(
+            "UPDATE mirror_meta SET v = '2000-01-01 00:00:00+00' WHERE k = 'client_flags_as_of';
+             UPDATE sessions SET client_class = 'none'; CHECKPOINT;",
+        )
+        .unwrap();
+    }
+    std::fs::rename(&older, w.mirror_cfg.resolved_path()).unwrap();
+    assert!(
+        w.mirror.adopt_replacement().unwrap(),
+        "older mirror adopted"
+    );
+
+    // The snapshot taken before the swap still aggregates on what it checked.
+    let wn = hub::stats_api::restrict(&w.state, vis.clone(), window(), checked.flags_as_of())
+        .await
+        .expect("its own watermark is still current");
+    let rows = checked
+        .run(move |c| Ok(hub::stats::daily_by_project(c, &wn)?))
+        .await
+        .unwrap()
+        .1;
+    assert_eq!(rows, before_rows, "the checked snapshot's answer");
+
+    // The control: aggregating on the swapped-in handle with the old check's
+    // window would include the client session (the race T2 closes).
+    let leaky = hub::stats_api::MirrorSnapshot::take(&w.state).unwrap();
+    let wn = hub::stats_api::restrict(&w.state, vis.clone(), window(), checked_flags.clone())
+        .await
+        .unwrap();
+    let leaked = leaky
+        .run(move |c| Ok(hub::stats::daily_by_project(c, &wn)?))
+        .await
+        .unwrap()
+        .1;
+    assert_ne!(leaked, before_rows, "the older mirror would leak if aggregated on");
+
+    // A request after the swap sees the older watermark and refuses.
+    let fresh = hub::stats_api::MirrorSnapshot::take(&w.state).unwrap();
+    let refused = hub::stats_api::restrict(&w.state, vis, window(), fresh.flags_as_of()).await;
+    assert!(
+        matches!(refused, Err(hub::error::HubError::MirrorBehind(_))),
+        "{refused:?}"
+    );
+    let (status, _) = get(&w, &w.daily_url, "lab").await;
+    assert_eq!(status, 503, "over HTTP too");
 }

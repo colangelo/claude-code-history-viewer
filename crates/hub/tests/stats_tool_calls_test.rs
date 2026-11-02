@@ -11,6 +11,18 @@ use std::collections::HashMap;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+/// sha256 hex: the hub keeps client-reader tokens by hash only.
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .fold(String::new(), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}
+
 fn test_db_url() -> String {
     std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
@@ -19,7 +31,12 @@ fn test_db_url() -> String {
 
 struct Hub {
     base: String,
+    /// A client reader: these tests check the arithmetic over every session
+    /// on a hub without client scope (the lab filter has its own tests in
+    /// `client_scope_routes_test.rs`).
     token: String,
+    /// A machine token, a lab principal: 503 here (security T3).
+    lab_token: String,
     pool: PgPool,
     /// Run-unique, so the shared test database's earlier runs never match.
     tag: String,
@@ -33,12 +50,14 @@ async fn spawn() -> Hub {
         .expect("connect test db");
     hub::MIGRATOR.run(&pool).await.expect("run migrations");
     let machine = Uuid::new_v4();
-    let token = format!("tok-{machine}");
+    let lab_token = format!("tok-{machine}");
+    let token = format!("creader-{machine}");
     let state = hub::AppState::new(
         pool.clone(),
-        HashMap::from([(token.clone(), machine)]),
+        HashMap::from([(lab_token.clone(), machine)]),
         Vec::new(),
-    );
+    )
+    .with_client_readers(HashMap::from([(sha256_hex(&token), machine)]));
     let app = hub::router(state, None);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -46,6 +65,7 @@ async fn spawn() -> Hub {
     Hub {
         base: format!("http://{addr}"),
         token,
+        lab_token,
         pool,
         tag: Uuid::new_v4().simple().to_string()[..10].to_string(),
     }
@@ -187,7 +207,7 @@ async fn counts_per_tool_and_host_since_t_by_last_segment() {
         })
         .collect();
     assert_eq!(by_host, vec![(b.clone(), 3), (a.clone(), 2)]);
-    assert!(body["last_ingest"].is_string(), "{body}");
+    assert!(body["last_message_at"].is_string(), "{body}");
     assert!(body["since"].is_string(), "{body}");
 }
 
@@ -217,4 +237,37 @@ async fn parameters_are_prefix_and_since_only_within_31_days() {
     }
     let (status, body) = hub.get(&format!("?prefix=x&since={ok_since}")).await;
     assert_eq!(status, 200, "30 days back is allowed: {body}");
+}
+
+/// Security T3: a lab principal on a hub with no client scope gets 503, not
+/// every session.
+#[tokio::test]
+async fn a_lab_reader_gets_503_without_client_scope() {
+    let hub = spawn().await;
+    let since = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .to_rfc3339()
+        .replace('+', "%2B");
+    let url = if "tool-calls" == "daily" {
+        format!("{}/v1/stats/daily", hub.base)
+    } else {
+        format!("{}/v1/stats/tool-calls?prefix=x&since={since}", hub.base)
+    };
+    let r = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&hub.lab_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 503);
+    let r = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&hub.token)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        r.status().as_u16(),
+        503,
+        "the control: a client reader is served"
+    );
 }

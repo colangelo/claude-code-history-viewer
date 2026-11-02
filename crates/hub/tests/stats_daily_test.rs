@@ -15,6 +15,18 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+/// sha256 hex: the hub keeps client-reader tokens by hash only.
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .fold(String::new(), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}
+
 fn test_db_url() -> String {
     std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
@@ -23,7 +35,12 @@ fn test_db_url() -> String {
 
 struct Hub {
     base: String,
+    /// A client reader: these tests check the arithmetic over every session
+    /// on a hub without client scope (the lab filter has its own tests in
+    /// `client_scope_routes_test.rs`).
     token: String,
+    /// A machine token, a lab principal: 503 here (security T3).
+    lab_token: String,
     pool: PgPool,
     mirror: Arc<Mirror>,
     machine: Uuid,
@@ -43,7 +60,8 @@ async fn spawn() -> Hub {
         .execute(&pool)
         .await
         .expect("insert machine");
-    let token = format!("tok-{machine}");
+    let lab_token = format!("tok-{machine}");
+    let token = format!("creader-{machine}");
     let dir = std::env::temp_dir().join(format!("cchv-daily-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let mirror = Arc::new(
@@ -55,9 +73,10 @@ async fn spawn() -> Hub {
     );
     let state = hub::AppState::new(
         pool.clone(),
-        HashMap::from([(token.clone(), machine)]),
+        HashMap::from([(lab_token.clone(), machine)]),
         Vec::new(),
     )
+    .with_client_readers(HashMap::from([(sha256_hex(&token), machine)]))
     .with_mirror(mirror.clone());
     let app = hub::router(state, None);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -66,6 +85,7 @@ async fn spawn() -> Hub {
     Hub {
         base: format!("http://{addr}"),
         token,
+        lab_token,
         pool,
         mirror,
         machine,
@@ -346,4 +366,38 @@ async fn needs_a_read_token() {
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 401);
+}
+
+/// Security T3: a lab principal on a hub with no client scope gets 503, not
+/// every session.
+#[tokio::test]
+async fn a_lab_reader_gets_503_without_client_scope() {
+    let hub = spawn().await;
+    hub.mirror.refresh(&hub.pool).await.expect("refresh");
+    let since = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .to_rfc3339()
+        .replace('+', "%2B");
+    let url = if "daily" == "daily" {
+        format!("{}/v1/stats/daily", hub.base)
+    } else {
+        format!("{}/v1/stats/tool-calls?prefix=x&since={since}", hub.base)
+    };
+    let r = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&hub.lab_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 503);
+    let r = reqwest::Client::new()
+        .get(&url)
+        .bearer_auth(&hub.token)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        r.status().as_u16(),
+        503,
+        "the control: a client reader is served"
+    );
 }

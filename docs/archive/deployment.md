@@ -403,7 +403,10 @@ token answers 401 on `GET /v1/projects`.
 **Stats-read routes (cchv-v0.41.0+, OpenSpec `stats-read-api`).** Two GET routes
 for services, both **lab sessions only for a lab reader, in observe as under
 enforce** (security's D3 ruling (a)): a client session adds nothing to any count.
-Both take only the parameters below (any other is 400) and at most 31 days.
+Both take only the parameters below (any other is 400) and at most 31 days. A hub
+without `[client_scope]` answers them 503 for lab and stats-only readers rather
+than serve every session; nothing in either answer moves when only client data is
+ingested.
 
 - `GET /v1/stats/daily?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=<IANA>`: one row per local
   day and project. Defaults: `tz` Europe/Rome, `to` today, `from` 30 days before.
@@ -425,7 +428,7 @@ Both take only the parameters below (any other is 400) and at most 31 days.
 
 - `GET /v1/stats/tool-calls?prefix=<name>&since=<RFC 3339>`: tool calls since T
   (at most 31 days back) whose name equals `prefix` or ends in `__<prefix>`.
-  Answers `{since, last_ingest, by_tool: [{tool, server, count}], by_host:
+  Answers `{since, last_message_at, by_tool: [{tool, server, count}], by_host:
   [{host, count}]}`. From Postgres. Codex MCP calls count from cchv-v0.41.0 on,
   under `mcp__<server>__<tool>` (#102); earlier Codex calls stay `exec`.
 

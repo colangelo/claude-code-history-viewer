@@ -42,14 +42,15 @@ impl Visibility {
     /// only in observe as well as under enforce. Their readers are services
     /// that store what they read, so observe's "nothing hidden yet" does not
     /// apply to them.
-    pub fn stats_read(state: &AppState, scope: ReadScope) -> Self {
-        let Some(cs) = &state.client_scope else {
-            return Visibility::All;
-        };
+    ///
+    /// `None` when a lab principal asks a hub without client scope: there is
+    /// nothing to filter with, and the routes answer 503 rather than serve every
+    /// session (security T3). A client reader sees everything either way.
+    pub fn stats_read(state: &AppState, scope: ReadScope) -> Option<Self> {
         if scope == ReadScope::Client {
-            return Visibility::All;
+            return Some(Visibility::All);
         }
-        Self::lab(cs)
+        state.client_scope.as_ref().map(|cs| Self::lab(cs))
     }
 
     fn lab(cs: &crate::client_state::ClientScope) -> Self {
