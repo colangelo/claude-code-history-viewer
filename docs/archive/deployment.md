@@ -433,8 +433,19 @@ enforce      = false   # observe: classify and count, hide nothing
   - `client-scope accept-routing`;
   - `client-scope clear --session N`;
   - `client-scope unlatch`;
-  - `client-scope restamp-history --dry-run | --approved-by …`, which makes a pre-routing journal
-    entry lab again only when its text and sessions match nothing under markers and terms.
+  - `client-scope restamp-history --from FILE --dry-run | --approved-by …`, which makes an
+    unstamped journal entry lab again only when the distiller's live router listed it (design
+    R3-E8). It never runs before its code review and release (0.40.0), and then in this order:
+    1. On m4m, `cchv-distill --restamp-history ~/.local/state/cchv/restamp-<date>.json` (hub GETs
+       only, no model call). It refuses another generation, protect-all routing, or a lab caller
+       under enforce. It prints counts only, and the file lists only restampable entries.
+    2. Its counts go to security and the client desk.
+    3. The pg1 writer runs `--from FILE --dry-run`, which applies the same re-checks and writes
+       nothing.
+    4. ac's row, with the client desk's word.
+    5. The pg1 writer runs `--from FILE --approved-by …`, within 24 h of step 1. Each restamp
+       commits together with its audit row (file sha256, distiller version).
+    6. The file goes to the trash after the apply, or after 24 h, whichever comes first.
 
   Every action writes a row in `client_scope_audit`.
 - **Stats.** The mirror copies each session's class and generation. Lab statistics come from
