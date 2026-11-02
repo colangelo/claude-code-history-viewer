@@ -25,8 +25,8 @@
 
 ## 4. #102 Codex MCP calls
 
-- [ ] 4.1 Red: a rollout with an `exec` call and an `McpToolCall` completion yields `raw.mcp = {server, tool}` on the exec message, with an unchanged `message_key` (a pinned test). The hub records `mcp__exa__web_search_exa`.
-- [ ] 4.2 Parser and ingest mapping. New rows only.
+- [x] 4.1 Red: a rollout with an `exec` call and an `McpToolCall` completion yields `raw.mcp = {server, tool}` on the exec message, with an unchanged `message_key` (a pinned test). The hub records `mcp__exa__web_search_exa`.
+- [x] 4.2 Parser and ingest mapping. New rows only.
 
 ## 5. Ship
 

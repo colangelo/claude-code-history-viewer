@@ -255,6 +255,27 @@ mod tests {
         );
     }
 
+    /// #102 (stats-read-api D5): the MCP calls of a Codex `exec` reach `raw`
+    /// as `mcp`, and never the dedup key, so a rollout synced before the change
+    /// keeps every key when it is read again.
+    #[test]
+    fn mcp_reaches_raw_and_not_message_key() {
+        let without = parsed_claude_line(&claude_user_line(None));
+        let mut with = without.clone();
+        with.mcp = Some(vec![history_core::models::McpCall {
+            server: "exa".into(),
+            tool: "web_search_exa".into(),
+        }]);
+        assert_eq!(
+            message_key("codex", "s", 4, &with),
+            message_key("codex", "s", 4, &without)
+        );
+        let ingest = to_ingest_message("codex", "s", 4, &with);
+        assert_eq!(ingest.raw["mcp"], json!([{"server": "exa", "tool": "web_search_exa"}]));
+        let ingest = to_ingest_message("codex", "s", 4, &without);
+        assert!(ingest.raw.get("mcp").is_none(), "absent when there is none");
+    }
+
     /// #46: the payload reaches the hub inside `raw`…
     #[test]
     fn attachment_payload_is_archived_in_raw() {

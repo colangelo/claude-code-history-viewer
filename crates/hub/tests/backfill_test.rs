@@ -183,6 +183,18 @@ fn rich_batch(machine_id: Uuid) -> IngestBatch {
                 json!([{ "type": "text", "text": "nothing" }]),
                 json!({ "messageId": "msg_04" }),
             ),
+            // #102: a Codex exec that made two MCP calls counts as those two,
+            // and the backfill must derive the same rows (it reads a slim raw).
+            msg(
+                "s1",
+                "k5",
+                "assistant",
+                json!([{ "type": "tool_use", "id": "call_e1", "name": "exec", "input": "code" }]),
+                json!({ "messageId": "msg_05", "mcp": [
+                    { "server": "exa", "tool": "web_search_exa" },
+                    { "server": "exa", "tool": "web_fetch_exa" }
+                ] }),
+            ),
         ],
     )
 }

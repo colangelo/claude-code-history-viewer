@@ -1452,6 +1452,7 @@ fn parse_line_to_message(
             provider: None,
             attachment: None,
             cwd: log_entry.cwd,
+            mcp: None,
         });
     }
 
@@ -1515,6 +1516,7 @@ fn parse_line_to_message(
         provider: None,
         attachment: log_entry.attachment,
         cwd: log_entry.cwd,
+        mcp: None,
     })
 }
 
@@ -1586,6 +1588,7 @@ fn parse_line_simd(
             provider: None,
             attachment: None,
             cwd: log_entry.cwd,
+            mcp: None,
         });
     }
 
@@ -1662,6 +1665,7 @@ fn parse_line_simd(
         provider: None,
         attachment: log_entry.attachment,
         cwd: log_entry.cwd,
+        mcp: None,
     })
 }
 

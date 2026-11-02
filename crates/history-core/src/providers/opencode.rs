@@ -607,6 +607,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
             provider: Some("opencode".to_string()),
             attachment: None,
             cwd: None,
+            mcp: None,
         });
     }
 
@@ -1099,6 +1100,7 @@ fn load_messages_with_conn(conn: &Connection, session_id: &str) -> Option<Vec<Cl
             provider: Some("opencode".to_string()),
             attachment: None,
             cwd: None,
+            mcp: None,
         });
     }
 

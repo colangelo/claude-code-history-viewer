@@ -50,6 +50,7 @@ mod claude_message_snapshots {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         assert_json_snapshot!("user_message", message);
@@ -100,6 +101,7 @@ mod claude_message_snapshots {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         assert_json_snapshot!("assistant_message", message);
@@ -168,6 +170,7 @@ mod claude_message_snapshots {
             provider: Some("forgecode".to_string()),
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         assert_json_snapshot!("forgecode_message", message);
@@ -228,6 +231,7 @@ mod claude_message_snapshots {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         assert_json_snapshot!("message_with_tool_use", message);

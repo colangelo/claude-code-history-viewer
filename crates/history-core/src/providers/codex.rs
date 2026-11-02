@@ -1,5 +1,5 @@
 use super::ProviderInfo;
-use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession, TokenUsage};
+use crate::models::{ClaudeMessage, ClaudeProject, ClaudeSession, McpCall, TokenUsage};
 use crate::utils::{
     build_provider_message, estimate_message_count_from_size, find_line_ranges,
     search_json_value_case_insensitive,
@@ -396,6 +396,13 @@ pub(crate) fn parse_rollout_file(canonical_path: &Path) -> Result<Vec<ClaudeMess
                     // and event_msg (type=user_message / agent_message) — only keep
                     // the response_item version to avoid showing every message twice.
                     if event_type == "user_message" || event_type == "agent_message" {
+                        continue;
+                    }
+
+                    // #102: a completed MCP call names its server and tool on the
+                    // `exec` that made it; it is not a message of its own.
+                    if event_type == "item_completed" {
+                        attach_mcp_call(&mut messages, payload);
                         continue;
                     }
 
@@ -1348,6 +1355,42 @@ fn convert_codex_event(
         // Unsupported/duplicated Codex events are intentionally ignored.
         _ => None,
     }
+}
+
+/// Record an `item_completed` `McpToolCall` on the `exec` call that made it:
+/// the most recent message with a tool call, when that call is `exec`. A
+/// completion with no such message is dropped, as before (#102, D5).
+fn attach_mcp_call(messages: &mut [ClaudeMessage], payload: &Value) {
+    let Some(item) = payload.get("item") else {
+        return;
+    };
+    if item.get("type").and_then(Value::as_str) != Some("McpToolCall") {
+        return;
+    }
+    let (Some(server), Some(tool)) = (
+        item.get("server").and_then(Value::as_str).filter(|s| !s.is_empty()),
+        item.get("tool").and_then(Value::as_str).filter(|s| !s.is_empty()),
+    ) else {
+        return;
+    };
+    let tool_name = |m: &ClaudeMessage| {
+        m.content.as_ref().and_then(Value::as_array).and_then(|blocks| {
+            blocks
+                .iter()
+                .find(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+                .and_then(|b| b.get("name").and_then(Value::as_str).map(str::to_string))
+        })
+    };
+    let Some(last_call) = messages.iter_mut().rev().find(|m| tool_name(m).is_some()) else {
+        return;
+    };
+    if tool_name(last_call).as_deref() != Some("exec") {
+        return;
+    }
+    last_call.mcp.get_or_insert_with(Vec::new).push(McpCall {
+        server: server.to_string(),
+        tool: tool.to_string(),
+    });
 }
 
 fn convert_codex_compacted(
@@ -3184,6 +3227,66 @@ mod tests {
             cwds,
             vec![Some("/w/first"), Some("/w/second"), Some("/w/second")],
             "a turn without a folder keeps the last one"
+        );
+    }
+
+    /// #102 (openspec stats-read-api D5): a completed `McpToolCall` names the
+    /// MCP server and tool on the `exec` call that made it, without adding a
+    /// message (so no message is re-keyed by position).
+    #[test]
+    fn mcp_calls_land_on_the_exec_that_made_them() {
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("rollout.jsonl");
+        let exec = |id: &str| {
+            json!({"timestamp": "2026-11-02T15:28:17Z", "type": "response_item",
+                   "payload": {"type": "custom_tool_call", "id": id, "status": "completed",
+                               "call_id": format!("call-{id}"), "name": "exec", "input": "code"}})
+        };
+        let done = |server: &str, tool: &str| {
+            json!({"timestamp": "2026-11-02T15:28:18Z", "type": "event_msg",
+                   "payload": {"type": "item_completed", "turn_id": "t1",
+                               "item": {"type": "McpToolCall", "id": "x", "server": server,
+                                        "tool": tool, "arguments": {"query": "q"},
+                                        "status": "completed"}}})
+        };
+        let user = json!({"timestamp": "2026-11-02T15:28:00Z", "type": "response_item",
+                          "payload": {"id": "u1", "type": "message", "role": "user",
+                                      "content": [{"type": "input_text", "text": "search"}]}});
+        let lines = [
+            json!({"timestamp": "2026-11-02T15:27:00Z", "type": "session_meta",
+                   "payload": {"id": "sess-mcp", "cwd": "/w/lab"}}),
+            // An MCP completion before any exec has nothing to land on.
+            done("exa", "orphan"),
+            user,
+            exec("e1"),
+            done("exa", "web_search_exa"),
+            done("exa", "web_fetch_exa"),
+            exec("e2"),
+        ];
+        let body = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(&path, body).expect("write rollout");
+        let msgs = parse_rollout_file(&path).expect("parse");
+        assert_eq!(msgs.len(), 3, "no message for an MCP completion");
+        let mcp: Vec<Option<Vec<(&str, &str)>>> = msgs
+            .iter()
+            .map(|m| {
+                m.mcp
+                    .as_ref()
+                    .map(|v| v.iter().map(|c| (c.server.as_str(), c.tool.as_str())).collect())
+            })
+            .collect();
+        assert_eq!(
+            mcp,
+            vec![
+                None,
+                Some(vec![("exa", "web_search_exa"), ("exa", "web_fetch_exa")]),
+                None
+            ]
         );
     }
 }

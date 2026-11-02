@@ -119,7 +119,10 @@ async fn tool_batch(
                  WHERE e->>'type' IN ('tool_use', 'tool_result')) AS slim_content,
                jsonb_build_object(
                    'toolUse',       m.raw->'toolUse',
-                   'toolUseResult', m.raw->'toolUseResult') AS raw_tool
+                   'toolUseResult', m.raw->'toolUseResult',
+                   -- #102: a Codex exec's MCP calls, so a backfill keeps
+                   -- their names instead of writing the exec back.
+                   'mcp',           m.raw->'mcp') AS raw_tool
           FROM messages m
          WHERE m.id > $1
            AND (jsonb_typeof(m.content) = 'array'

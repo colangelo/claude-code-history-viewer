@@ -192,6 +192,20 @@ pub struct ClaudeMessage {
     /// `message_key`, so adding it never re-keys an archived message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+
+    /// The MCP calls a Codex `exec` made, from its `McpToolCall` completions
+    /// (#102, openspec stats-read-api D5), so the archive counts them under
+    /// their MCP name. Like `cwd`, in `raw` only and NOT part of the sync
+    /// daemon's `message_key`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<Vec<McpCall>>,
+}
+
+/// One MCP tool call: the server and the tool's own name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpCall {
+    pub server: String,
+    pub tool: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +290,7 @@ impl TryFrom<RawLogEntry> for ClaudeMessage {
             provider: None,
             attachment: log_entry.attachment,
             cwd: log_entry.cwd,
+            mcp: None,
         })
     }
 }
@@ -449,6 +464,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let serialized = serde_json::to_string(&message).unwrap();
@@ -496,6 +512,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let serialized = serde_json::to_string(&message).unwrap();

@@ -203,6 +203,7 @@ fn search_in_file(file_path: &PathBuf, matcher: &AhoCorasick) -> Vec<ClaudeMessa
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
         results.push(claude_message);
     }

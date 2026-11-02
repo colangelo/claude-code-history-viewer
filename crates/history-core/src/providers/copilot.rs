@@ -425,6 +425,7 @@ mod tests {
             provider: Some(PROVIDER_ID.to_string()),
             attachment: None,
             cwd: None,
+            mcp: None,
         }
     }
 

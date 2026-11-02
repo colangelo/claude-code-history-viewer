@@ -490,6 +490,7 @@ pub fn build_provider_message(
         provider: Some(provider.to_string()),
         attachment: None,
         cwd: None,
+        mcp: None,
     }
 }
 

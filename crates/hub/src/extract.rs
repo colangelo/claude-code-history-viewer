@@ -76,6 +76,20 @@ fn input_str(item: &Value, tool_name: &str, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `mcp__<server>__<tool>` for each well-formed entry of `raw.mcp` (#102).
+fn mcp_names(raw: &Value) -> Vec<String> {
+    raw.get("mcp")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let server = c.get("server").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+            let tool = c.get("tool").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+            Some(format!("mcp__{server}__{tool}"))
+        })
+        .collect()
+}
+
 /// Tool invocations in a message.
 ///
 /// Two shapes carry invocations, mirroring the oracle's two extraction paths:
@@ -90,7 +104,8 @@ pub fn tool_uses(
     content: Option<&Value>,
     raw: &Value,
 ) -> Vec<ToolUseRow> {
-    let mut rows = Vec::new();
+    let mut rows: Vec<ToolUseRow> = Vec::new();
+    let mut mcp_taken = false;
     // Explicit ordinal rather than `rows.len() as i32`: the column is int4, and
     // a silent wrap is not a failure mode worth inheriting from a cast.
     let mut seq: i32 = 0;
@@ -106,14 +121,36 @@ pub fn tool_uses(
                 let Some(name) = item.get("name").and_then(Value::as_str) else {
                     continue;
                 };
+                let tool_use_id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                // #102 (stats-read-api D5): a Codex `exec` counts as the MCP
+                // calls it made, one row each under `mcp__<server>__<tool>`.
+                // Only the first `exec` of a message takes them.
+                let mcp = (name == "exec" && !mcp_taken)
+                    .then(|| mcp_names(raw))
+                    .unwrap_or_default();
+                if !mcp.is_empty() {
+                    mcp_taken = true;
+                    for tool_name in mcp {
+                        rows.push(ToolUseRow {
+                            seq,
+                            tool_name,
+                            tool_use_id: tool_use_id.clone(),
+                            skill_name: None,
+                            subagent_type: None,
+                            is_error: false,
+                        });
+                        seq += 1;
+                    }
+                    continue;
+                }
                 rows.push(ToolUseRow {
                     seq,
                     tool_name: name.to_owned(),
-                    tool_use_id: item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_owned),
+                    tool_use_id,
                     skill_name: input_str(item, "Skill", "skill"),
                     subagent_type: input_str(item, "Agent", "subagent_type"),
                     // Never present on a tool_use item; the outcome is a
@@ -202,6 +239,37 @@ pub fn tool_results(content: Option<&Value>) -> Vec<ToolResultRow> {
 
 #[cfg(test)]
 mod tests {
+
+    /// #102 (stats-read-api D5): a Codex `exec` whose message carries the MCP
+    /// calls it made counts as those calls, one row each, under their MCP name.
+    #[test]
+    fn codex_exec_counts_as_its_mcp_calls() {
+        let content = serde_json::json!([
+            {"type": "tool_use", "id": "call-e1", "name": "exec", "input": "code"},
+            {"type": "tool_result", "tool_use_id": "call-e1", "content": "ok"}
+        ]);
+        let raw = serde_json::json!({"mcp": [
+            {"server": "exa", "tool": "web_search_exa"},
+            {"server": "exa", "tool": "web_fetch_exa"}
+        ]});
+        let rows = tool_uses(Some("assistant"), Some(&content), &raw);
+        let names: Vec<(i32, &str, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.seq, r.tool_name.as_str(), r.tool_use_id.as_deref()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                (0, "mcp__exa__web_search_exa", Some("call-e1")),
+                (1, "mcp__exa__web_fetch_exa", Some("call-e1")),
+            ]
+        );
+        // Without `mcp` the exec stays an exec.
+        let rows = tool_uses(Some("assistant"), Some(&content), &serde_json::json!({}));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tool_name, "exec");
+    }
+
     use super::*;
     use serde_json::json;
 
