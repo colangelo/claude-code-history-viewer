@@ -21,6 +21,7 @@ use serde_json::json;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::auth::Authenticated;
 use crate::error::HubError;
 use crate::mirror::MirrorState;
 use crate::state::AppState;
@@ -282,7 +283,10 @@ pub struct JournalHealthParams {
 #[derive(Debug, Serialize)]
 pub struct JournalStaleGroup {
     pub entry_date: NaiveDate,
-    pub project_path: String,
+    /// Only for a read principal. The route takes no credential, and a project
+    /// path names a folder, client folders included (security L1, 2026-11-02).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
     /// `max(messages.created_at)` over the group's sessions — when its data
     /// last *arrived in the archive* (ingest time), not when it was authored.
     pub latest_arrival: DateTime<Utc>,
@@ -427,6 +431,7 @@ fn parse_positive(raw: Option<&str>, name: &str, default: i64) -> Result<i64, Hu
 /// or host problem, and the difference decides who gets paged.
 pub async fn healthz_journal(
     State(state): State<AppState>,
+    reader: Option<Authenticated>,
     Query(params): Query<JournalHealthParams>,
 ) -> Result<(StatusCode, Json<JournalHealthResponse>), HubError> {
     let grace_secs = parse_positive(
@@ -575,7 +580,7 @@ pub async fn healthz_journal(
             any_stale |= stale;
             JournalStaleGroup {
                 entry_date: r.entry_date,
-                project_path: r.project_path,
+                project_path: reader.is_some().then_some(r.project_path),
                 latest_arrival: r.latest_arrival,
                 stale,
             }

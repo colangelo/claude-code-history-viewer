@@ -1144,7 +1144,13 @@ async fn journal_health_old_history_outside_window_ignored() {
 
     // Widening the horizon to 30 days brings the same group into scope (proving
     // the window — not some other filter — is what excluded it), and it's stale.
-    let resp = get(&hub, "/v1/healthz/journal", &[("within_days", "30")], Some(&hub.token)).await;
+    let resp = get(
+        &hub,
+        "/v1/healthz/journal",
+        &[("within_days", "30")],
+        Some(&hub.token),
+    )
+    .await;
     let body: Value = resp.json().await.unwrap();
     assert_eq!(find_group(&body, &project)["stale"], Value::Bool(true));
 }

@@ -22,9 +22,10 @@
 //! alias writes take `Authenticated` (a trusted Tailscale identity makes them),
 //! and so might a write added later, so the method decides, not the extractor.
 
+use std::convert::Infallible;
 use std::future::{ready, Future};
 
-use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::{FromRequestParts, OptionalFromRequestParts, Request, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, Method};
@@ -192,6 +193,20 @@ impl FromRequestParts<AppState> for Authenticated {
         state: &AppState,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         ready(resolve_read_principal(parts, state))
+    }
+}
+
+/// `Option<Authenticated>`: for the health routes, which answer everyone but
+/// show detail only to a read principal. A missing, unknown or non-read token is
+/// `None`, never a 401: the verdict stays reachable for the monitor.
+impl OptionalFromRequestParts<AppState> for Authenticated {
+    type Rejection = Infallible;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> impl Future<Output = Result<Option<Self>, Self::Rejection>> + Send {
+        ready(Ok(resolve_read_principal(parts, state).ok()))
     }
 }
 

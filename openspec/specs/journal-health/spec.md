@@ -21,6 +21,12 @@ compute its latest data arrival (`max(messages.created_at)` over the group's ses
 The fold MUST come from the shared definition the pending endpoint uses, not a
 re-derivation, so the two cannot disagree about which sessions belong to a day.
 
+A group's `project_path` SHALL be returned only to a read principal (a read-capable
+bearer token or a trusted Tailscale identity). Without one, each group carries its
+date, arrival and `stale` flag but no project path, and the status code and verdict
+are unchanged, so a credential-less monitor works as before. A missing, unknown or
+non-read token is treated as no credential, never as a 401 (security L1, 2026-11-02).
+
 Evaluation SHALL be bounded to the distiller's forward horizon: only groups
 whose `entry_date` is within `within_days` (query param; default 7, matching
 the distiller's `--horizon-days`) of the current logical day are considered.
