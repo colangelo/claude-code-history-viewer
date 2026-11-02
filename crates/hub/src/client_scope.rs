@@ -142,20 +142,42 @@ impl Class {
     }
 }
 
-/// The served fields of a session row.
+/// The served fields of a session row and of its project.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SessionFields<'a> {
     pub project_path: &'a str,
     pub summary: Option<&'a str>,
     pub file_path: Option<&'a str>,
     pub entrypoint: Option<&'a str>,
+    /// The project's identity besides its path (E1): a hit here is `Path`.
+    pub project: ProjectFields<'a>,
 }
 
-/// One stored message, in full (never the clamped `search_text`).
+/// A project row's served identity besides its path (E1).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProjectFields<'a> {
+    pub name: Option<&'a str>,
+    pub git_remote_url: Option<&'a str>,
+    pub git_main_path: Option<&'a str>,
+}
+
+impl ProjectFields<'_> {
+    /// Whether the project's name, git remote or main checkout path holds a marker.
+    pub fn hits(&self, markers: &Markers) -> bool {
+        [self.name, self.git_remote_url, self.git_main_path]
+            .into_iter()
+            .flatten()
+            .any(|s| markers.matches(&normalize(s)))
+    }
+}
+
+/// One stored message: `content` and `raw` in full, and the `search_text` the
+/// search route serves (E1: accepted from the client, so it is classified too).
 #[derive(Debug, Clone, Copy)]
 pub struct MessageFields<'a> {
     pub content: &'a Value,
     pub raw: &'a Value,
+    pub search_text: Option<&'a str>,
 }
 
 /// Past this depth of JSON nesting a value is not read: unreadable.
@@ -325,6 +347,13 @@ fn message_hits(m: &Markers, msg: MessageFields<'_>) -> Hits {
     };
     h.unreadable |= content_ok.is_err();
 
+    // `search_text`: what the search route indexes and quotes (E1).
+    if let Some(st) = msg.search_text {
+        if take(st, &mut budget, &mut |s| h.text |= hit(s)).is_err() {
+            h.unreadable = true;
+        }
+    }
+
     // `raw`: the provider's record as received, in full. `cwd` first, by name.
     if let Some(cwd) = msg.raw.get("cwd").and_then(Value::as_str) {
         h.cwd |= hit(cwd);
@@ -344,7 +373,7 @@ pub fn classify<'a>(
     messages: impl IntoIterator<Item = MessageFields<'a>>,
 ) -> Class {
     let hit = |s: &str| markers.matches(&normalize(s));
-    if hit(session.project_path) {
+    if hit(session.project_path) || session.project.hits(markers) {
         return Class::Path;
     }
     if [session.summary, session.file_path, session.entrypoint]
@@ -411,12 +440,17 @@ mod tests {
         summary: Option<String>,
         file_path: Option<String>,
         entrypoint: Option<String>,
+        project_name: Option<String>,
+        git_remote_url: Option<String>,
+        git_main_path: Option<String>,
     }
 
     #[derive(Deserialize)]
     struct MessageCase {
         content: Value,
         raw: Value,
+        #[serde(default)]
+        search_text: Option<String>,
     }
 
     fn fixture() -> Fixture {
@@ -452,6 +486,11 @@ mod tests {
                     summary: c.session.summary.as_deref(),
                     file_path: c.session.file_path.as_deref(),
                     entrypoint: c.session.entrypoint.as_deref(),
+                    project: ProjectFields {
+                        name: c.session.project_name.as_deref(),
+                        git_remote_url: c.session.git_remote_url.as_deref(),
+                        git_main_path: c.session.git_main_path.as_deref(),
+                    },
                 };
                 let got = classify(
                     &m,
@@ -459,6 +498,7 @@ mod tests {
                     c.messages.iter().map(|x| MessageFields {
                         content: &x.content,
                         raw: &x.raw,
+                        search_text: x.search_text.as_deref(),
                     }),
                 );
                 (got.as_str() != c.class).then(|| format!("{}: got {}", c.name, got.as_str()))
@@ -483,6 +523,7 @@ mod tests {
                 [MessageFields {
                     content: &content,
                     raw,
+                    search_text: None,
                 }],
             )
         };
@@ -512,6 +553,7 @@ mod tests {
             [MessageFields {
                 content: &content,
                 raw: &raw,
+                search_text: None,
             }],
         );
         assert_eq!(got, Class::Unreadable);

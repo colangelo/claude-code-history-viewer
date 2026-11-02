@@ -17,7 +17,7 @@ use archive_protocol::{IngestMessage, IngestSession};
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 
-use crate::client_scope::{classify, Class, Markers, MessageFields, SessionFields};
+use crate::client_scope::{classify, Class, Markers, MessageFields, ProjectFields, SessionFields};
 
 /// One session's classification from this batch.
 pub struct SessionPlan {
@@ -62,6 +62,9 @@ pub fn plan(
             summary: row.and_then(|s| s.summary.as_deref()),
             file_path: row.and_then(|s| s.file_path.as_deref()),
             entrypoint: row.and_then(|s| s.entrypoint.as_deref()),
+            // The project's other fields are read from its stored row by
+            // `raise_client_projects`, after the batch's project writes.
+            project: ProjectFields::default(),
         };
         let class = classify(
             markers,
@@ -69,6 +72,7 @@ pub fn plan(
             msgs.iter().map(|m| MessageFields {
                 content: m.content.as_ref().unwrap_or(&null),
                 raw: &m.raw,
+                search_text: m.search_text.as_deref(),
             }),
         );
         let (provider, provider_session_id) = row.map_or_else(
@@ -140,48 +144,124 @@ pub async fn apply(
         .fetch_one(&mut **tx)
         .await?;
 
-        let parent = p
-            .file_path
-            .as_deref()
-            .and_then(parent_from_path)
-            .unwrap_or("");
-        match after.as_deref() {
-            Some(c) if c != "none" => {
-                sqlx::query(&format!(
-                    "UPDATE sessions SET client_class = 'family:' || $5, client_rev = client_rev + 1
-                     WHERE {FAMILY} AND (client_class IS NULL OR client_class = 'none')"
-                ))
-                .bind(&p.provider)
-                .bind(&p.provider_session_id)
-                .bind(parent)
-                .bind(pk)
-                .bind(base(c))
-                .execute(&mut **tx)
-                .await?;
-            }
-            _ => {
-                let inherited: Option<String> = sqlx::query_scalar(&format!(
-                    "SELECT client_class FROM sessions
-                     WHERE {FAMILY} AND client_class IS NOT NULL AND client_class <> 'none'
-                     LIMIT 1"
-                ))
-                .bind(&p.provider)
-                .bind(&p.provider_session_id)
-                .bind(parent)
-                .bind(pk)
-                .fetch_optional(&mut **tx)
-                .await?;
-                if let Some(c) = inherited {
-                    sqlx::query("UPDATE sessions SET client_class = 'family:' || $2 WHERE id = $1")
-                        .bind(pk)
-                        .bind(base(&c))
-                        .execute(&mut **tx)
-                        .await?;
-                }
+        family(
+            tx,
+            *pk,
+            &p.provider,
+            &p.provider_session_id,
+            p.file_path.as_deref(),
+            after.as_deref(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The family step for one session whose class is now `after`: a client
+/// session's family turns client with it, and a lab session in a client family
+/// inherits the family's class.
+async fn family(
+    tx: &mut Transaction<'_, Postgres>,
+    pk: i64,
+    provider: &str,
+    provider_session_id: &str,
+    file_path: Option<&str>,
+    after: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let parent = file_path.and_then(parent_from_path).unwrap_or("");
+    match after {
+        Some(c) if c != "none" => {
+            sqlx::query(&format!(
+                "UPDATE sessions SET client_class = 'family:' || $5, client_rev = client_rev + 1
+                 WHERE {FAMILY} AND (client_class IS NULL OR client_class = 'none')"
+            ))
+            .bind(provider)
+            .bind(provider_session_id)
+            .bind(parent)
+            .bind(pk)
+            .bind(base(c))
+            .execute(&mut **tx)
+            .await?;
+        }
+        _ => {
+            let inherited: Option<String> = sqlx::query_scalar(&format!(
+                "SELECT client_class FROM sessions
+                 WHERE {FAMILY} AND client_class IS NOT NULL AND client_class <> 'none'
+                 LIMIT 1"
+            ))
+            .bind(provider)
+            .bind(provider_session_id)
+            .bind(parent)
+            .bind(pk)
+            .fetch_optional(&mut **tx)
+            .await?;
+            if let Some(c) = inherited {
+                sqlx::query("UPDATE sessions SET client_class = 'family:' || $2 WHERE id = $1")
+                    .bind(pk)
+                    .bind(base(&c))
+                    .execute(&mut **tx)
+                    .await?;
             }
         }
     }
     Ok(())
+}
+
+/// E1: classify each project from its stored row (path, name, git remote,
+/// main checkout path; the effective values after this batch's writes). A hit
+/// raises every unscanned or lab session of that project to `path`, with its
+/// family, in the batch's transaction. This also covers a batch that only
+/// updates a project row. Raise-only: a client class is never touched.
+pub async fn raise_client_projects(
+    tx: &mut Transaction<'_, Postgres>,
+    markers: &Markers,
+    project_ids: &[i64],
+) -> Result<u64, sqlx::Error> {
+    if project_ids.is_empty() {
+        return Ok(0);
+    }
+    type ProjectRow = (i64, String, Option<String>, Option<String>, Option<String>);
+    let rows: Vec<ProjectRow> = sqlx::query_as(
+        "SELECT id, project_path, name, git_remote_url, git_main_path
+         FROM projects WHERE id = ANY($1)",
+    )
+    .bind(project_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    let hits: Vec<i64> = rows
+        .iter()
+        .filter(|(_, path, name, remote, main)| {
+            classify(
+                markers,
+                SessionFields {
+                    project_path: path,
+                    project: ProjectFields {
+                        name: name.as_deref(),
+                        git_remote_url: remote.as_deref(),
+                        git_main_path: main.as_deref(),
+                    },
+                    ..Default::default()
+                },
+                std::iter::empty(),
+            ) == Class::Path
+        })
+        .map(|r| r.0)
+        .collect();
+    if hits.is_empty() {
+        return Ok(0);
+    }
+    let raised: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+        "UPDATE sessions SET client_class = 'path', client_rev = client_rev + 1
+         WHERE project_id = ANY($1) AND (client_class IS NULL OR client_class = 'none')
+         RETURNING id, provider, session_id, file_path",
+    )
+    .bind(&hits)
+    .fetch_all(&mut **tx)
+    .await?;
+    for (pk, provider, sid, file_path) in &raised {
+        family(tx, *pk, provider, sid, file_path.as_deref(), Some("path")).await?;
+    }
+    Ok(raised.len() as u64)
 }
 
 /// Drop the coverage stamp of these sessions: they are unscanned until a

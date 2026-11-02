@@ -846,6 +846,16 @@ pub async fn ingest(
 
     if let (Some(policy), Some(plan)) = (&client_policy, &client_plan) {
         crate::client_ingest::apply(&mut tx, plan, &policy.generation, &new_sessions).await?;
+        // E1: the projects this batch wrote or touched, read back whole. A
+        // project-only batch (a remote or main path arriving later) raises too.
+        let mut projects: Vec<i64> = project_ids
+            .values()
+            .chain(touched_projects.iter())
+            .copied()
+            .collect();
+        projects.sort_unstable();
+        projects.dedup();
+        crate::client_ingest::raise_client_projects(&mut tx, &policy.markers, &projects).await?;
     } else if state.client_scope.is_some() {
         // No usable policy (security O2): nothing can be classified, so every
         // session this batch touched loses its coverage. Otherwise a marked

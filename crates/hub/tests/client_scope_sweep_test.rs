@@ -326,3 +326,56 @@ async fn the_census_matches_what_the_sweep_writes() {
         census.family_only + census.protected_entry_only
     );
 }
+
+/// E1: the project's name, git remote and main checkout path are classified
+/// (as `path`), and a stored `search_text` is read like the text it indexes.
+#[tokio::test]
+async fn the_sweep_reads_project_fields_and_search_text() {
+    let e = env().await;
+    let lab = session(&e, &["plain lab work"]).await;
+    let by_search_text = session(&e, &["plain lab work"]).await;
+    sqlx::query("UPDATE messages SET search_text = 'notes in /w/clientco/x' WHERE session_id = $1")
+        .bind(by_search_text)
+        .execute(&e.pool)
+        .await
+        .unwrap();
+    let report = sweep(&e.pool, &e.policy, &only(&[lab, by_search_text]))
+        .await
+        .unwrap();
+    assert_eq!(report.scanned, 2);
+    assert_eq!(class_and_gen(&e, lab).await.0.as_deref(), Some("none"));
+    assert_eq!(
+        class_and_gen(&e, by_search_text).await.0.as_deref(),
+        Some("text_marker")
+    );
+
+    for (column, value) in [
+        ("name", "clientco"),
+        ("git_remote_url", "gitea.example/clientco/repo"),
+        ("git_main_path", "/w/clientco"),
+    ] {
+        let project: i64 = sqlx::query_scalar(&format!(
+            "INSERT INTO projects (machine_id, provider, project_path, {column})
+             VALUES ($1, 'claude', $2, $3) RETURNING id"
+        ))
+        .bind(e.machine)
+        .bind(format!("/w/lab-{}", Uuid::new_v4()))
+        .bind(value)
+        .fetch_one(&e.pool)
+        .await
+        .unwrap();
+        let s = session(&e, &["plain lab work"]).await;
+        sqlx::query("UPDATE sessions SET project_id = $2 WHERE id = $1")
+            .bind(s)
+            .bind(project)
+            .execute(&e.pool)
+            .await
+            .unwrap();
+        sweep(&e.pool, &e.policy, &only(&[s])).await.unwrap();
+        assert_eq!(
+            class_and_gen(&e, s).await.0.as_deref(),
+            Some("path"),
+            "{column}"
+        );
+    }
+}

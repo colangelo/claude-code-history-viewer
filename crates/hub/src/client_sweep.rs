@@ -13,7 +13,9 @@ use sqlx::{PgPool, Row};
 
 use crate::client_ingest::{base, parent_from_path, FAMILY};
 use crate::client_policy::Policy;
-use crate::client_scope::{classify, normalize, Class, MessageFields, SessionFields};
+use crate::client_scope::{
+    classify, normalize, Class, MessageFields, ProjectFields, SessionFields,
+};
 
 pub struct SweepOptions {
     pub dry_run: bool,
@@ -48,7 +50,8 @@ async fn classify_session(
     id: i64,
 ) -> anyhow::Result<(Class, bool)> {
     let row = sqlx::query(
-        "SELECT p.project_path, s.summary, s.file_path, s.entrypoint
+        "SELECT p.project_path, s.summary, s.file_path, s.entrypoint,
+                p.name, p.git_remote_url, p.git_main_path
          FROM sessions s LEFT JOIN projects p ON p.id = s.project_id WHERE s.id = $1",
     )
     .bind(id)
@@ -58,19 +61,28 @@ async fn classify_session(
     let summary: Option<String> = row.try_get(1)?;
     let file_path: Option<String> = row.try_get(2)?;
     let entrypoint: Option<String> = row.try_get(3)?;
+    let project_name: Option<String> = row.try_get(4)?;
+    let git_remote_url: Option<String> = row.try_get(5)?;
+    let git_main_path: Option<String> = row.try_get(6)?;
     let fields = SessionFields {
         project_path: project.as_deref().unwrap_or(""),
         summary: summary.as_deref(),
         file_path: file_path.as_deref(),
         entrypoint: entrypoint.as_deref(),
+        project: ProjectFields {
+            name: project_name.as_deref(),
+            git_remote_url: git_remote_url.as_deref(),
+            git_main_path: git_main_path.as_deref(),
+        },
     };
     let mut best = classify(&policy.markers, fields, std::iter::empty());
     let mut term = false;
     let mut after = 0_i64;
     let null = Value::Null;
     loop {
-        let rows: Vec<(i64, Option<Value>, Value)> = sqlx::query_as(
-            "SELECT id, content, raw FROM messages WHERE session_id = $1 AND id > $2 ORDER BY id LIMIT $3",
+        let rows: Vec<(i64, Option<Value>, Value, Option<String>)> = sqlx::query_as(
+            "SELECT id, content, raw, search_text FROM messages
+             WHERE session_id = $1 AND id > $2 ORDER BY id LIMIT $3",
         )
         .bind(id)
         .bind(after)
@@ -82,16 +94,17 @@ async fn classify_session(
         let page = classify(
             &policy.markers,
             SessionFields::default(),
-            rows.iter().map(|(_, c, r)| MessageFields {
+            rows.iter().map(|(_, c, r, st)| MessageFields {
                 content: c.as_ref().unwrap_or(&null),
                 raw: r,
+                search_text: st.as_deref(),
             }),
         );
         if page != Class::None && (best == Class::None || page.rank() < best.rank()) {
             best = page;
         }
         if !term && !policy.terms.is_empty() {
-            term = rows.iter().any(|(_, c, _)| {
+            term = rows.iter().any(|(_, c, _, _)| {
                 let t = normalize(&c.as_ref().unwrap_or(&null).to_string());
                 policy.terms.iter().any(|w| t.contains(w.as_str()))
             });

@@ -683,3 +683,105 @@ async fn pending_groups_carry_the_hubs_class() {
     assert_eq!(class_of(&cli_row).as_deref(), Some("client"));
     assert_eq!(class_of(&uns_row).as_deref(), Some("unscanned"));
 }
+
+async fn post_batch(hub: &Hub, projects: Value, sessions: Value, messages: Value) {
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/ingest", hub.base))
+        .bearer_auth(&hub.token)
+        .json(&json!({
+            "machine": {"machine_id": hub.machine, "hostname": format!("h-{}", &hub.machine.simple().to_string()[..8]), "os": "macos"},
+            "projects": projects,
+            "sessions": sessions,
+            "messages": messages,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "ingest {}", r.status());
+}
+
+/// E1: a batch that only updates a project row (here its git remote arrives
+/// later) raises that project's sessions to `path`, and their families with
+/// them; a lab remote and another project's session stay lab.
+#[tokio::test]
+async fn a_project_only_update_raises_its_sessions_and_family() {
+    let hub = spawn().await;
+    let project = format!("/w/lab-{}", Uuid::new_v4());
+    let parent = Uuid::new_v4().to_string();
+    let child = sid();
+    let other = sid();
+    let lab_msg = |s: &str| msg(s, text("lab work"), json!({"cwd": "/w/lab"}));
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        json!({"provider": "claude", "session_id": parent, "project_path": project}),
+        vec![lab_msg(&parent)],
+    )
+    .await;
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        json!({"provider": "claude", "session_id": child, "project_path": "/w/other",
+               "file_path": format!("/x/{parent}/subagents/agent-1.jsonl")}),
+        vec![lab_msg(&child)],
+    )
+    .await;
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        json!({"provider": "claude", "session_id": other, "project_path": "/w/other"}),
+        vec![lab_msg(&other)],
+    )
+    .await;
+
+    let remote = |url: &str| json!([{"provider": "claude", "project_path": project, "name": "p", "git_remote_url": url}]);
+    post_batch(
+        &hub,
+        remote("https://gitea.example/ac/lab.git"),
+        json!([]),
+        json!([]),
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &parent).await.0.as_deref(),
+        Some("none"),
+        "a lab remote stays lab"
+    );
+
+    post_batch(
+        &hub,
+        remote("https://gitea.example/clientco/repo.git"),
+        json!([]),
+        json!([]),
+    )
+    .await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &parent).await.0.as_deref(),
+        Some("path")
+    );
+    assert_eq!(
+        state_of(&hub, hub.machine, &child).await.0.as_deref(),
+        Some("family:path")
+    );
+    assert_eq!(
+        state_of(&hub, hub.machine, &other).await.0.as_deref(),
+        Some("none")
+    );
+}
+
+/// E1: `search_text` is accepted from the client, so it is classified too.
+#[tokio::test]
+async fn a_marker_only_in_search_text_makes_the_session_client() {
+    let hub = spawn().await;
+    let s = sid();
+    let mut m = msg(&s, text("lab work"), json!({"cwd": "/w/lab"}));
+    m["search_text"] = json!("lab work /w/clientco");
+    ingest(&hub, hub.machine, &hub.token, session(&s), vec![m]).await;
+    assert_eq!(
+        state_of(&hub, hub.machine, &s).await,
+        (Some("text_marker".into()), true)
+    );
+}

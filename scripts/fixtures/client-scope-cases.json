@@ -683,6 +683,112 @@
         }
       ],
       "class": "none"
+    },
+    {
+      "name": "project name (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {
+        "project_name": "clientco"
+      },
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "lab only"
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "path"
+    },
+    {
+      "name": "project git remote (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {
+        "git_remote_url": "gitea.example/clientco/repo"
+      },
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "lab only"
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "path"
+    },
+    {
+      "name": "worktree main checkout path (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {
+        "git_main_path": "/Users/ac/_sync/dev/clientco"
+      },
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "lab only"
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "path"
+    },
+    {
+      "name": "project fields lab (control)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {
+        "project_name": "labrepo",
+        "git_remote_url": "gitea.example/ac/labrepo",
+        "git_main_path": "/Users/ac/_sync/dev/labrepo"
+      },
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "lab only"
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "none"
+    },
+    {
+      "name": "search_text only (E1)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "text",
+              "text": "lab only"
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          },
+          "search_text": "see /w/clientco/notes"
+        }
+      ],
+      "class": "text_marker"
     }
   ],
   "_doc": "Shared client-scope matcher fixture (openspec/changes/hub-client-read-scope, D2, R2-A, R2-K). Made-up markers only. match_cases: normalize + marker_in, run by the hub (client_scope.rs) and the distiller (test_cchv_distill.py); expected values are the distiller's behaviour. extract_cases: the hub's one extractor (session class), hub only."
