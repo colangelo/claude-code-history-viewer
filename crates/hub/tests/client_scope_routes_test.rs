@@ -7,6 +7,7 @@
 //! Requires `TEST_DATABASE_URL`; run with `--test-threads=1`.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -60,10 +61,22 @@ struct World {
     client_sid: String,
     machine: Uuid,
     machine_token: String,
+    /// The statistics mirror this hub serves from, refreshed once the world
+    /// is ingested (openspec stats-read-api: the stats routes join the walk).
+    mirror: Arc<hub::mirror::Mirror>,
+    mirror_cfg: hub::config::MirrorConfig,
+    /// `/v1/stats/daily` over the last 31 days, which hold the world's
+    /// two-days-ago rows.
+    daily_url: String,
     _dir: std::path::PathBuf,
 }
 
 async fn world() -> World {
+    world_with(true).await
+}
+
+/// The world under enforce (`true`) or observe (`false`).
+async fn world_with(enforce: bool) -> World {
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&std::env::var("TEST_DATABASE_URL").unwrap())
@@ -99,7 +112,7 @@ async fn world() -> World {
          [[tokens]]\ntoken = \"{machine_token}\"\nmachine_id = \"{machine}\"\nlabel = \"m\"\n\
          [[readers]]\ntoken = \"{lab_reader}\"\nmachine_id = \"{}\"\nlabel = \"blog\"\n\
          [[client_readers]]\ntoken_sha256 = \"{}\"\nmachine_id = \"{}\"\nlabel = \"distiller\"\n\
-         [client_scope]\nrouting_file = \"{}\"\nfloor_file = \"{}\"\nenforce = true\n",
+         [client_scope]\nrouting_file = \"{}\"\nfloor_file = \"{}\"\nenforce = {enforce}\n",
         Uuid::new_v4(),
         hex(client_reader.as_bytes()),
         Uuid::new_v4(),
@@ -108,7 +121,14 @@ async fn world() -> World {
     ))
     .unwrap();
     config.validate().unwrap();
-    let state = hub::AppState::from_config(pool.clone(), &config).unwrap();
+    let mirror_cfg = hub::config::MirrorConfig {
+        path: Some(dir.join("stats.duckdb")),
+        ..hub::config::MirrorConfig::default()
+    };
+    let mirror = Arc::new(hub::mirror::Mirror::open_or_create(&mirror_cfg).unwrap());
+    let state = hub::AppState::from_config(pool.clone(), &config)
+        .unwrap()
+        .with_mirror(mirror.clone());
     state
         .client_scope
         .as_ref()
@@ -202,6 +222,12 @@ async fn world() -> World {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 200, "journal entry create");
     }
+    mirror.refresh(&pool).await.unwrap();
+    let today = chrono::Utc::now().date_naive();
+    let daily_url = format!(
+        "/v1/stats/daily?from={}&to={today}&tz=UTC",
+        today - chrono::Duration::days(30)
+    );
     World {
         base,
         lab_reader,
@@ -215,6 +241,9 @@ async fn world() -> World {
         client_sid,
         machine,
         machine_token,
+        mirror,
+        mirror_cfg,
+        daily_url,
         _dir: dir,
     }
 }
@@ -313,6 +342,11 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
             None,
         ),
         ("/v1/identities", "/v1/identities".into(), lab_path()),
+        (
+            "/v1/stats/daily",
+            w.daily_url.clone(),
+            Some("\"space\":\"ac\"".into()),
+        ),
     ]
 }
 
@@ -483,7 +517,28 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
         "/v1/identities".to_string(),
         format!("/v1/sessions/{}/messages", w.client_id),
         format!("/v1/sessions/{}/messages", w.client_sid),
+        "/v1/stats/global".to_string(),
+        w.daily_url.clone(),
     ];
+    assert_lab_view_unchanged_by_deleting_client_rows(&w, &urls).await;
+}
+
+/// stats-read-api D3 (a): the stats-read routes give a lab reader lab sessions
+/// only in OBSERVE as well, where every other route still shows everything.
+#[tokio::test]
+async fn stats_read_routes_are_lab_only_in_observe_too() {
+    let w = world_with(false).await;
+    let urls = vec![w.daily_url.clone()];
+    // The control: in observe a client reader's view does contain the client
+    // session, so the lab view below is filtered, not merely empty.
+    let lab = get(&w, &w.daily_url, "lab").await;
+    let client = get(&w, &w.daily_url, "client").await;
+    assert_eq!((lab.0, client.0), (200, 200), "{lab:?} {client:?}");
+    assert_ne!(lab.1, client.1, "observe: the client reader sees more");
+    assert_lab_view_unchanged_by_deleting_client_rows(&w, &urls).await;
+}
+
+async fn assert_lab_view_unchanged_by_deleting_client_rows(w: &World, urls: &[String]) {
     async fn view(
         w: &World,
         urls: &[String],
@@ -511,8 +566,8 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
         }
         out
     }
-    let before_lab = view(&w, &urls, "lab").await;
-    let before_ts = view(&w, &urls, "tailscale").await;
+    let before_lab = view(w, urls, "lab").await;
+    let before_ts = view(w, urls, "tailscale").await;
 
     let pool = PgPoolOptions::new()
         .max_connections(2)
@@ -528,9 +583,13 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
     ] {
         sqlx::query(sql).bind(&w.client_path).execute(&pool).await.unwrap();
     }
+    // The mirror folds in inserts only: rebuild it so the stats routes answer
+    // from the archive without the client rows too.
+    hub::mirror::rebuild(&w.mirror_cfg, &pool).await.unwrap();
+    assert!(w.mirror.adopt_replacement().unwrap(), "rebuilt mirror adopted");
 
     for (who, before) in [("lab", before_lab), ("tailscale", before_ts)] {
-        let after = view(&w, &urls, who).await;
+        let after = view(w, urls, who).await;
         for (b, a) in before.iter().zip(&after) {
             assert_eq!(b, a, "{who}: {} differs once the client rows are gone", b.0);
         }

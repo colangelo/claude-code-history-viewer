@@ -1,5 +1,5 @@
 //! Statistics endpoints: `GET /v1/stats/global`, `/v1/stats/projects/{key}`,
-//! `/v1/stats/sessions/{id}`.
+//! `/v1/stats/sessions/{id}`, and the stats-read route `/v1/stats/daily`.
 //!
 //! Thin HTTP layer over [`crate::stats`] — parameter parsing, identity
 //! expansion and not-found handling. All the aggregation (and the dedup rule
@@ -30,7 +30,7 @@ use duckdb::Connection;
 use history_core::models::{GlobalStatsSummary, ProjectStatsSummary, SessionTokenStats};
 use serde::Deserialize;
 
-use crate::auth::Authenticated;
+use crate::auth::{Authenticated, Visibility};
 use crate::error::HubError;
 use crate::mirror::MirrorState;
 use crate::state::AppState;
@@ -165,9 +165,13 @@ impl StatsParams {
 async fn lab_window(
     state: &AppState,
     auth: &Authenticated,
-    mut w: Window,
+    w: Window,
 ) -> Result<Window, HubError> {
-    let vis = auth.visibility(state);
+    restrict(state, auth.visibility(state), w).await
+}
+
+/// The window limited to what `vis` lets the caller see.
+async fn restrict(state: &AppState, vis: Visibility, mut w: Window) -> Result<Window, HubError> {
     if vis.sees_all() {
         return Ok(w);
     }
@@ -285,4 +289,73 @@ pub async fn session(
     })
     .await?;
     Ok((headers, Json(stats)))
+}
+
+/// The longest window the stats-read routes answer, in days (stats-read-api
+/// D3 condition 2: the counts cannot become an oracle over all of history).
+pub const MAX_WINDOW_DAYS: i64 = 31;
+
+/// `/v1/stats/daily` parameters: these three and no others (D3 condition 2).
+/// An unknown parameter is a 400, so a filter on a project, a session or
+/// content cannot be added by a caller and silently ignored.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DailyParams {
+    /// Inclusive first local day, `YYYY-MM-DD`; default `to` minus 30 days.
+    pub from: Option<String>,
+    /// Inclusive last local day; default today in `tz`.
+    pub to: Option<String>,
+    /// IANA zone of the days; default `Europe/Rome`.
+    pub tz: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DailyAnswer {
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+    pub tz: String,
+    pub rows: Vec<stats::DailyRow>,
+}
+
+impl DailyParams {
+    fn window(&self) -> Result<Window, HubError> {
+        let tz = parse_tz(self.tz.as_deref().unwrap_or("Europe/Rome"))?;
+        let to = parse_date("to", self.to.as_ref())?
+            .unwrap_or_else(|| Utc::now().with_timezone(&tz).date_naive());
+        let from = parse_date("from", self.from.as_ref())?
+            .unwrap_or(to - chrono::Duration::days(MAX_WINDOW_DAYS - 1));
+        if from > to {
+            return Err(HubError::BadRequest(format!("from ({from}) is after to ({to})")));
+        }
+        if (to - from).num_days() + 1 > MAX_WINDOW_DAYS {
+            return Err(HubError::BadRequest(format!(
+                "window {from}..{to} is longer than {MAX_WINDOW_DAYS} days"
+            )));
+        }
+        Ok(Window {
+            from: Some(from),
+            to: Some(to),
+            tz,
+            sessions_visible: None,
+        })
+    }
+}
+
+/// Per local day and project: monitoring's dashboard rows (stats-read-api D2).
+/// Lab sessions only for a lab reader, in observe as under enforce (D3 (a)).
+pub async fn daily(
+    auth: Authenticated,
+    State(state): State<AppState>,
+    Query(params): Query<DailyParams>,
+) -> Result<(StatsHeaders, Json<DailyAnswer>), HubError> {
+    let w = params.window()?;
+    let w = restrict(&state, Visibility::stats_read(&state, auth.1), w).await?;
+    let (from, to, tz) = (
+        w.from.expect("set by DailyParams::window"),
+        w.to.expect("set by DailyParams::window"),
+        w.tz.name().to_string(),
+    );
+    let (headers, rows) =
+        with_mirror(&state, move |c| Ok(stats::daily_by_project(c, &w)?)).await?;
+    Ok((headers, Json(DailyAnswer { from, to, tz, rows })))
 }

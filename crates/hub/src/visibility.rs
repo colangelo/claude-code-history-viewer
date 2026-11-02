@@ -34,6 +34,25 @@ impl Visibility {
         if scope == ReadScope::Client || !cs.enforcing() {
             return Visibility::All;
         }
+        Self::lab(cs)
+    }
+
+    /// For the stats-read routes (`/v1/stats/daily`, `/v1/stats/tool-calls`;
+    /// openspec stats-read-api D3, ruled (a)): a lab principal sees lab sessions
+    /// only in observe as well as under enforce. Their readers are services
+    /// that store what they read, so observe's "nothing hidden yet" does not
+    /// apply to them.
+    pub fn stats_read(state: &AppState, scope: ReadScope) -> Self {
+        let Some(cs) = &state.client_scope else {
+            return Visibility::All;
+        };
+        if scope == ReadScope::Client {
+            return Visibility::All;
+        }
+        Self::lab(cs)
+    }
+
+    fn lab(cs: &crate::client_state::ClientScope) -> Self {
         Visibility::Lab(
             cs.snapshot()
                 .generation()

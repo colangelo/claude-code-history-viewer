@@ -240,7 +240,7 @@ fn materialize_scope(conn: &Connection, scope: &Scope, w: &Window) -> duckdb::Re
                    m.ts_utc + to_seconds(z.offset_secs) AS ts_local,
                    m.input_tokens, m.output_tokens, m.cache_creation_tokens,
                    m.cache_read_tokens, m.cost_usd, s.project_id,
-                   m.usage_row, m.conversational
+                   m.usage_row, m.conversational, m.has_content, m.prompt, m.compaction
               FROM messages m
               JOIN sessions s ON s.id = m.session_id
               LEFT JOIN projects p ON p.id = s.project_id
@@ -955,4 +955,107 @@ fn none_if_absent<T>(e: duckdb::Error) -> duckdb::Result<Option<T>> {
         duckdb::Error::QueryReturnedNoRows => Ok(None),
         other => Err(other),
     }
+}
+
+/// One row of `/v1/stats/daily`: a local day and a project (openspec
+/// stats-read-api D2; the column names are monitoring's).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DailyRow {
+    pub day: String,
+    pub project: String,
+    /// `ac` on every row: a lab reader gets lab sessions only (D3 (a)).
+    pub space: &'static str,
+    pub sessions: i64,
+    /// Rows with content (#41's conversation items), not rows with a role.
+    pub messages: i64,
+    /// Prompts minus compactions, per session and day, never below zero.
+    pub turns: i64,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    /// Per session, the gaps between consecutive rows, each capped at 300 s.
+    pub active_seconds: i64,
+    /// Not derivable from what is stored (the proposal): always null.
+    pub ac_messages: Option<i64>,
+    pub compactions: i64,
+    /// `None` when no row of that day and project reported a cost.
+    pub cost_usd: Option<f64>,
+}
+
+/// Seconds of one gap counted as activity at most (D2 `active_seconds`).
+const ACTIVE_GAP_CAP_SECS: i64 = 300;
+
+/// Per local day and project display name, over the window (D2).
+///
+/// A project is its identity (`identity_key`, else its path). Its name comes
+/// only from project rows that have an in-scope session, so a name is never
+/// read off a project the caller cannot see. Identities that share a display
+/// name share a row: the name is the row's key for the reader.
+pub fn daily_by_project(conn: &Connection, w: &Window) -> duckdb::Result<Vec<DailyRow>> {
+    materialize_scope(conn, &Scope::Global, w)?;
+    let sql = format!(
+        r"
+        WITH r AS (
+            SELECT d.*, CAST(d.ts_local AS DATE) AS day,
+                   coalesce(p.identity_key, p.project_path, '(unknown)') AS ident,
+                   EXTRACT(EPOCH FROM (d.ts_utc - lag(d.ts_utc)
+                       OVER (PARTITION BY d.session_id ORDER BY d.ts_utc, d.id))) AS gap
+              FROM stats_scope d LEFT JOIN projects p ON p.id = d.project_id
+             WHERE d.ts_utc IS NOT NULL),
+        per_session AS (
+            SELECT day, ident, session_id,
+                   greatest(count(*) FILTER (WHERE prompt)
+                            - count(*) FILTER (WHERE compaction), 0) AS turns
+              FROM r GROUP BY 1, 2, 3),
+        turns AS (SELECT day, ident, sum(turns)::BIGINT AS turns FROM per_session GROUP BY 1, 2),
+        agg AS (
+            SELECT day, ident,
+                   count(DISTINCT session_id) AS sessions,
+                   count(*) FILTER (WHERE has_content) AS messages,
+                   coalesce(sum(input_tokens) FILTER (WHERE usage_row), 0)::BIGINT AS tokens_in,
+                   coalesce(sum(output_tokens) FILTER (WHERE usage_row), 0)::BIGINT AS tokens_out,
+                   coalesce(sum(least(gap, {ACTIVE_GAP_CAP_SECS})) FILTER (WHERE gap > 0), 0)::BIGINT
+                       AS active_seconds,
+                   count(*) FILTER (WHERE compaction) AS compactions,
+                   -- NOT coalesced: NULL is 'nobody reported cost'.
+                   sum(cost_usd) FILTER (WHERE usage_row) AS cost_usd
+              FROM r GROUP BY 1, 2),
+        seen AS (
+            SELECT coalesce(identity_key, project_path, '(unknown)') AS ident,
+                   project_name, project_path
+              FROM projects WHERE id IN (SELECT DISTINCT project_id FROM stats_scope)),
+        names AS (
+            SELECT s.ident,
+                   coalesce(
+                       (SELECT n.project_name FROM seen n
+                         WHERE n.ident = s.ident AND n.project_name IS NOT NULL
+                         GROUP BY n.project_name ORDER BY count(*) DESC, n.project_name LIMIT 1),
+                       min(s.project_path ORDER BY length(s.project_path), s.project_path)) AS name
+              FROM seen s GROUP BY s.ident)
+        SELECT CAST(a.day AS VARCHAR), coalesce(n.name, a.ident),
+               sum(a.sessions)::BIGINT, sum(a.messages)::BIGINT, sum(t.turns)::BIGINT,
+               sum(a.tokens_in)::BIGINT, sum(a.tokens_out)::BIGINT,
+               sum(a.active_seconds)::BIGINT, sum(a.compactions)::BIGINT, sum(a.cost_usd)
+          FROM agg a
+          JOIN turns t ON t.day = a.day AND t.ident = a.ident
+          LEFT JOIN names n ON n.ident = a.ident
+         GROUP BY 1, 2 ORDER BY 1, 2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |r| {
+        Ok(DailyRow {
+            day: r.get(0)?,
+            project: r.get(1)?,
+            space: "ac",
+            sessions: r.get(2)?,
+            messages: r.get(3)?,
+            turns: r.get(4)?,
+            tokens_in: r.get(5)?,
+            tokens_out: r.get(6)?,
+            active_seconds: r.get(7)?,
+            ac_messages: None,
+            compactions: r.get(8)?,
+            cost_usd: r.get(9)?,
+        })
+    })?;
+    rows.collect()
 }

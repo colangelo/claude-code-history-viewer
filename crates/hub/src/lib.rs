@@ -139,6 +139,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/sessions", get(browse::list_sessions))
         .route("/v1/sessions/{id}/messages", get(browse::session_messages))
         .route("/v1/stats/global", get(stats_api::global))
+        .route("/v1/stats/daily", get(stats_api::daily))
         .route("/v1/stats/projects/{identity_key}", get(stats_api::project))
         .route("/v1/stats/sessions/{id}", get(stats_api::session))
         .route("/v1/identities", get(identities::list))

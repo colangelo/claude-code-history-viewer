@@ -10,8 +10,8 @@
 
 ## 2. `GET /v1/stats/daily`
 
-- [ ] 2.1 Red: route tests over a populated mirror, one per D2 column. These include a day with no cost (null), the 300 s gap cap, and a compaction that does not count as a turn.
-- [ ] 2.2 The route, with lab sessions only (D3 a) and the 31-day bound. Route-walk case. The R2-E differential test is extended to this route.
+- [x] 2.1 Red: route tests over a populated mirror, one per D2 column. These include a day with no cost (null), the 300 s gap cap, and a compaction that does not count as a turn.
+- [x] 2.2 The route, with lab sessions only (D3 a) and the 31-day bound. Route-walk case. The R2-E differential test is extended to this route.
 
 ## 3. `GET /v1/stats/tool-calls`
 
