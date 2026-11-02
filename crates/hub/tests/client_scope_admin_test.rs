@@ -2,7 +2,7 @@
 //!
 //! Requires `TEST_DATABASE_URL`; run with `--test-threads=1`.
 
-use hub::client_admin::{accept_routing, clear, restamp_from_file, unlatch};
+use hub::client_admin::{accept_routing, clear, protect, restamp_from_file, unlatch};
 use hub::client_policy::{load_paths, Load, Policy};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -611,4 +611,68 @@ async fn restamp_terms_match_however_the_routing_file_writes_them() {
     .unwrap();
     assert_eq!(r.render(), "listed 1, restamped 0; skipped: entry_text 1");
     assert_eq!(route_of(&pool, id).await, None);
+}
+
+async fn class_of(pool: &PgPool, id: i64) -> (Option<String>, i64) {
+    sqlx::query_as("SELECT client_class, client_rev FROM sessions WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Raise-only by hand (manager-aruba, 2026-11-02): `client-scope protect`
+/// makes a lab or unscanned session client, audited in the same
+/// transaction; a client session stays exactly as it is.
+#[tokio::test]
+async fn protect_raises_a_lab_session_and_audits_it() {
+    let pool = pool().await;
+    let (p, _dir) = policy(&routing("\"/clientco\""), 1);
+    let g = p.generation.clone();
+    set_generation(&pool, &g).await;
+    let lab = session(&pool, "plain lab work", Some("none"), Some(&g)).await;
+    let unscanned = session(&pool, "plain lab work", None, None).await;
+    let before = audits(&pool, "protect").await;
+    for id in [lab, unscanned] {
+        let (_, rev) = class_of(&pool, id).await;
+        let out = protect(&pool, id, "names the client only", "manager-aruba").await.unwrap();
+        assert_eq!(out, hub::client_admin::Protected::Raised);
+        assert_eq!(class_of(&pool, id).await, (Some("manual".into()), rev + 1));
+    }
+    assert_eq!(audits(&pool, "protect").await, before + 2);
+    let (gen, detail, by): (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT generation, detail, approved_by FROM client_scope_audit WHERE action = 'protect' AND session_id = $1",
+    )
+    .bind(lab)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(gen.as_deref(), Some(g.as_str()));
+    assert_eq!(detail.as_deref(), Some("was none; names the client only"));
+    assert_eq!(by.as_deref(), Some("manager-aruba"));
+}
+
+#[tokio::test]
+async fn protect_never_lowers_or_changes_a_client_session() {
+    let pool = pool().await;
+    let client = session(&pool, "x", Some("text_marker"), Some("g")).await;
+    let before = (class_of(&pool, client).await, audits(&pool, "protect").await);
+    let out = protect(&pool, client, "r", "manager-aruba").await.unwrap();
+    assert_eq!(out, hub::client_admin::Protected::AlreadyClient);
+    assert_eq!((class_of(&pool, client).await, audits(&pool, "protect").await), before);
+}
+
+#[tokio::test]
+async fn protect_refuses_an_empty_approver_or_reason_or_a_missing_session() {
+    let pool = pool().await;
+    let lab = session(&pool, "plain lab work", Some("none"), Some("g")).await;
+    for (id, reason, by, why) in [
+        (lab, "r", " ", "approved-by"),
+        (lab, "", "manager-aruba", "reason"),
+        (-1, "r", "manager-aruba", "no session"),
+    ] {
+        let err = protect(&pool, id, reason, by).await.unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    assert_eq!(class_of(&pool, lab).await.0.as_deref(), Some("none"));
 }
