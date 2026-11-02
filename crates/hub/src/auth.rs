@@ -125,9 +125,7 @@ pub async fn refuse_stats_only_elsewhere(
 ) -> Response {
     let allowed = matches!(*request.method(), Method::GET | Method::HEAD)
         && STATS_ONLY_PATHS.contains(&request.uri().path());
-    if !allowed
-        && bearer(request.headers()).is_some_and(|t| state.stats_only.contains(t))
-    {
+    if !allowed && bearer(request.headers()).is_some_and(|t| state.stats_only.contains(t)) {
         return HubError::Forbidden("this token reads the stats routes only".into())
             .into_response();
     }

@@ -8,9 +8,9 @@
 
 use hub::config::MirrorConfig;
 use hub::mirror::Mirror;
+use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use serde_json::json;
 use uuid::Uuid;
 
 fn test_db_url() -> String {
@@ -126,7 +126,9 @@ async fn sync_computes_has_content_prompt_and_compaction() {
         machine,
         session,
         Some("user"),
-        Some(json!("This session is being continued from a previous conversation...")),
+        Some(json!(
+            "This session is being continued from a previous conversation..."
+        )),
         json!({"type": "user"}),
     )
     .await;
@@ -191,14 +193,22 @@ async fn sync_computes_has_content_prompt_and_compaction() {
     mirror.refresh(&pool).await.expect("refresh");
 
     assert_eq!(flags(&mirror, boundary), (true, false, true), "boundary");
-    assert_eq!(flags(&mirror, summary), (true, true, false), "summary prompt");
+    assert_eq!(
+        flags(&mirror, summary),
+        (true, true, false),
+        "summary prompt"
+    );
     assert_eq!(
         flags(&mirror, tool_result_only),
         (true, false, false),
         "a tool-result-only user row is not a prompt"
     );
     assert_eq!(flags(&mirror, mixed), (true, true, false), "mixed user row");
-    assert_eq!(flags(&mirror, plain_prompt), (true, true, false), "plain prompt");
+    assert_eq!(
+        flags(&mirror, plain_prompt),
+        (true, true, false),
+        "plain prompt"
+    );
     assert_eq!(
         flags(&mirror, no_content_user),
         (false, false, false),
@@ -233,7 +243,10 @@ async fn an_older_mirror_file_is_reset_by_the_schema_bump() {
     }
 
     let mirror = Mirror::open_or_create(&cfg).expect("open mirror");
-    assert!(mirror.is_empty(), "the old rows are gone: next refresh is a cold build");
+    assert!(
+        mirror.is_empty(),
+        "the old rows are gone: next refresh is a cold build"
+    );
     assert!(
         !mirror.state().is_ready(),
         "warming until the cold build stamps refreshed_at"

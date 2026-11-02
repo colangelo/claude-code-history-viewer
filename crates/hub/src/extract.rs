@@ -83,8 +83,14 @@ fn mcp_names(raw: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|c| {
-            let server = c.get("server").and_then(Value::as_str).filter(|s| !s.is_empty())?;
-            let tool = c.get("tool").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+            let server = c
+                .get("server")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())?;
+            let tool = c
+                .get("tool")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())?;
             Some(format!("mcp__{server}__{tool}"))
         })
         .collect()

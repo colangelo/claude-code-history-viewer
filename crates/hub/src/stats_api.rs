@@ -163,11 +163,7 @@ impl StatsParams {
 
 /// The window, limited to the sessions a lab reader may see (R2-E). A client
 /// reader, or a hub without client scope, gets the window unchanged.
-async fn lab_window(
-    state: &AppState,
-    auth: &Authenticated,
-    w: Window,
-) -> Result<Window, HubError> {
+async fn lab_window(state: &AppState, auth: &Authenticated, w: Window) -> Result<Window, HubError> {
     restrict(state, auth.visibility(state), w).await
 }
 
@@ -326,7 +322,9 @@ impl DailyParams {
         let from = parse_date("from", self.from.as_ref())?
             .unwrap_or(to - chrono::Duration::days(MAX_WINDOW_DAYS - 1));
         if from > to {
-            return Err(HubError::BadRequest(format!("from ({from}) is after to ({to})")));
+            return Err(HubError::BadRequest(format!(
+                "from ({from}) is after to ({to})"
+            )));
         }
         if (to - from).num_days() + 1 > MAX_WINDOW_DAYS {
             return Err(HubError::BadRequest(format!(
@@ -356,8 +354,7 @@ pub async fn daily(
         w.to.expect("set by DailyParams::window"),
         w.tz.name().to_string(),
     );
-    let (headers, rows) =
-        with_mirror(&state, move |c| Ok(stats::daily_by_project(c, &w)?)).await?;
+    let (headers, rows) = with_mirror(&state, move |c| Ok(stats::daily_by_project(c, &w)?)).await?;
     Ok((headers, Json(DailyAnswer { from, to, tz, rows })))
 }
 
@@ -417,7 +414,8 @@ pub async fn tool_calls(
         .filter(|p| {
             !p.is_empty()
                 && p.len() <= 200
-                && p.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
         })
         .ok_or_else(|| HubError::BadRequest("prefix: a tool name (A-Z a-z 0-9 _ . -)".into()))?;
     let since = params
@@ -485,7 +483,10 @@ pub async fn tool_calls(
 mod tests {
     #[test]
     fn mcp_server_of_a_name() {
-        assert_eq!(super::mcp_server("mcp__exa__web_search_exa").as_deref(), Some("exa"));
+        assert_eq!(
+            super::mcp_server("mcp__exa__web_search_exa").as_deref(),
+            Some("exa")
+        );
         assert_eq!(super::mcp_server("web_search_exa"), None);
         assert_eq!(super::mcp_server("mcp__"), None);
     }

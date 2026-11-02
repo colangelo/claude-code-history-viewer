@@ -34,7 +34,11 @@ async fn spawn() -> Hub {
     hub::MIGRATOR.run(&pool).await.expect("run migrations");
     let machine = Uuid::new_v4();
     let token = format!("tok-{machine}");
-    let state = hub::AppState::new(pool.clone(), HashMap::from([(token.clone(), machine)]), Vec::new());
+    let state = hub::AppState::new(
+        pool.clone(),
+        HashMap::from([(token.clone(), machine)]),
+        Vec::new(),
+    );
     let app = hub::router(state, None);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -137,20 +141,30 @@ async fn counts_per_tool_and_host_since_t_by_last_segment() {
     hub.call(on_a, &ago(2), &format!("mcp__exa__{tool}")).await;
     hub.call(on_a, &ago(3), &format!("mcp__exa__{tool}")).await;
     hub.call(on_b, &ago(4), &format!("mcp__exa__{tool}")).await;
-    hub.call(on_b, &ago(5), &format!("mcp__other__{tool}")).await;
+    hub.call(on_b, &ago(5), &format!("mcp__other__{tool}"))
+        .await;
     hub.call(on_b, &ago(6), &tool).await; // a full name matches too
-    // Not matches: a longer last segment, another tool, and one before T.
-    hub.call(on_a, &ago(2), &format!("mcp__exa__{tool}_v2")).await;
+                                          // Not matches: a longer last segment, another tool, and one before T.
+    hub.call(on_a, &ago(2), &format!("mcp__exa__{tool}_v2"))
+        .await;
     hub.call(on_a, &ago(2), &format!("mcp__exa__{tool}x")).await;
     hub.call(on_a, &ago(50), &format!("mcp__exa__{tool}")).await;
 
-    let (status, body) = hub.get(&format!("?prefix={tool}&since={}", enc(&ago(24)))).await;
+    let (status, body) = hub
+        .get(&format!("?prefix={tool}&since={}", enc(&ago(24))))
+        .await;
     assert_eq!(status, 200, "{body}");
     let by_tool: Vec<(String, Value, i64)> = body["by_tool"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| (r["tool"].as_str().unwrap().to_string(), r["server"].clone(), r["count"].as_i64().unwrap()))
+        .map(|r| {
+            (
+                r["tool"].as_str().unwrap().to_string(),
+                r["server"].clone(),
+                r["count"].as_i64().unwrap(),
+            )
+        })
         .collect();
     assert_eq!(
         by_tool,
@@ -165,7 +179,12 @@ async fn counts_per_tool_and_host_since_t_by_last_segment() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| (r["host"].as_str().unwrap().to_string(), r["count"].as_i64().unwrap()))
+        .map(|r| {
+            (
+                r["host"].as_str().unwrap().to_string(),
+                r["count"].as_i64().unwrap(),
+            )
+        })
         .collect();
     assert_eq!(by_host, vec![(b.clone(), 3), (a.clone(), 2)]);
     assert!(body["last_ingest"].is_string(), "{body}");
@@ -177,12 +196,21 @@ async fn parameters_are_prefix_and_since_only_within_31_days() {
     let hub = spawn().await;
     let ok_since = enc(&ago(24 * 30));
     for (query, why) in [
-        (format!("?prefix=x&since={}", enc(&ago(24 * 32))), "32 days back"),
+        (
+            format!("?prefix=x&since={}", enc(&ago(24 * 32))),
+            "32 days back",
+        ),
         (format!("?since={ok_since}"), "no prefix"),
         (format!("?prefix=&since={ok_since}"), "an empty prefix"),
         ("?prefix=x".to_string(), "no since"),
-        ("?prefix=x&since=yesterday".to_string(), "since not RFC 3339"),
-        (format!("?prefix=x&since={ok_since}&project=y"), "an unknown parameter"),
+        (
+            "?prefix=x&since=yesterday".to_string(),
+            "since not RFC 3339",
+        ),
+        (
+            format!("?prefix=x&since={ok_since}&project=y"),
+            "an unknown parameter",
+        ),
     ] {
         let (status, body) = hub.get(&query).await;
         assert_eq!(status, 400, "{why}: {query} -> {body}");

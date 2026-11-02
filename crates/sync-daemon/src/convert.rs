@@ -271,7 +271,10 @@ mod tests {
             message_key("codex", "s", 4, &without)
         );
         let ingest = to_ingest_message("codex", "s", 4, &with);
-        assert_eq!(ingest.raw["mcp"], json!([{"server": "exa", "tool": "web_search_exa"}]));
+        assert_eq!(
+            ingest.raw["mcp"],
+            json!([{"server": "exa", "tool": "web_search_exa"}])
+        );
         let ingest = to_ingest_message("codex", "s", 4, &without);
         assert!(ingest.raw.get("mcp").is_none(), "absent when there is none");
     }

@@ -1368,18 +1368,25 @@ fn attach_mcp_call(messages: &mut [ClaudeMessage], payload: &Value) {
         return;
     }
     let (Some(server), Some(tool)) = (
-        item.get("server").and_then(Value::as_str).filter(|s| !s.is_empty()),
-        item.get("tool").and_then(Value::as_str).filter(|s| !s.is_empty()),
+        item.get("server")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty()),
+        item.get("tool")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty()),
     ) else {
         return;
     };
     let tool_name = |m: &ClaudeMessage| {
-        m.content.as_ref().and_then(Value::as_array).and_then(|blocks| {
-            blocks
-                .iter()
-                .find(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
-                .and_then(|b| b.get("name").and_then(Value::as_str).map(str::to_string))
-        })
+        m.content
+            .as_ref()
+            .and_then(Value::as_array)
+            .and_then(|blocks| {
+                blocks
+                    .iter()
+                    .find(|b| b.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    .and_then(|b| b.get("name").and_then(Value::as_str).map(str::to_string))
+            })
     };
     let Some(last_call) = messages.iter_mut().rev().find(|m| tool_name(m).is_some()) else {
         return;
@@ -3275,9 +3282,11 @@ mod tests {
         let mcp: Vec<Option<Vec<(&str, &str)>>> = msgs
             .iter()
             .map(|m| {
-                m.mcp
-                    .as_ref()
-                    .map(|v| v.iter().map(|c| (c.server.as_str(), c.tool.as_str())).collect())
+                m.mcp.as_ref().map(|v| {
+                    v.iter()
+                        .map(|c| (c.server.as_str(), c.tool.as_str()))
+                        .collect()
+                })
             })
             .collect();
         assert_eq!(

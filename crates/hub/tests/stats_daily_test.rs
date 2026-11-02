@@ -53,8 +53,12 @@ async fn spawn() -> Hub {
         })
         .expect("open mirror"),
     );
-    let state = hub::AppState::new(pool.clone(), HashMap::from([(token.clone(), machine)]), Vec::new())
-        .with_mirror(mirror.clone());
+    let state = hub::AppState::new(
+        pool.clone(),
+        HashMap::from([(token.clone(), machine)]),
+        Vec::new(),
+    )
+    .with_mirror(mirror.clone());
     let app = hub::router(state, None);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -157,23 +161,81 @@ async fn every_d2_column_over_one_worked_day() {
     let s = hub.session(&name).await;
     let user = || json!({"type": "user"});
     // 2026-10-05, Europe/Rome is UTC+2: 08:00Z is 10:00 local.
-    hub.row(s, "2026-10-05T08:00:00Z", Some("user"), Some(json!("first prompt")), user(), (None, None), None).await;
+    hub.row(
+        s,
+        "2026-10-05T08:00:00Z",
+        Some("user"),
+        Some(json!("first prompt")),
+        user(),
+        (None, None),
+        None,
+    )
+    .await;
     // +60 s
-    hub.row(s, "2026-10-05T08:01:00Z", Some("assistant"), Some(json!([{"type": "text", "text": "a"}])),
-            json!({"type": "assistant"}), (Some(100), Some(20)), Some(0.5)).await;
+    hub.row(
+        s,
+        "2026-10-05T08:01:00Z",
+        Some("assistant"),
+        Some(json!([{"type": "text", "text": "a"}])),
+        json!({"type": "assistant"}),
+        (Some(100), Some(20)),
+        Some(0.5),
+    )
+    .await;
     // +60 s, a tool result only: not a prompt
-    hub.row(s, "2026-10-05T08:02:00Z", Some("user"),
-            Some(json!([{"type": "tool_result", "tool_use_id": "x", "content": "ok"}])), user(), (None, None), None).await;
+    hub.row(
+        s,
+        "2026-10-05T08:02:00Z",
+        Some("user"),
+        Some(json!([{"type": "tool_result", "tool_use_id": "x", "content": "ok"}])),
+        user(),
+        (None, None),
+        None,
+    )
+    .await;
     // +1800 s: capped at 300
-    hub.row(s, "2026-10-05T08:32:00Z", Some("user"), Some(json!("second prompt")), user(), (None, None), None).await;
+    hub.row(
+        s,
+        "2026-10-05T08:32:00Z",
+        Some("user"),
+        Some(json!("second prompt")),
+        user(),
+        (None, None),
+        None,
+    )
+    .await;
     // +10 s: compaction boundary, then its summary prompt (+5 s): not a turn
-    hub.row(s, "2026-10-05T08:32:10Z", Some("system"), Some(json!("Conversation compacted")),
-            json!({"type": "system", "subtype": "compact_boundary"}), (None, None), None).await;
-    hub.row(s, "2026-10-05T08:32:15Z", Some("user"), Some(json!("This session is being continued...")), user(),
-            (None, None), None).await;
+    hub.row(
+        s,
+        "2026-10-05T08:32:10Z",
+        Some("system"),
+        Some(json!("Conversation compacted")),
+        json!({"type": "system", "subtype": "compact_boundary"}),
+        (None, None),
+        None,
+    )
+    .await;
+    hub.row(
+        s,
+        "2026-10-05T08:32:15Z",
+        Some("user"),
+        Some(json!("This session is being continued...")),
+        user(),
+        (None, None),
+        None,
+    )
+    .await;
     // +45 s: an assistant row with no content (bookkeeping): not a message
-    hub.row(s, "2026-10-05T08:33:00Z", Some("assistant"), None, json!({"type": "assistant"}),
-            (Some(50), Some(5)), Some(0.25)).await;
+    hub.row(
+        s,
+        "2026-10-05T08:33:00Z",
+        Some("assistant"),
+        None,
+        json!({"type": "assistant"}),
+        (Some(50), Some(5)),
+        Some(0.25),
+    )
+    .await;
 
     let (status, body) = hub.get("?from=2026-10-05&to=2026-10-05").await;
     assert_eq!(status, 200, "{body}");
@@ -185,7 +247,11 @@ async fn every_d2_column_over_one_worked_day() {
     assert_eq!(r["compactions"], 1);
     assert_eq!(r["tokens_in"], 150);
     assert_eq!(r["tokens_out"], 25);
-    assert_eq!(r["active_seconds"], 60 + 60 + 300 + 10 + 5 + 45, "gaps capped at 300 s");
+    assert_eq!(
+        r["active_seconds"],
+        60 + 60 + 300 + 10 + 5 + 45,
+        "gaps capped at 300 s"
+    );
     assert_eq!(r["ac_messages"], Value::Null);
     assert_eq!(r["cost_usd"], 0.75);
     assert_eq!(body["tz"], "Europe/Rome", "the default zone");
@@ -196,9 +262,26 @@ async fn a_day_without_reported_cost_is_null_not_zero() {
     let hub = spawn().await;
     let name = format!("nocost-{}", Uuid::new_v4().simple());
     let s = hub.session(&name).await;
-    hub.row(s, "2026-10-06T09:00:00Z", Some("user"), Some(json!("hi")), json!({}), (None, None), None).await;
-    hub.row(s, "2026-10-06T09:00:30Z", Some("assistant"), Some(json!([{"type": "text", "text": "a"}])),
-            json!({}), (Some(10), Some(2)), None).await;
+    hub.row(
+        s,
+        "2026-10-06T09:00:00Z",
+        Some("user"),
+        Some(json!("hi")),
+        json!({}),
+        (None, None),
+        None,
+    )
+    .await;
+    hub.row(
+        s,
+        "2026-10-06T09:00:30Z",
+        Some("assistant"),
+        Some(json!([{"type": "text", "text": "a"}])),
+        json!({}),
+        (Some(10), Some(2)),
+        None,
+    )
+    .await;
     let (status, body) = hub.get("?from=2026-10-06&to=2026-10-06").await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(row(&body, "2026-10-06", &name)["cost_usd"], Value::Null);
@@ -210,7 +293,16 @@ async fn days_are_local_to_tz() {
     let name = format!("tzproj-{}", Uuid::new_v4().simple());
     let s = hub.session(&name).await;
     // 23:30Z on the 7th is 01:30 on the 8th in Rome.
-    hub.row(s, "2026-10-07T23:30:00Z", Some("user"), Some(json!("late")), json!({}), (None, None), None).await;
+    hub.row(
+        s,
+        "2026-10-07T23:30:00Z",
+        Some("user"),
+        Some(json!("late")),
+        json!({}),
+        (None, None),
+        None,
+    )
+    .await;
     let (_, rome) = hub.get("?from=2026-10-07&to=2026-10-08").await;
     row(&rome, "2026-10-08", &name);
     let (_, utc) = hub.get("?from=2026-10-07&to=2026-10-08&tz=UTC").await;
@@ -223,9 +315,18 @@ async fn parameters_are_from_to_tz_only_within_31_days() {
     for (query, why) in [
         ("?from=2026-09-01&to=2026-10-02", "32 days"),
         ("?from=2026-10-02&to=2026-10-01", "from after to"),
-        ("?from=2026-10-01&to=2026-10-02&project=x", "an unknown parameter"),
-        ("?from=2026-10-01&to=2026-10-02&session=1", "an unknown parameter"),
-        ("?from=2026-10-01&to=2026-10-02&tz=Not/A_Zone", "an unknown zone"),
+        (
+            "?from=2026-10-01&to=2026-10-02&project=x",
+            "an unknown parameter",
+        ),
+        (
+            "?from=2026-10-01&to=2026-10-02&session=1",
+            "an unknown parameter",
+        ),
+        (
+            "?from=2026-10-01&to=2026-10-02&tz=Not/A_Zone",
+            "an unknown zone",
+        ),
     ] {
         let (status, body) = hub.get(query).await;
         assert_eq!(status, 400, "{why}: {query} -> {body}");

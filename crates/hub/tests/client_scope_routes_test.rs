@@ -461,7 +461,10 @@ async fn a_stats_only_reader_reads_the_stats_routes_and_nothing_else() {
         let (status, body) = get(&w, &url, "stats").await;
         let want = if allowed.contains(&path) { 200 } else { 403 };
         if status != want {
-            wrong.push(format!("{url} -> {status} (want {want}) {}", &body[..body.len().min(120)]));
+            wrong.push(format!(
+                "{url} -> {status} (want {want}) {}",
+                &body[..body.len().min(120)]
+            ));
         }
     }
     assert!(wrong.is_empty(), "stats_only reader: {wrong:#?}");
@@ -477,7 +480,11 @@ async fn a_stats_only_reader_reads_the_stats_routes_and_nothing_else() {
         .send()
         .await
         .unwrap();
-    assert_eq!(login.status().as_u16(), 403, "no cookie for a stats_only token");
+    assert_eq!(
+        login.status().as_u16(),
+        403,
+        "no cookie for a stats_only token"
+    );
     let write = reqwest::Client::new()
         .post(format!("{}/v1/journal/ticks", w.base))
         .bearer_auth(&w.stats_reader)
@@ -615,7 +622,10 @@ async fn stats_read_routes_are_lab_only_in_observe_too() {
         let lab = get(&w, url, "lab").await;
         let client = get(&w, url, "client").await;
         assert_eq!((lab.0, client.0), (200, 200), "{lab:?} {client:?}");
-        assert_ne!(lab.1, client.1, "observe: the client reader sees more on {url}");
+        assert_ne!(
+            lab.1, client.1,
+            "observe: the client reader sees more on {url}"
+        );
     }
     assert_lab_view_unchanged_by_deleting_client_rows(&w, &urls).await;
 }
@@ -668,7 +678,10 @@ async fn assert_lab_view_unchanged_by_deleting_client_rows(w: &World, urls: &[St
     // The mirror folds in inserts only: rebuild it so the stats routes answer
     // from the archive without the client rows too.
     hub::mirror::rebuild(&w.mirror_cfg, &pool).await.unwrap();
-    assert!(w.mirror.adopt_replacement().unwrap(), "rebuilt mirror adopted");
+    assert!(
+        w.mirror.adopt_replacement().unwrap(),
+        "rebuilt mirror adopted"
+    );
 
     for (who, before) in [("lab", before_lab), ("tailscale", before_ts)] {
         let after = view(w, urls, who).await;
@@ -905,4 +918,3 @@ async fn client_scope_health_names_the_callers_scope() {
         ]
     );
 }
-
