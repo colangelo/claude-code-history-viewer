@@ -290,3 +290,17 @@ computed.
 3. Journal entries written by GPT on client days before routing existed (07-18..10-20): are they
    hidden from lab readers by the session rule (recommended), or redacted too?
 4. Who approves a narrowing clear: ac's row (recommended), or security?
+
+### Answers so far
+
+manager-aruba, 2026-11-02 00:10Z (bell 312663ad), for the client side:
+
+- **Q1 (terms):** security's call. manager-aruba's view: path markers only at launch, and R4
+  accepted while the distiller keeps its own term check. Revisit with the observe-mode counts.
+- **Q2 (totals):** counts-only totals are fine for lab readers.
+- **Q3 (pre-routing entries):** hiding them by the session rule is enough, with no redaction. ac
+  already decided to keep those rows (10-29), and a redaction would reopen that decision.
+- **Q4 (narrowing):** for a client session, ac approves through the client desk's row. Never a lab
+  session, a lab token or a lab desk row alone.
+- **D5:** OK that `blog-client` (its Claude-only writer) is a client reader.
+- **D7:** the observe-mode sweep counts go to manager-aruba, as written.
