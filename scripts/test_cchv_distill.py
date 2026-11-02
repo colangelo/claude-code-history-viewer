@@ -1447,7 +1447,7 @@ class RestampHub:
 
     def __init__(self, entries, sessions, health=None, page=2) -> None:
         self.entries, self.sessions, self.page = entries, sessions, page
-        self.health = health or {"mode": "observe", "generation": RESTAMP_GEN[:12], "caller_scope": "lab"}
+        self.health = health or {"mode": "observe", "generation": RESTAMP_GEN[:12], "caller_scope": "client"}
         self.reads = []
 
     def client_scope_health(self):
@@ -1536,8 +1536,8 @@ def test_restamp_file_names_no_hidden_entry(tmp_path) -> None:
 
 @pytest.mark.parametrize("health, why", [
     ({"mode": "observe", "generation": "b" * 12, "caller_scope": "lab"}, "generation"),
-    ({"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": "lab"}, "lab caller"),
-    ({"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": None}, "lab caller"),
+    ({"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": "lab"}, "client reader"),
+    ({"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": None}, "client reader"),
     ({"mode": "off"}, "not on"),
 ])
 def test_restamp_refuses_to_start(tmp_path, health, why) -> None:
@@ -1590,3 +1590,84 @@ def test_restamp_generation_is_the_hubs_formula(tmp_path) -> None:
     (tmp_path / "f.json").write_bytes(b"floor")
     assert d.routing_generation(tmp_path / "r.toml", tmp_path / "f.json") == \
         hashlib.sha256(b"routingfloor").hexdigest()
+
+
+# --- security's E8 code review (docs/reviews/2026-11-02-cchv-e8-restamp-code.md) ---
+
+class _PagedResp:
+    def __init__(self, page, headers):
+        self._page, self.headers = page, headers
+
+    def json(self):
+        return self._page
+
+
+def _paged_hub(pages):
+    """`pages`: one (page, headers) per GET, in order."""
+    it = iter(pages)
+
+    class FakeHub(d.Hub):
+        def get(self, path, **params):
+            page, headers = next(it)
+            return _PagedResp(page, headers)
+
+    return FakeHub(url="http://stub", token="t")
+
+
+@pytest.mark.parametrize("pages, why", [
+    ([([{"i": 0}], {})], "no X-Total-Count"),
+    ([([{"i": 0}], {"X-Total-Count": "many"})], "X-Total-Count"),
+    ([([{"i": 0}], {"X-Total-Count": "2"}), ([{"i": 1}], {"X-Total-Count": "3"})], "changed"),
+    ([([{"i": 0}, {"i": 1}], {"X-Total-Count": "1"})], "more than"),
+])
+def test_r5_a_missing_or_inconsistent_total_is_never_a_complete_read(pages, why) -> None:
+    with pytest.raises(RuntimeError, match=why):
+        _paged_hub(pages).session_messages(7)
+
+
+def test_r5_a_consistent_total_still_reads_every_page() -> None:
+    hub = _paged_hub([([{"i": 0}], {"X-Total-Count": "2"}), ([{"i": 1}], {"X-Total-Count": "2"})])
+    assert hub.session_messages(7) == [{"i": 0}, {"i": 1}]
+
+
+def test_r5_routing_reads_a_missing_total_as_unreadable(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_FULL_TOML)
+    hub = _paged_hub([([_msg(_text("neutral"), cwd=None)], {})])
+    assert d.route_group(hub, r, LAB, [1]) == "unreadable"
+
+
+def test_r4_router_and_generation_come_from_the_same_bytes(tmp_path, monkeypatch) -> None:
+    f, fl = tmp_path / "r.toml", tmp_path / "f.json"
+    f.write_text(ROUTING_FULL_TOML)
+    assert d.record_routing_floor(f, fl, None)[0]
+    reads: list[str] = []
+    real = Path.read_bytes
+
+    def counting(self):
+        reads.append(self.name)
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting)
+    r, gen = d.load_routing_snapshot(f, fl)
+    assert not r.protect_all and sorted(reads) == ["f.json", "r.toml"], reads
+    assert gen == hashlib.sha256(f.read_bytes() + fl.read_bytes()).hexdigest()
+
+
+def test_r4_a_failed_floor_gives_no_generation(tmp_path) -> None:
+    f = tmp_path / "r.toml"
+    f.write_text(ROUTING_FULL_TOML)
+    r, gen = d.load_routing_snapshot(f, tmp_path / "missing.json")
+    assert r.protect_all and gen is None
+
+
+def test_r8_an_entrys_sessions_are_routed_as_one_group(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "ROUTING_MAX_MESSAGES", 3)
+    two = [_msg(_text("neutral"), cwd=None)] * 2
+    counts, _, _ = _classify(tmp_path, [_entry(1, sids=(1, 2))], {1: two, 2: two})
+    assert counts == {"checked": 1, "class:unreadable": 1}, "4 messages in one group pass the limit of 3"
+
+
+def test_restamp_reads_as_a_client_reader_in_every_mode(tmp_path) -> None:
+    health = {"mode": "observe", "generation": RESTAMP_GEN[:12], "caller_scope": "lab"}
+    with pytest.raises(d.RestampRefused, match="client reader"):
+        _classify(tmp_path, [_entry(1)], {1: LAB_SESSION}, health)
