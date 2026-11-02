@@ -2,7 +2,7 @@
 //!
 //! Requires `TEST_DATABASE_URL`; run with `--test-threads=1`.
 
-use hub::client_admin::{accept_routing, clear, restamp_history, unlatch};
+use hub::client_admin::{accept_routing, clear, restamp_from_file, unlatch};
 use hub::client_policy::{load_paths, Load, Policy};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -183,53 +183,121 @@ async fn accept_routing_makes_a_narrowed_set_usable() {
 
 /// R2-F: only an entry whose own text and every session match nothing under
 /// the full router (markers AND terms), with every session lab, is restamped.
+/// An unstamped entry for the restamp tests; returns (id, generated_at).
+async fn unstamped_entry(pool: &PgPool, sessions: &[i64]) -> (i64, String, String) {
+    let project = format!("/w/rs-{}", Uuid::new_v4());
+    let (id, at): (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+        "INSERT INTO journal_entries (entry_date, project_path, status, model, headline, summary, session_ids)
+         VALUES ('2026-09-01', $1, 'entry', 'gpt-x', 'lab day', 's', $2) RETURNING id, generated_at",
+    )
+    .bind(&project)
+    .bind(sessions)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (id, project, at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+}
+
+fn restamp_file(
+    generation: &str,
+    version: &str,
+    started: chrono::DateTime<chrono::Utc>,
+    items: &[(String, String, Vec<i64>)],
+) -> Vec<u8> {
+    json!({
+        "format": 1,
+        "distiller_version": version,
+        "generation": generation,
+        "started_at": started.to_rfc3339(),
+        "finished_at": (started + chrono::Duration::seconds(5)).to_rfc3339(),
+        "counts": {},
+        "restampable": items.iter().map(|(project, at, sids)| json!({
+            "entry_date": "2026-09-01", "project_path": project,
+            "generated_at": at, "session_ids": sids,
+        })).collect::<Vec<_>>(),
+    })
+    .to_string()
+    .into_bytes()
+}
+
+async fn route_of(pool: &PgPool, id: i64) -> Option<String> {
+    sqlx::query_scalar("SELECT route FROM journal_entries WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// E8 (design R3-E8): the hub applies only what the distiller's router listed,
+/// and only when nothing changed since the router read it.
 #[tokio::test]
-async fn restamp_history_needs_clean_text_lab_sessions_and_no_terms() {
+async fn restamp_from_file_applies_only_unchanged_lab_entries() {
     let pool = pool().await;
     let (p, _dir) = policy(&routing("\"/clientco\""), 1);
     let g = p.generation.clone();
-    let lab = session(&pool, "plain lab work", Some("none"), Some(&g)).await;
-    let term = session(&pool, "the clientword deal", Some("none"), Some(&g)).await;
-    let client = session(&pool, "x", Some("text_marker"), Some(&g)).await;
-    let entry = |headline: &str, sessions: Vec<i64>| {
-        let pool = pool.clone();
-        let headline = headline.to_string();
-        async move {
-            sqlx::query_scalar::<_, i64>(
-                "INSERT INTO journal_entries (entry_date, project_path, status, model, headline, summary, session_ids)
-                 VALUES ('2026-09-01', $1, 'entry', 'gpt-x', $2, 's', $3) RETURNING id",
-            )
-            .bind(format!("/w/rs-{}", Uuid::new_v4()))
-            .bind(headline)
-            .bind(sessions)
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-        }
-    };
-    let clean = entry("lab day", vec![lab]).await;
-    let text_hit = entry("work on /w/clientco today", vec![lab]).await;
-    let term_hit = entry("lab day", vec![term]).await;
-    let client_entry = entry("lab day", vec![client]).await;
-
-    let dry = restamp_history(&pool, &p, None).await.unwrap();
-    assert!(
-        dry.restampable >= 1
-            && dry.entry_text_hit >= 1
-            && dry.session_term_hit >= 1
-            && dry.session_not_lab >= 1
-    );
-    let route: Option<String> =
-        sqlx::query_scalar("SELECT route FROM journal_entries WHERE id = $1")
-            .bind(clean)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(route, None, "a dry run writes nothing");
-
-    restamp_history(&pool, &p, Some("ac via the client desk"))
+    sqlx::query("UPDATE client_scope_state SET generation = $1")
+        .bind(&g)
+        .execute(&pool)
         .await
         .unwrap();
+    let lab = session(&pool, "plain lab work", Some("none"), Some(&g)).await;
+    let lab2 = session(&pool, "more lab work", Some("none"), Some(&g)).await;
+    let grows = session(&pool, "lab work", Some("none"), Some(&g)).await;
+    let flagged = session(&pool, "x", Some("text_marker"), Some(&g)).await;
+    let old_gen = session(&pool, "lab work", Some("none"), Some("old")).await;
+    let started = chrono::Utc::now();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let (clean, clean_p, clean_at) = unstamped_entry(&pool, &[lab]).await;
+    let (_, regen_p, _) = unstamped_entry(&pool, &[lab]).await;
+    let (_, moved_p, moved_at) = unstamped_entry(&pool, &[lab]).await;
+    let (_, flag_p, flag_at) = unstamped_entry(&pool, &[flagged]).await;
+    let (_, gen_p, gen_at) = unstamped_entry(&pool, &[old_gen]).await;
+    let (_, grow_p, grow_at) = unstamped_entry(&pool, &[grows]).await;
+    let (stamped, stamped_p, stamped_at) = unstamped_entry(&pool, &[lab]).await;
+    sqlx::query("UPDATE journal_entries SET route = 'protected', route_at = generated_at WHERE id = $1")
+        .bind(stamped)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // `grows` gets a message after the router's read.
+    sqlx::query(
+        "INSERT INTO messages (session_id, machine_id, provider, message_key, content, raw)
+         SELECT id, machine_id, 'claude', $2, '[]', '{}' FROM sessions WHERE id = $1",
+    )
+    .bind(grows)
+    .bind(Uuid::new_v4().to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Messages inserted above by `session()` predate `started`; these entries'
+    // sessions did not change, but the file's view of them did:
+    let file = restamp_file(
+        &g,
+        hub::client_admin::RESTAMP_MIN_DISTILLER,
+        started,
+        &[
+            (clean_p, clean_at.clone(), vec![lab]),
+            (regen_p, "2026-01-01T00:00:00.000000Z".into(), vec![lab]),
+            (moved_p, moved_at, vec![lab2]),
+            (flag_p, flag_at, vec![flagged]),
+            (gen_p, gen_at, vec![old_gen]),
+            (grow_p, grow_at, vec![grows]),
+            (stamped_p, stamped_at, vec![lab]),
+            ("/w/rs-missing".into(), clean_at, vec![lab]),
+        ],
+    );
+
+    let dry = restamp_from_file(&pool, &file, None, chrono::Utc::now()).await.unwrap();
+    assert_eq!(dry.render(), "listed 8, restamped 1; skipped: changed_since 1, gone 1, regenerated 1, \
+                               session_not_lab 2, sessions_differ 1, stamped 1");
+    assert_eq!(route_of(&pool, clean).await, None, "a dry run writes nothing");
+    let before = audits(&pool, "restamp-history").await;
+
+    let done = restamp_from_file(&pool, &file, Some("ac via the client desk"), chrono::Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(done.render(), dry.render());
     let (route, same): (Option<String>, bool) =
         sqlx::query_as("SELECT route, route_at = generated_at FROM journal_entries WHERE id = $1")
             .bind(clean)
@@ -237,14 +305,47 @@ async fn restamp_history_needs_clean_text_lab_sessions_and_no_terms() {
             .await
             .unwrap();
     assert_eq!((route.as_deref(), same), (Some("general-restamped"), true));
-    let others: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM journal_entries WHERE id IN ($1, $2, $3) AND route IS NOT NULL",
+    assert_eq!(audits(&pool, "restamp-history").await, before + 1);
+    let (gen, detail): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT generation, detail FROM client_scope_audit WHERE action = 'restamp-history' AND entry_id = $1",
     )
-    .bind(text_hit)
-    .bind(term_hit)
-    .bind(client_entry)
+    .bind(clean)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(others, 0, "the other three stay hidden");
+    assert_eq!(gen.as_deref(), Some(g.as_str()));
+    let detail = detail.unwrap();
+    assert!(detail.contains(&hex(&file)) && detail.contains(hub::client_admin::RESTAMP_MIN_DISTILLER), "{detail}");
+}
+
+/// E8: the whole file is refused when it cannot be trusted, and E7: an empty
+/// approver is refused.
+#[tokio::test]
+async fn restamp_from_file_refuses_an_untrusted_file() {
+    let pool = pool().await;
+    let (p, _dir) = policy(&routing("\"/clientco\""), 1);
+    let g = p.generation.clone();
+    sqlx::query("UPDATE client_scope_state SET generation = $1")
+        .bind(&g)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let lab = session(&pool, "plain lab work", Some("none"), Some(&g)).await;
+    let started = chrono::Utc::now() - chrono::Duration::seconds(30);
+    let (id, project, at) = unstamped_entry(&pool, &[lab]).await;
+    let item = [(project, at, vec![lab])];
+    let now = chrono::Utc::now();
+    let ok = hub::client_admin::RESTAMP_MIN_DISTILLER;
+    for (file, by, why) in [
+        (restamp_file(&"b".repeat(64), ok, started, &item), None, "generation"),
+        (restamp_file(&g, "0.39.1", started, &item), None, "distiller"),
+        (restamp_file(&g, ok, started - chrono::Duration::hours(25), &item), None, "older than 24 h"),
+        (restamp_file(&g, ok, started, &item), Some(""), "approved-by"),
+        (restamp_file(&g, ok, started, &item), Some("  "), "approved-by"),
+        (b"not json".to_vec(), None, "not a restamp file"),
+    ] {
+        let err = restamp_from_file(&pool, &file, by, now).await.unwrap_err();
+        assert!(err.to_string().contains(why), "{why}: {err}");
+    }
+    assert_eq!(route_of(&pool, id).await, None);
 }
