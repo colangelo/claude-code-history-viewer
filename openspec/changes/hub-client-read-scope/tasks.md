@@ -92,13 +92,22 @@ Observe mode may ship once security re-checks O1-O3 and the small items (done:
 98b2573e, 020ddf5f, 06da3802, 0f040d36, 565d3ae5). Nothing below may be skipped
 before `enforce = true`:
 
-- [ ] E1 Extractor coverage:
-      - classify project `name`, git remote, worktree main path and project-only updates;
-      - derive or validate `search_text`;
-      - the distiller's path plus pattern join;
-      - an unknown block type is unreadable (and the fixture says so);
-      - tool-block top-level keys;
-      - the 16 MiB budget per message, not per field.
+- [x] E1 Extractor coverage (built on `feat/cs-before-enforce`; security's re-check pending):
+      - classify project `name`, git remote, worktree main path and project-only updates
+        (ca4e3cc8: a hit is `path`; ingest classifies each written or touched project from its
+        stored row, after the batch's writes, and raises its unscanned or lab sessions with their
+        families; the sweep reads the fields through the join);
+      - derive or validate `search_text` (ca4e3cc8: validated, classified like the text it
+        indexes, at ingest and in the sweep);
+      - the distiller's path plus pattern join (00680c18, at any depth of a tool input);
+      - an unknown block type is unreadable, and the fixture says so (00680c18; the served set
+        matches the distiller's `OTHER_BLOCK_TYPES`, R9 a80ee182);
+      - tool-block top-level keys (00680c18, read as text);
+      - the 16 MiB budget per message, not per field (00680c18, `content`, `search_text` and
+        `raw` together);
+      - R9 option (d): Codex and pi messages carry their working folder as `cwd` (576bd7c0,
+        history-core, so it reaches `raw` through the daemon; archived rows keep null).
+      - Evidence: each check was removed in turn, and a test failed each time.
 - [ ] E2 Family:
       - `raw` parent links and orphan quarantine;
       - a fixed-point closure (siblings, grandchildren, the copies of protected-entry sessions) over
