@@ -314,20 +314,15 @@ async fn the_census_matches_what_the_sweep_writes() {
             .fetch_all(&e.pool)
             .await
             .unwrap();
-    let count = |f: &dyn Fn(&str) -> bool| {
-        classes
-            .iter()
-            .flatten()
-            .filter(|s_child| f(s_child))
-            .count() as u64
-    };
-    assert_eq!(count(&|s_child| s_child == "none"), census.lab);
+    let count =
+        |f: &dyn Fn(&str) -> bool| classes.iter().flatten().filter(|cls| f(cls)).count() as u64;
+    assert_eq!(count(&|cls| cls == "none"), census.lab);
     assert_eq!(
-        count(&|s_child| s_child != "none" && !c.starts_with("family:")),
+        count(&|cls| cls != "none" && !cls.starts_with("family:")),
         census.local
     );
     assert_eq!(
-        count(&|s_child| c.starts_with("family:")),
+        count(&|cls| cls.starts_with("family:")),
         census.family_only + census.protected_entry_only
     );
 }
