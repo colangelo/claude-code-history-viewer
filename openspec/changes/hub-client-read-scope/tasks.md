@@ -86,6 +86,59 @@ L1 (`/v1/healthz/journal` paths) is already fixed in v0.38.1.
 - [x] 4.4 Docs: `deployment.md`, covering scopes, where credentials rest (the R2-H table), the
       latch, rollback to an enforcing version, and the audited CLIs.
 
+## 4b. Before enforce (security code review, 2026-11-02, security ddff6c0)
+
+Observe mode may ship once security re-checks O1-O3 and the small items (done:
+98b2573e, 020ddf5f, 06da3802, 0f040d36, 565d3ae5). Nothing below may be skipped
+before `enforce = true`:
+
+- [ ] E1 Extractor coverage:
+      - classify project `name`, git remote, worktree main path and project-only updates;
+      - derive or validate `search_text`;
+      - the distiller's path plus pattern join;
+      - an unknown block type is unreadable (and the fixture says so);
+      - tool-block top-level keys;
+      - the 16 MiB budget per message, not per field.
+- [ ] E2 Family:
+      - `raw` parent links and orphan quarantine;
+      - a fixed-point closure (siblings, grandchildren, the copies of protected-entry sessions) over
+        stored family edges, under a family lock;
+      - a message-only batch keeps `file_path`;
+      - the sweep propagates in the same transaction.
+- [ ] E3 The distiller reads the hub's class before ANY general call: a family-only or raw-only
+      client session never goes to the general model.
+- [ ] E4 Policy refresh:
+      - withdraw lab visibility before the audit write;
+      - serialize refreshes;
+      - compare-and-swap the accepted set in one transaction.
+- [ ] E5 Authorize, then fetch: visibility on the actual fetch (message browse, semantic and hybrid
+      fetch-by-id, stats); the mirror copies messages and sessions under one snapshot.
+- [ ] E6 Identity metadata from visible rows only: display name, alias targets, expansion,
+      suggestions, `last_modified` ordering.
+- [ ] E7 Admin audit:
+      - one transaction with the full evidence (removed hashes, generation);
+      - the restamp CLI refuses an empty `--approved-by`.
+- [ ] E8 restamp-history uses the distiller's FULL router (decoding, project path, model, version
+      guard), before it is ever run.
+- [ ] E9 Credentials:
+      - no AppRole secret or bao token in `curl` argv (use stdin or a file descriptor);
+      - the client cache is created `O_EXCL|O_NOFOLLOW` at mode 0600.
+- [ ] E10 The mirror records its generation; lab stats compare it as well as `flags_changed_at`.
+- [ ] E11 The oracle:
+      - method-aware registry, HEAD, a machine-token walk;
+      - stats with a ready mirror and a positive control;
+      - an embedder stub for semantic and hybrid;
+      - differential over stats, health, pagination, and shared-project and identity cases;
+      - mutation evidence per predicate;
+      - property tests.
+- [ ] E12 Threads: protection over the full history, the state from visible inputs only.
+- [ ] E13 Revocation without a restart (credential epochs or mandatory reload); a cached render never
+      resurrects a revoked token.
+- [ ] E14 The cookie: HTTPS listener only, named `__Host-`, and a test that no response carries
+      `Access-Control-Allow-Credentials`.
+- [ ] E15 The launcher's minimum hub version once latched.
+- [ ] One definition of "general" (`general` and `general-restamped`), used by every filter.
+
 ## 5. Rollout (R2-I)
 
 - [ ] 5.1 Gate green, then security's code review, then release in observe mode.
