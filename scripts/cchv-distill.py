@@ -662,9 +662,11 @@ def _string_values(value) -> list[str]:
 
 # The block types besides text/thinking/tool_use/tool_result that the hub serves
 # (pg1 block census, all providers, 2026-11-02, plus the API's document and
-# redacted_thinking). Anything else makes `flatten` report `unknown` (R9).
+# redacted_thinking; opencode_step is history-core's OpenCode step record).
+# Anything else makes `flatten` report `unknown` (R9).
 OTHER_BLOCK_TYPES = frozenset({
     "image", "document", "redacted_thinking", "tool_addition", "tool_removal", "fallback",
+    "opencode_step",
 })
 
 

@@ -789,6 +789,62 @@
         }
       ],
       "class": "text_marker"
+    },
+    {
+      "name": "opencode_step block, lab strings (census 2026-11-02)",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "opencode_step",
+              "reason": "stop",
+              "snapshot": "lab only",
+              "cost": 0.01,
+              "tokens": {
+                "input": 1,
+                "output": 2,
+                "reasoning": 0,
+                "cache_read": 0,
+                "cache_write": 0
+              }
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "none"
+    },
+    {
+      "name": "opencode_step block holds the marker",
+      "project_path": "/Users/ac/_sync/dev/labrepo",
+      "session": {},
+      "messages": [
+        {
+          "content": [
+            {
+              "type": "opencode_step",
+              "reason": "stop",
+              "snapshot": "edited /w/clientco/a.rs",
+              "cost": 0,
+              "tokens": {
+                "input": 1,
+                "output": 2,
+                "reasoning": 0,
+                "cache_read": 0,
+                "cache_write": 0
+              }
+            }
+          ],
+          "raw": {
+            "cwd": "/Users/ac/_sync/dev/labrepo"
+          }
+        }
+      ],
+      "class": "text_marker"
     }
   ],
   "_doc": "Shared client-scope matcher fixture (openspec/changes/hub-client-read-scope, D2, R2-A, R2-K). Made-up markers only. match_cases: normalize + marker_in, run by the hub (client_scope.rs) and the distiller (test_cchv_distill.py); expected values are the distiller's behaviour. extract_cases: the hub's one extractor (session class), hub only."

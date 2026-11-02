@@ -835,6 +835,10 @@ def test_a_group_over_the_read_budget_protects(tmp_path, monkeypatch, cap) -> No
     {"type": "tool_addition", "tools": ["Read"]},
     {"type": "tool_removal", "tools": ["Read"]},
     {"type": "fallback", "text": "neutral"},
+    # Emitted by history-core's OpenCode parser; the 2026-11-02 pg1 census found it in
+    # 11 sessions after the 0.40.0 rescan marked them unreadable.
+    {"type": "opencode_step", "reason": "stop", "snapshot": "neutral", "cost": 0.0,
+     "tokens": {"input": 1, "output": 2}},
 ])
 def test_r9_a_known_block_type_routes_general(tmp_path, block) -> None:
     hit, _ = _route(tmp_path, {1: [_msg(content=[block], cwd=None)]})
@@ -850,6 +854,12 @@ def test_r9_a_known_block_type_routes_general(tmp_path, block) -> None:
 def test_r9_an_unknown_block_type_is_unreadable(tmp_path, block) -> None:
     hit, _ = _route(tmp_path, {1: [_msg(content=[block], cwd=None)]})
     assert hit == "unreadable"
+
+
+def test_a_marker_in_an_opencode_step_protects(tmp_path) -> None:
+    block = {"type": "opencode_step", "reason": "stop", "snapshot": "edited /w/_clientx/a.rs", "cost": 0}
+    hit, _ = _route(tmp_path, {1: [_msg(content=[block], cwd=None)]})
+    assert hit is not None
 
 
 def test_r9_a_marker_in_a_known_other_block_still_protects(tmp_path) -> None:
