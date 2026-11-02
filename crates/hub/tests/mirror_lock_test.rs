@@ -3,7 +3,7 @@
 //! what made the live hub adopt an empty file and cold-build (prod 503s on
 //! 2026-11-02, from canary hubs and from swaps that overlapped the old hub).
 //!
-//! DuckDB's lock is a POSIX file lock, which is per process, so the holder is
+//! `DuckDB`'s lock is a POSIX file lock, which is per process, so the holder is
 //! this same test binary re-run as a child (`hold_the_mirror_when_asked`).
 
 use hub::config::MirrorConfig;
@@ -121,7 +121,7 @@ fn the_open_waits_for_a_lock_that_is_released() {
     assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
 }
 
-/// The control: a file that is NOT a DuckDB database still goes aside and is
+/// The control: a file that is NOT a `DuckDB` database still goes aside and is
 /// replaced, as before.
 #[test]
 fn an_unreadable_file_still_goes_aside() {

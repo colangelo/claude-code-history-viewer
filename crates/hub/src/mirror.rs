@@ -1049,7 +1049,7 @@ where
     outcome
 }
 
-/// DuckDB's refusal to open a file another process holds ("Could not set lock
+/// `DuckDB`'s refusal to open a file another process holds ("Could not set lock
 /// on file ... Conflicting lock is held in ... (PID n)"): a busy file, not a
 /// broken one (#105).
 fn is_lock_error(e: &anyhow::Error) -> bool {
