@@ -756,6 +756,11 @@ async fn client_scope_health_names_the_callers_scope() {
     }
     assert_eq!(
         seen,
-        ["client=\"client\"", "lab=\"lab\"", "tailscale=\"lab\"", "none=null"]
+        [
+            "client=\"client\"",
+            "lab=\"lab\"",
+            "tailscale=\"lab\"",
+            "none=null"
+        ]
     );
 }

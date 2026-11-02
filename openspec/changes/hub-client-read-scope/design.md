@@ -355,8 +355,10 @@ It is run by the pg1 writer.
   - `session_ids` equal the file's;
   - every session has `client_class = 'none'` and `client_gen` equal to the current generation.
     This is an extra condition, never the only check;
-  - no session has a message created after `started_at`, and no `flags_changed_at` after it. The
-    router's read must cover the session as it is now.
+  - no session has a message created after `started_at`, and no session row was updated after
+    it (`sessions.updated_at`, which every ingest batch sets). The router's read must cover the
+    session as it is now. (`flags_changed_at` is one global stamp, not per session, so it is not
+    the check.)
 - **When all of them hold,** it sets `route = 'general-restamped'` and `route_at = generated_at`. The
   audit row records the entry, the generation, `approved_by`, the file's sha256 and the distiller
   version.
@@ -396,12 +398,20 @@ None of it runs before this design is built, tested and reviewed.
   An audit failure rolls back the route write, and the dry run writes nothing.
 - **Mutation evidence:** drop any single check, and a test fails.
 
-**For security's check.**
-- **E8-a:** Claude entries written after routing stay hidden, and the 37 Claude entries from before
-  routing (July) go through the router. Or should every Claude entry stay hidden?
-- **E8-b:** is 24 h the right age limit for the file?
-- **E8-c:** the file holds lab project paths, and only for restampable entries, at 0600 on m4m.
-  Acceptable?
+**Security's check (2026-11-02, OK to build):**
+- **E8-a, as designed:** Claude entries written after routing stay hidden. The July Haiku entries
+  and the GPT entries from before routing go through the router. An entry with no model is
+  before-routing evidence: it goes on to the router, never straight to restampable.
+- **E8-b:** 24 h is fine. The per-entry checks for new messages and row changes carry the real
+  weight.
+- **E8-c:** acceptable when the file lives under `~/.config/cchv` or `~/.local/state/cchv` (both
+  GPT-denied; the classify step refuses any other folder), and it is trashed after the apply or
+  after 24 h, whichever comes first.
+
+**As built** (branch `feat/cs-before-enforce`): the distiller's `--restamp-history FILE`, the hub's
+`restamp-history --from FILE`, and `caller_scope` in the client-scope health. The minimum distiller
+version is 0.40.0, the release that ships the classify step. Each check was removed in turn, and a
+test failed each time.
 
 ## Context
 
