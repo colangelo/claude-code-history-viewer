@@ -234,7 +234,7 @@ fn take<'v>(s: &'v str, budget: &mut usize, f: &mut dyn FnMut(&'v str)) -> Resul
 
 /// The block types besides `tool_use` and `tool_result` that the hub serves
 /// (pg1 block census, all providers, 2026-11-02; plus the API's `document`
-/// and `redacted_thinking`; `opencode_step` is history-core's OpenCode step
+/// and `redacted_thinking`; `opencode_step` is `history-core`'s `OpenCode` step
 /// record). Any other type, or none, is unreadable (E1); the distiller's
 /// `OTHER_BLOCK_TYPES` holds the same list (R9).
 const READ_BLOCK_TYPES: [&str; 9] = [
