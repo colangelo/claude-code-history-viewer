@@ -390,6 +390,57 @@ launch that cannot reach bao reuses the cached runtime file, which still holds
 the revoked token, so a revocation is only done when that count is 0 and the
 token answers 401 on `GET /v1/projects`.
 
+**Client scope (OpenSpec `hub-client-read-scope`).** This keeps client sessions away from every
+reader that is not Claude-only. Off unless `hub.toml` has:
+
+```toml
+[client_scope]
+routing_file = "/Users/ac/.config/cchv/distill-routing.toml"        # the distiller's
+floor_file   = "/Users/ac/.config/cchv/distill-routing.floor.json"
+enforce      = false   # observe: classify and count, hide nothing
+```
+
+- **The flag.** Every session gets a sticky client class.
+  - *What sets it:* the routing file's path markers, matched against the project path, the session
+    row, every `content` and `raw` string, `cwd`, tool inputs and results. Content terms are not
+    used for the flag.
+  - *When:* at ingest, in the batch transaction, and in the sweep
+    (`cchv-hub client-scope sweep [--dry-run]`).
+  - *Unscanned:* a session not scanned under the current generation counts as client.
+  - *Bad routing file:* a missing, invalid, below-floor or changed file is `unknown`, and every
+    session counts as client.
+  - *Narrowing:* a removed or replaced marker is `unknown` until `client-scope accept-routing`.
+- **Who reads what.** Machine tokens, `[[readers]]` and the trusted Tailscale identity are lab
+  read. With `enforce = true` they never get a client session, path, journal entry, thread, stats
+  row or identity: a hidden row answers exactly as a missing one.
+  `[[client_readers]]` (`token_sha256`, `machine_id`, `label`) read everything and write nothing.
+  The launcher renders them from `kv/agents/cchv-client-readers/<name>` as the token's sha256,
+  never the token.
+- **Holders.**
+  - The distiller reads with `kv/agents/cchv-client-readers/distiller` (cached
+    `~/.config/cchv/distill-client-token`, mode 600, never from the environment) and writes with
+    the machine token.
+  - A browser trades a token once at `POST /v1/login` for an `HttpOnly` cookie of the same scope
+    (8 h); `DELETE /v1/login` signs out.
+- **Probe.** `GET /v1/healthz/client-scope` reports the effective `mode`, the `policy` and counts
+  only. It answers 503 when the policy is unknown, or when the latch overrides a config that says
+  observe.
+- **The latch.** The first start with `enforce = true` sets the latch. After that, `enforce = false`
+  still enforces (a stale cached render cannot lift it). Only
+  `client-scope unlatch --reason … --approved-by …` does, and it is audited. Roll back to an
+  enforcing build, never to one older than this change.
+- **Audited actions** (pg1 writer, on ac's row; for client sessions with the client desk's word):
+  - `client-scope accept-routing`;
+  - `client-scope clear --session N`;
+  - `client-scope unlatch`;
+  - `client-scope restamp-history --dry-run | --approved-by …`, which makes a pre-routing journal
+    entry lab again only when its text and sessions match nothing under markers and terms.
+
+  Every action writes a row in `client_scope_audit`.
+- **Stats.** The mirror copies each session's class and generation. Lab statistics come from
+  visible sessions only, and answer 503 while the mirror is older than the last session that turned
+  client.
+
 Run it (systemd unit, Linux node):
 
 ```ini
