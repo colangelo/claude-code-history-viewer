@@ -1521,7 +1521,7 @@ def test_restamp_a_clean_entry_is_restampable(tmp_path, model, at) -> None:
 def test_restamp_pages_to_the_end_and_skips_stamped_rows(tmp_path) -> None:
     entries = [_entry(n) for n in range(1, 6)] + [_entry(6, route="protected"),
                                                   _entry(7, status="skip")]
-    counts, out, hub = _classify(tmp_path, entries, {1: LAB_SESSION})
+    counts, _, hub = _classify(tmp_path, entries, {1: LAB_SESSION})
     assert counts == {"checked": 5, "restampable": 5}
     assert hub.reads == [1], "a session shared by many entries is read once per run"
 
