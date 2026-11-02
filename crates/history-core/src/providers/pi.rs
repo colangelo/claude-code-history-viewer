@@ -397,6 +397,7 @@ fn session_meta(data: &str) -> Option<SessionMeta> {
 /// record; header/`model_change`/`thinking_level_change` records are skipped).
 fn parse_messages(data: &str) -> Vec<ClaudeMessage> {
     let mut session_id = String::new();
+    let mut cwd: Option<String> = None;
     let mut messages = Vec::new();
 
     for line in data.lines() {
@@ -415,12 +416,18 @@ fn parse_messages(data: &str) -> Vec<ClaudeMessage> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            // The header's folder goes on every message, served as `cwd`
+            // (security E8 review R9 d).
+            cwd = rec.get("cwd").and_then(Value::as_str).map(str::to_string);
             continue;
         }
         if rec_type != "message" {
             continue;
         }
-        if let Some(msg) = convert_record(&rec, &session_id) {
+        if let Some(mut msg) = convert_record(&rec, &session_id) {
+            if msg.cwd.is_none() {
+                msg.cwd.clone_from(&cwd);
+            }
             messages.push(msg);
         }
     }
@@ -873,6 +880,19 @@ mod tests {
         assert!(
             load_messages(&file.to_string_lossy()).is_err(),
             "load_messages must reject a file outside the sessions root"
+        );
+    }
+
+    /// Security E8 review R9 (d): every message carries the header's folder,
+    /// which the archive serves as `cwd`.
+    #[test]
+    fn parse_messages_carry_the_header_folder() {
+        let msgs = parse_messages(SESSION);
+        assert!(!msgs.is_empty());
+        assert!(
+            msgs.iter()
+                .all(|m| m.cwd.as_deref() == Some("/Users/ac/dev/herdr")),
+            "every message names the session's folder"
         );
     }
 }

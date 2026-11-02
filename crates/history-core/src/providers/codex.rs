@@ -329,6 +329,9 @@ pub(crate) fn parse_rollout_file(canonical_path: &Path) -> Result<Vec<ClaudeMess
     let mut prev_output_tokens: u32 = 0;
     let mut prev_cached_tokens: u32 = 0;
     let mut msg_counter = 0u64;
+    // (first message index, folder): where the rollout names a working folder
+    // (`session_meta`, then each `turn_context`), applied after the loop.
+    let mut folders: Vec<(usize, String)> = Vec::new();
 
     for &(start, end) in &ranges {
         let line = &mmap[start..end];
@@ -353,12 +356,18 @@ pub(crate) fn parse_rollout_file(canonical_path: &Path) -> Result<Vec<ClaudeMess
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
+                    if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
+                        folders.push((messages.len(), cwd.to_string()));
+                    }
                 }
             }
             "turn_context" => {
                 if let Some(payload) = val.get("payload") {
                     if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
                         current_model = Some(m.to_string());
+                    }
+                    if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
+                        folders.push((messages.len(), cwd.to_string()));
                     }
                 }
             }
@@ -450,6 +459,18 @@ pub(crate) fn parse_rollout_file(canonical_path: &Path) -> Result<Vec<ClaudeMess
         }
     }
 
+    // Each message carries the folder of its turn (security E8 review R9 d):
+    // the archive serves it as `cwd`, as it does Claude Code's own records.
+    let mut next = folders.into_iter().peekable();
+    let mut cwd: Option<String> = None;
+    for (i, msg) in messages.iter_mut().enumerate() {
+        while let Some((_, folder)) = next.next_if(|(at, _)| *at <= i) {
+            cwd = Some(folder);
+        }
+        if msg.cwd.is_none() {
+            msg.cwd.clone_from(&cwd);
+        }
+    }
     Ok(messages)
 }
 
@@ -3125,5 +3146,44 @@ mod tests {
         );
         // The wrapper still counts as a message — only the summary is gated.
         assert_eq!(info.message_count, 1);
+    }
+
+    /// Security E8 review R9 (d): each message carries the working folder the
+    /// rollout names, from `session_meta` and then each `turn_context`, so the
+    /// archive serves it as `cwd` like Claude Code's own records.
+    #[test]
+    fn messages_carry_the_folder_of_their_turn() {
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("rollout.jsonl");
+        let item = |id: &str, text: &str| {
+            json!({"timestamp": "2026-02-19T12:00:02Z", "type": "response_item",
+                   "payload": {"id": id, "type": "message", "role": "user",
+                               "content": [{"type": "input_text", "text": text}]}})
+        };
+        let lines = [
+            json!({"timestamp": "2026-02-19T12:00:00Z", "type": "session_meta",
+                   "payload": {"id": "sess-1", "cwd": "/w/first"}}),
+            item("i1", "one"),
+            json!({"timestamp": "2026-02-19T12:00:03Z", "type": "turn_context",
+                   "payload": {"model": "gpt-5-codex", "cwd": "/w/second"}}),
+            item("i2", "two"),
+            json!({"timestamp": "2026-02-19T12:00:04Z", "type": "turn_context",
+                   "payload": {"model": "gpt-5-codex"}}),
+            item("i3", "three"),
+        ];
+        let body = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(&path, body).expect("write rollout");
+        let msgs = parse_rollout_file(&path).expect("parse");
+        let cwds: Vec<Option<&str>> = msgs.iter().map(|m| m.cwd.as_deref()).collect();
+        assert_eq!(
+            cwds,
+            vec![Some("/w/first"), Some("/w/second"), Some("/w/second")],
+            "a turn without a folder keeps the last one"
+        );
     }
 }
