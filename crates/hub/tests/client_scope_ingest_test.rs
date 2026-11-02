@@ -610,13 +610,16 @@ async fn ingest_during_a_policy_outage_leaves_the_session_unscanned() {
 #[tokio::test]
 async fn pending_groups_carry_the_hubs_class() {
     let hub = spawn().await;
-    let day = (chrono::Utc::now() - chrono::Duration::days(2))
-        .format("%Y-%m-%dT12:00:00Z")
-        .to_string();
+    // The newest day the route lists (its day starts at 04:00 UTC), and paths
+    // that sort first: the route pages newest day and highest path first, at
+    // most 200 groups, and the shared test database keeps every run's groups.
+    let day_date =
+        (chrono::Utc::now() - chrono::Duration::hours(4)).date_naive() - chrono::Duration::days(1);
+    let day = format!("{day_date}T12:00:00Z");
     let mk = |tag: &str| {
         let s = sid();
         let mut row = session(&s);
-        row["project_path"] = json!(format!("/w/e3-{tag}-{s}"));
+        row["project_path"] = json!(format!("/~e3-{tag}-{s}"));
         (s, row)
     };
     let at = |s: &str, text: &str| {
@@ -663,7 +666,7 @@ async fn pending_groups_carry_the_hubs_class() {
 
     let groups: Vec<Value> = reqwest::Client::new()
         .get(format!(
-            "{}/v1/journal/pending?from=2026-10-01&limit=1000",
+            "{}/v1/journal/pending?from={day_date}&limit=200",
             hub.base
         ))
         .bearer_auth(&hub.token)
