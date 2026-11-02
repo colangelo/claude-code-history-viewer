@@ -17,15 +17,35 @@ pub async fn accept_routing(
     policy: &Policy,
     approved_by: &str,
 ) -> anyhow::Result<()> {
+    // Review U1: every block is re-derived from the commit it names before
+    // anything is recorded; the audit row lists each hash with its source.
+    for b in &policy.instruction_blocks {
+        b.verify()?;
+    }
+    let blocks: Vec<String> = policy
+        .instruction_blocks
+        .iter()
+        .map(|b| {
+            format!(
+                "{} {} {}:{}",
+                &crate::client_policy::hex(&b.block.sha256)[..16],
+                b.source.form.as_str(),
+                b.source.git_commit,
+                b.source.git_path
+            )
+        })
+        .collect();
     record_set(pool, policy, approved_by).await?;
     audit(
         pool,
         "accept-routing",
         Some(&policy.generation),
         Some(&format!(
-            "{} markers, {} instruction blocks",
+            "{} markers, {} instruction blocks{}{}",
             policy.marker_hashes.len(),
-            policy.instruction_hashes.len()
+            blocks.len(),
+            if blocks.is_empty() { "" } else { ": " },
+            blocks.join("; ")
         )),
         Some(approved_by),
     )

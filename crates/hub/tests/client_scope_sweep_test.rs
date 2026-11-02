@@ -422,7 +422,20 @@ fn candidate(e: &Env, block: &str) -> hub::client_policy::Policy {
         "content_terms = [\"clientword\"]",
         &format!(
             "content_terms = [\"clientword\"]\ninstruction_blocks = [{}]",
-            hub::client_policy::instruction_entries(block).join(", ")
+            hub::client_policy::Form::ALL
+                .into_iter()
+                .map(|form| hub::client_policy::RegisteredBlock {
+                    block: hub::client_scope::InstructionBlock::of(&form.of(block)),
+                    source: hub::client_policy::BlockSource {
+                        git_repo: "/r".into(),
+                        git_commit: "a".repeat(40),
+                        git_path: "CLAUDE.md".into(),
+                        form,
+                    },
+                }
+                .entry_line())
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     );
     std::fs::write(e.dir.join("c.toml"), &routing).unwrap();
@@ -498,6 +511,26 @@ async fn the_lowering_census_rereads_client_sessions_under_the_candidate() {
         after.push(class_and_gen(&e, id).await);
     }
     assert_eq!(before, after, "the census writes nothing");
+
+    // Review T1: the census needs no write; it runs on a read-only connection.
+    let ro = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let ro_census =
+        hub::client_sweep::lowering(&ro, &candidate(&e, &block), &gen, None, Some(&ids))
+            .await
+            .unwrap();
+    assert_eq!(ro_census.to_lab, c.to_lab);
 
     // Under the live policy (no blocks) nothing would move to lab.
     let live = hub::client_sweep::lowering(&e.pool, &e.policy, &gen, None, Some(&ids))

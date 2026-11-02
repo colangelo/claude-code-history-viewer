@@ -485,23 +485,29 @@ enforce      = false   # observe: classify and count, hide nothing
   ```toml
   [protected]
   instruction_blocks = [
-    { sha256 = "…", bytes = 7137, head_sha256 = "…" },   # one line per version
+    { sha256 = "…", bytes = 7137, head_sha256 = "…", git_repo = "…", git_commit = "<40 hex>",
+      git_path = "private_dot_config/claude/CLAUDE.md", form = "injected" },   # and form = "search"
   ]
   ```
 
-  - *Entries:* `cchv-hub client-scope instruction-entry FILE` prints two per file: as Claude Code
-    injects it (trailing whitespace removed), and in its `search_text` form (whitespace collapsed).
-    Register both. Take each version from a source other than the
-    archive (ac's dotfiles repo for the global file). A block under 256 bytes, or a malformed
-    entry, makes the policy `unknown`.
-  - *What it does:* a span of a message string that starts at a word start and hashes to a block
-    is removed; the rest of the string, and every other string, is still matched. Nothing is
-    skipped by row or attachment type, so a client file injected next to the block still marks.
+  - *Entries:* `cchv-hub client-scope instruction-entry --git REPO REV:PATH` prints both entries for
+    a file at a commit: as Claude Code injects it (trailing whitespace removed), and its
+    `search_text` form (whitespace collapsed). Register both. It refuses a file whose edges could
+    carry part of a live marker or a `%` escape (security review U5); at match time such an
+    occurrence is scanned anyway. A block under 256 bytes, a malformed entry or two descriptors
+    for one sha256 make the policy `unknown`.
+  - *What it does:* every occurrence of a block that starts at a word start (offset 0 or after
+    whitespace) is removed from a message string; the rest of the string, and every other string,
+    is still matched. Nothing is skipped by row or attachment type, so a client file injected next
+    to the block still marks. `cwd` is matched exactly.
   - *Before registering:* `cchv-hub client-scope census --routing CANDIDATE --floor CANDIDATE_FLOOR
     --ids` (read-only) re-reads the sessions stamped client under the candidate and lists those
     that would be lab. The candidate must keep the live markers.
-  - *Order:* the owner writes the routing file and its floor record, then the pg1 writer runs
-    `client-scope accept-routing` before the hub's next refresh, so there is no `unknown` window.
+  - *Accepting:* a new block is a narrowing, and the hub never accepts one on its own, not even on
+    an empty accepted set. `client-scope accept-routing` re-derives every block from its `git_commit`
+    and refuses on any mismatch; its audit row lists each hash with its form, commit and path. The
+    owner writes the routing file and its floor record, then the pg1 writer runs `accept-routing`
+    before the hub's next refresh, so there is no `unknown` window.
   - *Classes only rise:* sessions marked before the registration stay client. Each one goes back
     to lab only through `client-scope clear`, on the census list and the client desk's word.
 - **Who reads what.** Machine tokens, `[[readers]]` and the trusted Tailscale identity are lab

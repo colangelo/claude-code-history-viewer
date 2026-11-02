@@ -17,7 +17,7 @@ use crate::client_scope::{
 };
 use crate::config::ClientScopeConfig;
 
-/// The accepted-set row of a registered instruction block: `instruction:<sha256>`.
+/// The prefix of a registered block's accepted-set row.
 const BLOCK_ROW: &str = "instruction:";
 
 /// A usable policy generation.
@@ -29,28 +29,181 @@ pub struct Policy {
     pub markers: Markers,
     /// sha256 of each normalized path marker: what the hub keeps of the set.
     pub marker_hashes: BTreeSet<String>,
-    /// sha256 of each registered instruction block
+    /// The registered instruction blocks and where each one's text lives
     /// (openspec `client-scope-instruction-subtraction`).
-    pub instruction_hashes: BTreeSet<String>,
+    pub instruction_blocks: Vec<RegisteredBlock>,
     /// The distiller's content terms, normalized. Never used for the flag (Q1:
     /// not at launch); the sweep only COUNTS sessions they would protect.
     pub terms: Vec<String>,
 }
 
 impl Policy {
-    /// What the hub records as accepted: the marker hashes, and one
-    /// `instruction:<sha256>` row per registered block.
+    /// What the hub records as accepted: the marker hashes, and one row per
+    /// registered block that pins its whole descriptor (review U1).
     pub fn accepted_set(&self) -> BTreeSet<String> {
         self.marker_hashes
             .iter()
             .cloned()
-            .chain(
-                self.instruction_hashes
-                    .iter()
-                    .map(|h| format!("{BLOCK_ROW}{h}")),
-            )
+            .chain(self.instruction_blocks.iter().map(RegisteredBlock::row))
             .collect()
     }
+}
+
+/// Which form of the file a block is: as Claude Code injects it (trailing
+/// whitespace removed, measured against the archive 2026-11-02), or as the
+/// `search_text` column holds it (whitespace runs collapsed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    Injected,
+    Search,
+}
+
+impl Form {
+    pub const ALL: [Form; 2] = [Form::Injected, Form::Search];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Form::Injected => "injected",
+            Form::Search => "search",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.as_str() == s)
+    }
+
+    /// This form of a file's text.
+    pub fn of(self, file_text: &str) -> String {
+        let injected = file_text.trim_end();
+        match self {
+            Form::Injected => injected.to_string(),
+            Form::Search => search_form(injected),
+        }
+    }
+}
+
+/// Where a block's text lives (review U1): a file at a commit of a git
+/// repository, in one form. `accept-routing` re-derives the hash from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockSource {
+    pub git_repo: String,
+    pub git_commit: String,
+    pub git_path: String,
+    pub form: Form,
+}
+
+/// One `[protected].instruction_blocks` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredBlock {
+    pub block: InstructionBlock,
+    pub source: BlockSource,
+}
+
+impl RegisteredBlock {
+    /// The accepted-set row: sha256, length and head hash together, so a
+    /// changed descriptor is a new row, hence a narrowing.
+    pub fn row(&self) -> String {
+        format!(
+            "{BLOCK_ROW}{}:{}:{}",
+            hex(&self.block.sha256),
+            self.block.bytes,
+            hex(&self.block.head_sha256)
+        )
+    }
+
+    /// The routing-file line for this entry.
+    pub fn entry_line(&self) -> String {
+        format!(
+            "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\", git_repo = {}, git_commit = \"{}\", git_path = {}, form = \"{}\" }}",
+            hex(&self.block.sha256),
+            self.block.bytes,
+            hex(&self.block.head_sha256),
+            toml::Value::String(self.source.git_repo.clone()),
+            self.source.git_commit,
+            toml::Value::String(self.source.git_path.clone()),
+            self.source.form.as_str()
+        )
+    }
+
+    /// Re-derive the block from its source and compare (review U1).
+    pub fn verify(&self) -> anyhow::Result<()> {
+        let text = git_show(
+            &self.source.git_repo,
+            &self.source.git_commit,
+            &self.source.git_path,
+        )?;
+        if InstructionBlock::of(&self.source.form.of(&text)) == self.block {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "instruction block {} does not match {}:{} ({})",
+                &hex(&self.block.sha256)[..12],
+                &self.source.git_commit[..12],
+                self.source.git_path,
+                self.source.form.as_str()
+            )
+        }
+    }
+}
+
+fn git(repo: &str, args: &[&str]) -> anyhow::Result<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|e| anyhow::anyhow!("git: {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!("git {} failed in {repo}", args.first().unwrap_or(&""));
+    }
+    String::from_utf8(out.stdout).map_err(|_| anyhow::anyhow!("git output is not UTF-8"))
+}
+
+fn git_show(repo: &str, commit: &str, path: &str) -> anyhow::Result<String> {
+    git(repo, &["show", &format!("{commit}:{path}")])
+}
+
+/// The entries for a file at a git revision, both forms, each checked
+/// against `markers` for safe edges (review U5) and the minimum size.
+pub fn entries_from_git(
+    repo: &str,
+    rev: &str,
+    path: &str,
+    markers: &Markers,
+) -> anyhow::Result<Vec<RegisteredBlock>> {
+    let commit = git(
+        repo,
+        &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+    )?
+    .trim()
+    .to_string();
+    let text = git_show(repo, &commit, path)?;
+    let mut out: Vec<RegisteredBlock> = Vec::new();
+    for form in Form::ALL {
+        let t = form.of(&text);
+        if t.len() < MIN_BLOCK_BYTES {
+            anyhow::bail!("{path} at {rev} is under {MIN_BLOCK_BYTES} bytes");
+        }
+        if !markers.block_edges_safe(&t) {
+            anyhow::bail!(
+                "{path} at {rev} ({}): an edge could carry part of a marker or an escape; refused",
+                form.as_str()
+            );
+        }
+        let block = InstructionBlock::of(&t);
+        if out.iter().all(|r| r.block != block) {
+            out.push(RegisteredBlock {
+                block,
+                source: BlockSource {
+                    git_repo: repo.to_string(),
+                    git_commit: commit.clone(),
+                    git_path: path.to_string(),
+                    form,
+                },
+            });
+        }
+    }
+    Ok(out)
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -61,57 +214,56 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// The routing-file entries for an instructions file: the text as Claude Code
-/// injects it (trailing whitespace removed, measured against the archive
-/// 2026-11-02), and its `search_text` form (whitespace runs collapsed).
-pub fn instruction_entries(file_text: &str) -> Vec<String> {
-    let injected = file_text.trim_end();
-    let mut out: Vec<String> = [injected.to_string(), search_form(injected)]
-        .iter()
-        .map(|t| {
-            let b = InstructionBlock::of(t);
-            format!(
-                "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\" }}",
-                hex(&b.sha256),
-                b.bytes,
-                hex(&b.head_sha256)
-            )
-        })
-        .collect();
-    out.dedup();
-    out
-}
-
-fn unhex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
+/// Exactly `2 * N` ASCII hex digits (review U6: `from_str_radix` alone takes `+1`).
+fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
+    if s.len() != 2 * N || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
-    let mut out = [0_u8; 32];
+    let mut out = [0_u8; N];
     for (i, o) in out.iter_mut().enumerate() {
-        *o = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+        *o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
     }
     Some(out)
 }
 
 /// `[protected].instruction_blocks`: absent is none; anything but a list of
-/// well-formed entries of at least [`MIN_BLOCK_BYTES`] is `None`.
-fn instruction_blocks(sect: &toml::Table) -> Option<Vec<InstructionBlock>> {
+/// well-formed entries of at least [`MIN_BLOCK_BYTES`], with no two entries
+/// giving one sha256 different descriptors, is `None`.
+fn instruction_blocks(sect: &toml::Table) -> Option<Vec<RegisteredBlock>> {
     let Some(v) = sect.get("instruction_blocks") else {
         return Some(Vec::new());
     };
-    v.as_array()?
+    let blocks: Vec<RegisteredBlock> = v
+        .as_array()?
         .iter()
         .map(|e| {
             let t = e.as_table()?;
+            let text = |k: &str| t.get(k)?.as_str().filter(|s| !s.is_empty());
             let bytes = usize::try_from(t.get("bytes")?.as_integer()?).ok()?;
             (bytes >= MIN_BLOCK_BYTES).then_some(())?;
-            Some(InstructionBlock {
-                sha256: unhex32(t.get("sha256")?.as_str()?)?,
-                bytes,
-                head_sha256: unhex32(t.get("head_sha256")?.as_str()?)?,
+            let commit = text("git_commit")?;
+            unhex::<20>(commit)?;
+            Some(RegisteredBlock {
+                block: InstructionBlock {
+                    sha256: unhex(text("sha256")?)?,
+                    bytes,
+                    head_sha256: unhex(text("head_sha256")?)?,
+                },
+                source: BlockSource {
+                    git_repo: text("git_repo")?.to_string(),
+                    git_commit: commit.to_ascii_lowercase(),
+                    git_path: text("git_path")?.to_string(),
+                    form: Form::parse(text("form")?)?,
+                },
             })
         })
-        .collect()
+        .collect::<Option<_>>()?;
+    let conflicting = blocks.iter().any(|a| {
+        blocks
+            .iter()
+            .any(|b| a.block.sha256 == b.block.sha256 && a.block != b.block)
+    });
+    (!conflicting).then_some(blocks)
 }
 
 /// The outcome of reading the two files. `Unknown` carries a reason that names
@@ -205,8 +357,10 @@ pub fn load_paths(routing_file: &Path, floor_file: &Path) -> Load {
             .iter()
             .map(|m| sha256_hex(normalize(m).as_bytes()))
             .collect(),
-        instruction_hashes: blocks.iter().map(|b| hex(&b.sha256)).collect(),
-        markers: Markers::new(&markers).with_instructions(InstructionBlocks::new(&blocks)),
+        markers: Markers::new(&markers).with_instructions(InstructionBlocks::new(
+            &blocks.iter().map(|b| b.block.clone()).collect::<Vec<_>>(),
+        )),
+        instruction_blocks: blocks,
         terms: terms.iter().map(|t| normalize(t)).collect(),
     })
 }
@@ -230,10 +384,19 @@ pub enum Acceptance {
 /// Compare accepted sets ([`Policy::accepted_set`]). A marker row lowers
 /// access when added; an `instruction:` row raises it when added.
 pub fn compare(accepted: &BTreeSet<String>, new: &BTreeSet<String>) -> Acceptance {
-    if accepted.is_empty() {
-        return Acceptance::Bootstrap;
-    }
     let is_block = |h: &&String| h.starts_with(BLOCK_ROW);
+    if accepted.is_empty() {
+        // Review U2: a first set with blocks is never accepted by the hub.
+        let blocks_added = new.iter().filter(is_block).count();
+        if blocks_added == 0 {
+            return Acceptance::Bootstrap;
+        }
+        return Acceptance::Narrowed {
+            removed: 0,
+            added: new.len() - blocks_added,
+            blocks_added,
+        };
+    }
     let removed = accepted.difference(new).filter(|h| !is_block(h)).count();
     let added = new.difference(accepted).filter(|h| !is_block(h)).count();
     let blocks_added = new.difference(accepted).filter(is_block).count();
@@ -432,8 +595,25 @@ content_terms = ["clientword"]
         );
     }
 
+    /// The entries for `text` in both forms, with a source the loader only
+    /// checks for shape (`accept-routing` verifies it).
     fn block_entry(text: &str) -> String {
-        instruction_entries(text).join(", ")
+        Form::ALL
+            .into_iter()
+            .map(|form| {
+                RegisteredBlock {
+                    block: InstructionBlock::of(&form.of(text)),
+                    source: BlockSource {
+                        git_repo: "/r".into(),
+                        git_commit: "a".repeat(40),
+                        git_path: "CLAUDE.md".into(),
+                        form,
+                    },
+                }
+                .entry_line()
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn with_blocks(entries: &str) -> String {
@@ -452,7 +632,7 @@ content_terms = ["clientword"]
             panic!("expected ready");
         };
         assert_eq!(
-            p.instruction_hashes.len(),
+            p.instruction_blocks.len(),
             2,
             "the injected form and the search_text form"
         );
@@ -476,22 +656,34 @@ content_terms = ["clientword"]
         let Load::Ready(p) = load_paths(&r, &f) else {
             panic!("expected ready");
         };
-        assert!(p.instruction_hashes.is_empty());
+        assert!(p.instruction_blocks.is_empty());
     }
 
     #[test]
     fn a_bad_instruction_entry_is_unknown() {
         let fs = Files::new("badblocks");
-        let short = block_entry("## Rules\nsee /clientco\n");
-        let good = block_entry(&format!("{}end", "lab line. ".repeat(30)));
+        let good_text = format!("{}end", "lab line. ".repeat(30));
+        let good = block_entry(&good_text);
+        let one = good.split(" }, ").next().unwrap().to_string() + " }";
+        let sha = hex(&InstructionBlock::of(&good_text).sha256);
         let bad = [
-            short.clone(),
-            good.replace("sha256 = \"", "sha256 = \"zz"),
-            good.replace("head_sha256", "head"),
-            good.replace("bytes = 303", "bytes = \"303\""),
+            block_entry("## Rules\nsee /clientco\n"),
+            one.replace("sha256 = \"", "sha256 = \"zz"),
+            one.replace(&sha, &"+1".repeat(32)), // review U6
+            one.replace(&sha, &sha[..63]),
+            one.replace("head_sha256", "head"),
+            one.replace("bytes = 303", "bytes = \"303\""),
+            one.replace(&"a".repeat(40), "main"),
+            one.replace("form = \"injected\"", "form = \"other\""),
+            one.replace("git_path = \"CLAUDE.md\", ", ""),
+            // One sha256 with two descriptors (review U1).
+            format!("{one}, {}", one.replace("bytes = 303", "bytes = 304")),
             "\"just a string\"".to_string(),
         ];
-        assert!(bad.iter().all(|b| *b != good), "every bad entry differs");
+        assert!(
+            bad.iter().all(|b| *b != good && *b != one),
+            "every bad entry differs"
+        );
         for entry in bad {
             let (r, f) = fs.write(&with_blocks(&entry), None);
             assert_eq!(
@@ -505,6 +697,9 @@ content_terms = ["clientword"]
             None,
         );
         assert_eq!(reason(load_paths(&r, &f)), "instruction_blocks invalid");
+        // Upper-case hex is still hex.
+        let (r, f) = fs.write(&with_blocks(&one.replace(&sha, &sha.to_uppercase())), None);
+        assert_eq!(reason(load_paths(&r, &f)), "ready");
     }
 
     /// A block lowers what marks: adding one is a narrowing, removing one is not.
@@ -532,5 +727,85 @@ content_terms = ["clientword"]
             compare(&accepted, &set(&["a", "b", "c", "instruction:x"])),
             Acceptance::Widened { added: 1 }
         );
+        // Review U2: an empty accepted set bootstraps markers only.
+        assert_eq!(
+            compare(&BTreeSet::new(), &set(&["a", "instruction:x"])),
+            Acceptance::Narrowed {
+                removed: 0,
+                added: 1,
+                blocks_added: 1
+            }
+        );
+        assert_eq!(
+            compare(&BTreeSet::new(), &set(&["a"])),
+            Acceptance::Bootstrap
+        );
+    }
+
+    /// Review U1: a changed length or head hash for an accepted sha256 is a new
+    /// row, so a narrowing.
+    #[test]
+    fn a_changed_descriptor_is_a_new_row() {
+        let text = format!("{}end", "lab line. ".repeat(30));
+        let rb = RegisteredBlock {
+            block: InstructionBlock::of(&text),
+            source: BlockSource {
+                git_repo: "/r".into(),
+                git_commit: "a".repeat(40),
+                git_path: "CLAUDE.md".into(),
+                form: Form::Injected,
+            },
+        };
+        let mut other = rb.clone();
+        other.block.bytes += 1;
+        let accepted: BTreeSet<String> = ["m".to_string(), rb.row()].into();
+        let new: BTreeSet<String> = ["m".to_string(), other.row()].into();
+        assert!(matches!(
+            compare(&accepted, &new),
+            Acceptance::Narrowed {
+                blocks_added: 1,
+                ..
+            }
+        ));
+    }
+
+    /// A throwaway git repository holding `CLAUDE.md` with `text`, committed.
+    fn repo_with(text: &str) -> (Files, String) {
+        let fs = Files::new("git");
+        let repo = fs.dir.to_str().unwrap().to_string();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-C", &repo, "-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(ok.status.success(), "{args:?}");
+        };
+        run(&["init", "-q"]);
+        std::fs::write(fs.dir.join("CLAUDE.md"), text).unwrap();
+        run(&["add", "CLAUDE.md"]);
+        run(&["commit", "-q", "-m", "v1"]);
+        (fs, repo)
+    }
+
+    /// Review U1: entries come from git, and `verify` re-derives each one.
+    #[test]
+    fn entries_from_git_verify_and_a_tampered_one_does_not() {
+        let text = format!("## Rules\n{}see /clientco/notes\n", "lab line. ".repeat(30));
+        let (_fs, repo) = repo_with(&text);
+        let m = Markers::new(&["/clientco".to_string()]);
+        let entries = entries_from_git(&repo, "HEAD", "CLAUDE.md", &m).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].source.git_commit.len(), 40);
+        for e in &entries {
+            e.verify().unwrap();
+        }
+        assert_eq!(entries[0].block, InstructionBlock::of(text.trim_end()));
+        let mut forged = entries[0].clone();
+        forged.block = InstructionBlock::of(&format!("{}\nmore", text.trim_end()));
+        assert!(forged.verify().is_err());
+        // Review U5: a file whose end could start a marker is refused.
+        let (_fs2, repo2) = repo_with(&format!("{text}see /cli"));
+        assert!(entries_from_git(&repo2, "HEAD", "CLAUDE.md", &m).is_err());
     }
 }

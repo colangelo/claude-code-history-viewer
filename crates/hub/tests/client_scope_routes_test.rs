@@ -518,7 +518,12 @@ async fn a_client_reader_sees_client_sessions() {
     for url in [
         format!("/v1/sessions/{}/messages", w.client_id),
         format!("/v1/search?q={}", w.client_canary),
-        "/v1/sessions?limit=500".to_string(),
+        // The world's own project: an unfiltered first page (200 at most) of
+        // the shared test database need not hold it.
+        format!(
+            "/v1/sessions?project={}&limit=200",
+            urlencode(&w.client_path)
+        ),
         format!("/v1/journal/entries?project={}", urlencode(&w.client_path)),
     ] {
         let (status, body) = get(&w, &url, "client").await;

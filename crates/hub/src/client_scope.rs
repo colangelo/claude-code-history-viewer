@@ -84,6 +84,43 @@ impl Markers {
         }
     }
 
+    /// Every needle a match can rest on: the literal markers and the segment
+    /// names.
+    fn needles(&self) -> impl Iterator<Item = &str> {
+        self.literal
+            .iter()
+            .chain(self.segments.iter())
+            .map(String::as_str)
+    }
+
+    /// Whether `normalized` holds any needle as a plain substring, boundaries
+    /// ignored. A conservative guard: every piece left after subtraction
+    /// normalizes to a substring of the whole (block edges never split an
+    /// escape, see [`Self::block_edges_safe`]), and a hit needs its needle.
+    fn may_match(&self, normalized: &str) -> bool {
+        self.needles().any(|n| normalized.contains(n))
+    }
+
+    /// Whether a block may be subtracted where it occurs (review U5): neither
+    /// edge, over the longest needle's length, holds a `%` (an escape split by
+    /// the edge), and no needle can straddle an edge (the block neither ends
+    /// with a needle's proper prefix nor starts with its proper suffix). An
+    /// unsafe occurrence is scanned like any other text.
+    pub fn block_edges_safe(&self, block: &str) -> bool {
+        let n = self.needles().map(str::len).max().unwrap_or(0);
+        let head = &block[..floor_boundary(block, n.min(block.len()))];
+        let tail = &block[ceil_boundary(block, block.len().saturating_sub(n))..];
+        if head.contains('%') || tail.contains('%') {
+            return false;
+        }
+        let (head, tail) = (normalize(head), normalize(tail));
+        !self.needles().any(|m| {
+            m.char_indices()
+                .skip(1)
+                .any(|(k, _)| tail.ends_with(&m[..k]) || head.starts_with(&m[k..]))
+        })
+    }
+
     #[must_use]
     pub fn with_instructions(self, instructions: InstructionBlocks) -> Self {
         Self {
@@ -105,14 +142,74 @@ impl Markers {
     /// Whether a message string holds a marker outside its registered
     /// instruction blocks: each piece left between them is matched on its own.
     pub fn hits_message_text(&self, text: &str) -> bool {
-        if !self.matches(&normalize(text)) {
+        let normalized = normalize(text);
+        if self.instructions.is_empty() {
+            return self.matches(&normalized);
+        }
+        if !self.may_match(&normalized) {
             return false;
         }
-        match self.instructions.pieces(text) {
-            None => true,
-            Some(pieces) => pieces.iter().any(|p| self.matches(&normalize(p))),
-        }
+        self.unguarded_hits(text)
     }
+
+    /// Subtraction and piece matching with no guard: the reference the guard
+    /// is tested against (review U3).
+    fn unguarded_hits(&self, text: &str) -> bool {
+        self.pieces(text)
+            .iter()
+            .any(|p| self.matches(&normalize(p)))
+    }
+
+    /// The pieces of `text` outside the union of every registered block's
+    /// occurrences at a word start: offset 0 or right after ASCII whitespace
+    /// (the injected file follows a blank line, its `search_text` form a
+    /// space). Every occurrence counts, overlapping ones included, so the
+    /// result does not depend on the order of the entries (review U4).
+    fn pieces<'s>(&self, text: &'s str) -> Vec<&'s str> {
+        let bytes = text.as_bytes();
+        let starts = std::iter::once(0).chain(
+            bytes
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.is_ascii_whitespace())
+                .map(|(i, _)| i + 1),
+        );
+        let mut spans: Vec<(usize, usize)> = starts
+            .filter(|&at| at < bytes.len())
+            .flat_map(|at| {
+                self.instructions
+                    .lengths_at(text, at)
+                    .into_iter()
+                    .map(move |len| (at, at + len))
+            })
+            .filter(|&(a, b)| self.block_edges_safe(&text[a..b]))
+            .collect();
+        spans.sort_unstable();
+        let mut pieces = Vec::new();
+        let mut from = 0;
+        for (a, b) in spans {
+            if a > from {
+                pieces.push(&text[from..a]);
+            }
+            from = from.max(b);
+        }
+        pieces.push(&text[from..]);
+        pieces
+    }
+}
+
+fn floor_boundary(s: &str, mut i: usize) -> usize {
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+fn ceil_boundary(s: &str, mut i: usize) -> usize {
+    while !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 /// How many leading bytes of a block its head hash covers.
@@ -169,48 +266,24 @@ impl InstructionBlocks {
         self.by_head.is_empty()
     }
 
-    /// The length of a registered block that starts at byte `at` of `s`.
-    fn block_at(&self, s: &str, at: usize) -> Option<usize> {
+    /// The lengths of every registered block that starts at byte `at` of `s`.
+    fn lengths_at(&self, s: &str, at: usize) -> Vec<usize> {
         let b = &s.as_bytes()[at..];
-        let head = b.get(..HEAD_BYTES)?;
-        let candidates = self.by_head.get(&<[u8; 32]>::from(Sha256::digest(head)))?;
-        candidates.iter().find_map(|&(len, sha)| {
-            (len <= b.len()
-                && s.is_char_boundary(at + len)
-                && <[u8; 32]>::from(Sha256::digest(&b[..len])) == sha)
-                .then_some(len)
-        })
-    }
-
-    /// The pieces of `s` outside every registered block that starts at the
-    /// string's start or right after ASCII whitespace (a word start: the
-    /// injected file follows a blank line, its `search_text` form a space);
-    /// `None` when there is none.
-    fn pieces<'s>(&self, s: &'s str) -> Option<Vec<&'s str>> {
-        if self.is_empty() {
-            return None;
-        }
-        let bytes = s.as_bytes();
-        let mut pieces = Vec::new();
-        let (mut from, mut at) = (0, 0);
-        while at < bytes.len() {
-            if let Some(len) = self.block_at(s, at) {
-                pieces.push(&s[from..at]);
-                at += len;
-                from = at;
-                if bytes[at - 1].is_ascii_whitespace() {
-                    continue; // the block ended a word: `at` starts the next one
-                }
-            }
-            match bytes[at..].iter().position(u8::is_ascii_whitespace) {
-                Some(i) => at += i + 1,
-                None => break,
-            }
-        }
-        (!pieces.is_empty()).then(|| {
-            pieces.push(&s[from..]);
-            pieces
-        })
+        let Some(head) = b.get(..HEAD_BYTES) else {
+            return Vec::new();
+        };
+        let Some(candidates) = self.by_head.get(&<[u8; 32]>::from(Sha256::digest(head))) else {
+            return Vec::new();
+        };
+        candidates
+            .iter()
+            .filter(|&&(len, sha)| {
+                len <= b.len()
+                    && s.is_char_boundary(at + len)
+                    && <[u8; 32]>::from(Sha256::digest(&b[..len])) == sha
+            })
+            .map(|&(len, _)| len)
+            .collect()
     }
 }
 
@@ -487,7 +560,8 @@ fn message_hits(m: &Markers, msg: MessageFields<'_>) -> Hits {
 
     // `raw`: the provider's record as received, in full. `cwd` first, by name.
     if let Some(cwd) = msg.raw.get("cwd").and_then(Value::as_str) {
-        h.cwd |= hit(cwd);
+        // A path, never instruction text: matched exactly (design D3, review U7).
+        h.cwd |= m.matches(&normalize(cwd));
     }
     if leaves(msg.raw, 1, &mut budget, &mut |s| h.raw |= hit(s)).is_err() {
         h.unreadable = true;
@@ -877,5 +951,140 @@ mod tests {
         let tool =
             serde_json::json!([{"type": "tool_use", "name": "Write", "input": {"content": new}}]);
         assert_eq!(one(&m, &tool, &none, None), Class::None);
+    }
+
+    /// Review U3: a hit that exists only after subtraction (a segment glued to
+    /// the block's end) marks.
+    #[test]
+    fn a_segment_glued_after_the_block_marks() {
+        let b = block_text();
+        let m = registered(&[&b]);
+        let glued = serde_json::json!([{"type": "text", "text": format!("{b}clientco/private")}]);
+        assert_eq!(
+            one(&m, &glued, &serde_json::json!({}), None),
+            Class::TextMarker
+        );
+    }
+
+    /// Review U3: the guarded matcher agrees with subtraction and piece
+    /// matching run on every string, over the combinations of a block with
+    /// marker fragments and separators on each side.
+    #[test]
+    fn the_guard_agrees_with_unguarded_subtraction() {
+        let b = block_text();
+        let flat = search_form(&b);
+        let m = registered(&[&b, &flat]);
+        let sides = [
+            "",
+            " ",
+            "\n",
+            "x",
+            "/",
+            "%2F",
+            "clientco",
+            "/clientco",
+            "clientco/private",
+            " clientco/p",
+            "cl",
+            "ientco",
+            "/CLIENTCO/x",
+            "%2fclientco",
+            "_clientco",
+            "clientco-x",
+        ];
+        let mut checked = 0;
+        for body in [b.as_str(), flat.as_str(), "plain lab text"] {
+            for pre in sides {
+                for post in sides {
+                    for mid in ["", " ", "\n"] {
+                        let text = format!("{pre}{mid}{body}{post}");
+                        assert_eq!(
+                            m.hits_message_text(&text),
+                            m.unguarded_hits(&text),
+                            "{pre:?} {mid:?} {post:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 3 * 16 * 16 * 3);
+    }
+
+    /// Review U4: the union of every occurrence, whatever the entry order,
+    /// with a version that is a prefix of another and blocks that overlap.
+    #[test]
+    fn subtraction_does_not_depend_on_entry_order() {
+        let old = block_text();
+        let new = format!("{old}And one more lab line for the newer version.");
+        let shifted = format!(
+            "{}{}",
+            &old[old.find("Lab line").unwrap()..],
+            "Tail lab text, long enough to stand alone. ".repeat(4)
+        );
+        assert!(shifted.len() >= MIN_BLOCK_BYTES);
+        let texts = [
+            format!("{new} /clientco"),
+            format!("{new}\n{old}"),
+            old.clone(),
+            format!("## RULE #1\n{shifted}"),
+        ];
+        let orders: [[&str; 3]; 3] = [
+            [&old, &new, &shifted],
+            [&new, &shifted, &old],
+            [&shifted, &old, &new],
+        ];
+        for t in &texts {
+            let got: Vec<bool> = orders
+                .iter()
+                .map(|o| registered(o).hits_message_text(t))
+                .collect();
+            assert!(got.windows(2).all(|w| w[0] == w[1]), "{got:?}");
+        }
+        // The newer version is removed whole, not only its older prefix.
+        let m = registered(&[&old, &new]);
+        assert!(!m.hits_message_text(&new));
+        assert!(m.hits_message_text(&format!("{new} /clientco")));
+    }
+
+    /// Review U5: a block whose edge could carry part of a marker, or an
+    /// escape, is scanned where it occurs.
+    #[test]
+    fn a_block_with_an_unsafe_edge_is_scanned() {
+        let m = Markers::new(&["/clientco".to_string()]);
+        let body = "Lab line about the desk. ".repeat(12);
+        assert!(m.block_edges_safe(&format!("## Head\n{body}end.")));
+        for unsafe_block in [
+            format!("## Head\n{body}/cli"),
+            format!("## Head\n{body}see /"),
+            format!("## Head\n{body}%2"),
+            format!("ntco/x\n{body}end."),
+            format!("%41 head\n{body}end."),
+        ] {
+            assert!(!m.block_edges_safe(&unsafe_block), "{unsafe_block:?}");
+            let r = registered(&[&unsafe_block]);
+            let text = format!("{unsafe_block}entco/notes");
+            assert!(r.hits_message_text(&text) || !m.matches(&normalize(&text)));
+        }
+        // Straddling: the block ends in "/cli", the text goes on "entco".
+        let straddle = format!("## Head\n{body}/cli");
+        assert_eq!(
+            one(
+                &registered(&[&straddle]),
+                &serde_json::json!([{"type": "text", "text": format!("{straddle}entco")}]),
+                &serde_json::json!({}),
+                None
+            ),
+            Class::TextMarker
+        );
+    }
+
+    /// Review U7: `cwd` is a path and is matched exactly, never subtracted.
+    #[test]
+    fn cwd_is_matched_exactly() {
+        let b = block_text();
+        let m = registered(&[&b]);
+        let raw = serde_json::json!({"cwd": b});
+        assert_eq!(one(&m, &Value::Null, &raw, None), Class::Cwd);
     }
 }

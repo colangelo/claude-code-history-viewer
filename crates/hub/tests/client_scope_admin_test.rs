@@ -687,3 +687,132 @@ async fn protect_refuses_an_empty_approver_or_reason_or_a_missing_session() {
     }
     assert_eq!(class_of(&pool, lab).await.0.as_deref(), Some("none"));
 }
+
+/// Review U1 and T1, end to end: registering instruction blocks is a
+/// narrowing; `accept-routing` re-derives each block from its git commit and
+/// audits hash and commit; a forged block is refused; classes still only rise,
+/// and a session comes back to lab only through an audited clear and a sweep.
+#[tokio::test]
+async fn instruction_blocks_need_a_verified_accept() {
+    let pool = pool().await;
+    let markers = routing("\"/clientco\"");
+    let (live, _live_dir) = policy(&markers, 1);
+    hub::client_state::record_set(&pool, &live, "test")
+        .await
+        .unwrap();
+
+    // ac's file, committed in a throwaway repository.
+    let file = format!(
+        "## Rules\n{}Client notes live in /clientco/notes.\n",
+        "A lab line. ".repeat(30)
+    );
+    let repo = std::env::temp_dir().join(format!("cchv-cs-git-{}", Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("CLAUDE.md"), &file).unwrap();
+    git(&["add", "CLAUDE.md"]);
+    git(&["commit", "-q", "-m", "v1"]);
+    let commit = git(&["rev-parse", "HEAD"]).trim().to_string();
+    let entries = hub::client_policy::entries_from_git(
+        repo.to_str().unwrap(),
+        "HEAD",
+        "CLAUDE.md",
+        &live.markers,
+    )
+    .unwrap();
+    let with = |lines: &[String]| {
+        markers.replace(
+            "content_terms",
+            &format!("instruction_blocks = [{}]\ncontent_terms", lines.join(", ")),
+        )
+    };
+    let lines: Vec<String> = entries
+        .iter()
+        .map(hub::client_policy::RegisteredBlock::entry_line)
+        .collect();
+    let (registered, dir) = policy(&with(&lines), 1);
+    let scope_at = |dir: &std::path::Path| {
+        hub::client_state::ClientScope::new(
+            toml::from_str(&format!(
+                "routing_file = \"{}\"\nfloor_file = \"{}\"\n",
+                dir.join("r.toml").display(),
+                dir.join("f.json").display()
+            ))
+            .unwrap(),
+        )
+    };
+    let scope = scope_at(&dir);
+    scope.refresh(&pool).await.unwrap();
+    assert!(
+        scope.snapshot().generation().is_none(),
+        "a new block: unknown"
+    );
+
+    // A forged entry: the right source, another text's hash.
+    let mut forged = entries[0].clone();
+    forged.block =
+        hub::client_scope::InstructionBlock::of(&format!("{}\nand /clientco/x", file.trim_end()));
+    let (forged_policy, _fd) = policy(&with(&[forged.entry_line()]), 1);
+    let before = audits(&pool, "accept-routing").await;
+    assert!(accept_routing(&pool, &forged_policy, "manager-aruba")
+        .await
+        .is_err());
+    assert_eq!(
+        audits(&pool, "accept-routing").await,
+        before,
+        "nothing recorded"
+    );
+
+    accept_routing(&pool, &registered, "manager-aruba")
+        .await
+        .unwrap();
+    let detail: String = sqlx::query_scalar(
+        "SELECT detail FROM client_scope_audit WHERE action = 'accept-routing' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(detail.contains(&commit), "{detail}");
+    assert!(
+        detail.contains("injected") && detail.contains("search"),
+        "{detail}"
+    );
+    let scope = scope_at(&dir);
+    scope.refresh(&pool).await.unwrap();
+    assert_eq!(
+        scope.snapshot().generation(),
+        Some(registered.generation.as_str())
+    );
+
+    // A session marked only by the file stays client through the sweep ...
+    let s = session(&pool, &file, Some("text_marker"), Some(&live.generation)).await;
+    let only = |ids: &[i64]| hub::client_sweep::SweepOptions {
+        dry_run: false,
+        batch: 10,
+        only_sessions: Some(ids.to_vec()),
+        rescan: false,
+    };
+    hub::client_sweep::sweep(&pool, &registered, &only(&[s]))
+        .await
+        .unwrap();
+    assert_eq!(class_of(&pool, s).await.0.as_deref(), Some("text_marker"));
+    // ... and is lab after an audited clear and the next sweep.
+    clear(&pool, s, "instruction text only (census)", "manager-aruba")
+        .await
+        .unwrap();
+    hub::client_sweep::sweep(&pool, &registered, &only(&[s]))
+        .await
+        .unwrap();
+    assert_eq!(class_of(&pool, s).await.0.as_deref(), Some("none"));
+}

@@ -8,10 +8,14 @@ markers in a message string, the hub SHALL remove every span that starts at the 
 right after ASCII whitespace and whose bytes hash to a registered block. It SHALL match the markers in each
 remaining piece. It SHALL NOT skip any row, attachment or block by its type.
 
-A registered block shorter than 256 bytes, or an entry that is not a table with a 64-hex `sha256`, a
-64-hex `head_sha256` and an integer `bytes`, SHALL make the policy unknown. A routing generation that
-registers a block not yet accepted SHALL be a narrowing: the policy stays unknown until
-`client-scope accept-routing`.
+A registered block shorter than 256 bytes, an entry that is not a table with a 64-hex `sha256`, a
+64-hex `head_sha256`, an integer `bytes`, a `git_repo`, a 40-hex `git_commit`, a `git_path` and a
+`form` of `injected` or `search`, or two entries giving one sha256 different descriptors, SHALL make
+the policy unknown. A routing generation that registers a block not yet accepted SHALL be a
+narrowing, also when nothing is accepted yet: the policy stays unknown until
+`client-scope accept-routing`, which SHALL re-derive every block from its git source and refuse on
+any mismatch. An occurrence whose edges could carry part of a marker or a percent escape SHALL NOT be
+removed. `cwd` SHALL be matched without subtraction.
 
 #### Scenario: A registered block is subtracted
 - **WHEN** a message's text holds a registered block that contains a path marker, and nothing else

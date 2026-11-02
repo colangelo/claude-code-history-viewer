@@ -324,7 +324,7 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
             println!(
                 "accepted the routing generation ({} markers, {} instruction blocks); the hub adopts it at its next refresh",
                 p.marker_hashes.len(),
-                p.instruction_hashes.len()
+                p.instruction_blocks.len()
             );
         }
         ClientScopeAdmin::Clear {
@@ -502,6 +502,27 @@ pub async fn run_client_scope_sweep(dry_run: bool, batch: i64, rescan: bool) -> 
     Ok(())
 }
 
+/// `hub client-scope instruction-entry --git REPO REV:PATH`: the routing-file
+/// entries for a file at a git revision, checked against the live markers.
+pub fn run_instruction_entry(repo: &str, rev_path: &str) -> anyhow::Result<()> {
+    let (rev, path) = rev_path
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("expected REV:PATH, got {rev_path}"))?;
+    let config = HubConfig::load()?;
+    let cs = config
+        .client_scope
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no [client_scope] in the hub config"))?;
+    let live = match client_policy::load(cs) {
+        client_policy::Load::Ready(p) => p,
+        client_policy::Load::Unknown(why) => anyhow::bail!("client scope policy unknown: {why}"),
+    };
+    for e in client_policy::entries_from_git(repo, rev, path, &live.markers)? {
+        println!("  {},", e.entry_line());
+    }
+    Ok(())
+}
+
 /// `hub client-scope census` (openspec `client-scope-instruction-subtraction`,
 /// D5): read-only; the sessions stamped client at the accepted generation,
 /// re-read under a candidate routing file that keeps the live markers.
@@ -554,7 +575,7 @@ pub async fn run_client_scope_census(
     let c = client_sweep::lowering(&pool, &candidate, &live.generation, days, None).await?;
     println!(
         "client-scope census (read-only): {} instruction blocks in the candidate; sessions stamped client{}: {}",
-        candidate.instruction_hashes.len(),
+        candidate.instruction_blocks.len(),
         days.map_or(String::new(), |d| format!(", last message within {d} days")),
         c.scanned
     );

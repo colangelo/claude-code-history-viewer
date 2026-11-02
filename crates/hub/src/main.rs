@@ -47,10 +47,12 @@ USAGE:
                                          --dry-run is read-only and prints counts only;
                                          --rescan also reads sessions already stamped lab
                                          (run once after a release that changes the extractor)
-    hub client-scope instruction-entry FILE
-                                         print the routing-file entries that register FILE as
-                                         Claude Code injects it (trailing whitespace removed)
-                                         and in its search_text form (whitespace collapsed)
+    hub client-scope instruction-entry --git REPO REV:PATH
+                                         print the routing-file entries for PATH at REV of the git
+                                         repo REPO: as Claude Code injects it (trailing whitespace
+                                         removed) and in its search_text form (whitespace
+                                         collapsed); refuses a file whose edges could carry part
+                                         of a live marker. accept-routing re-checks each entry
     hub client-scope census --routing FILE --floor FILE [--days N] [--ids]
                                          read-only: re-read the sessions stamped client under a
                                          candidate routing file with the same markers, and count
@@ -307,17 +309,12 @@ async fn main() -> anyhow::Result<()> {
                 .await
             }
             Some("instruction-entry") => {
-                let file = args
-                    .get(2)
-                    .unwrap_or_else(|| usage_error("client-scope instruction-entry needs FILE"));
-                match std::fs::read_to_string(file) {
-                    Ok(text) => {
-                        for e in hub::client_policy::instruction_entries(&text) {
-                            println!("  {e},");
-                        }
-                        Ok(())
+                let rest = &args[2..];
+                match rest {
+                    [flag, repo, rev_path] if flag == "--git" => {
+                        hub::run_instruction_entry(repo, rev_path)
                     }
-                    Err(e) => Err(anyhow::anyhow!("cannot read {file}: {e}")),
+                    _ => usage_error("client-scope instruction-entry needs --git REPO REV:PATH"),
                 }
             }
             Some("census") => {

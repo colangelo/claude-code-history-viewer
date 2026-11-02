@@ -75,3 +75,24 @@ read-only and stamps nothing.
   pins the routing bytes, the hub requires `accept-routing`, and the census shows the effect first.
 - A Claude Code change in how the file is injected (another trim, an escape) stops the match: those
   sessions stay client, the safe direction.
+
+## Security review (2026-11-02, ac/security af08b2f, U1-U7)
+
+- **U1:** each entry names its source (`git_repo`, a 40-hex `git_commit`, `git_path`, `form`).
+  `accept-routing` re-derives every block from it and refuses on any mismatch; the audit row lists
+  each hash with form, commit and path. The accepted row pins sha256, length and head hash together,
+  and two descriptors for one sha256 make the policy unknown.
+- **U2:** an empty accepted set bootstraps markers only; a first set with blocks is unknown until
+  `accept-routing`.
+- **U3:** the early guard is "some needle occurs in the normalized string, boundaries ignored",
+  which is conservative: a piece normalizes to a substring of the whole (U5 keeps escapes off the
+  edges, and starts follow whitespace). A differential test checks it against subtraction run on
+  every string.
+- **U4:** every occurrence at every word start counts, overlaps included, and the union is removed:
+  no dependence on entry order.
+- **U5:** an occurrence whose edges, over the longest needle's length, hold a `%`, end with a
+  needle's proper prefix or start with its proper suffix is not removed. `instruction-entry`
+  refuses such a file against the live markers.
+- **U6:** hashes are exactly 64 ASCII hex digits.
+- **U7:** `cwd` is matched without subtraction.
+

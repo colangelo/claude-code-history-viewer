@@ -22,7 +22,11 @@
 ## 4. Review and rollout
 
 - [x] 4.1 Hub suite, clippy, fmt; `docs/archive/deployment.md` § client scope: registering a block.
-- [ ] 4.2 Diff to security (two-vendor review).
+- [x] 4.2 Diff to security (two-vendor review): merge after U1-U7 (ac/security af08b2f).
+- [x] 4.2a U1-U7 and T1: sourced entries verified at accept, no block bootstrap, conservative guard
+      (differential test), union of occurrences, edge check, strict hex, exact cwd; end-to-end accept,
+      sweep and clear test; census on a read-only connection.
+- [ ] 4.2b Single-reader re-check by security.
 - [ ] 4.3 Census on pg1 with a candidate routing file (the six global-file versions); counts and ids to
       manager-aruba.
 - [ ] 4.4 Release; manager-aruba registers the blocks; infra runs `accept-routing` right after.
