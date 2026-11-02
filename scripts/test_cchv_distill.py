@@ -1393,3 +1393,43 @@ def test_no_hub_token_reaches_a_model_cli(monkeypatch) -> None:
     monkeypatch.setattr(d.subprocess, "run", fake_run)
     d._claude_generate("claude-x", "prompt", direct=True)
     assert not set(d.HUB_TOKEN_ENV) & set(seen["env"]), "neither token variable is passed on"
+
+
+# --- security E3: the hub's class decides before any general call -----------------------
+
+def _hub_class_case(tmp_path, monkeypatch, hub_class):
+    """process_group on a neutral group whose pending row carries `client_scope`."""
+    routes: list = []
+
+    def fake_generate(llm, day, project, transcript, threads, route=None):
+        routes.append(route)
+        return ({"status": "entry", "headline": "h", "summary": "s",
+                 "topics": ["a", "b", "c"], "open_questions": []}, "m", route)
+
+    monkeypatch.setattr(d, "generate", fake_generate)
+    posted: list[dict] = []
+
+    class Hub(StubHub):
+        def open_threads(self, project_path, before, **kw):
+            return []
+
+        def post_entry(self, payload):
+            posted.append(payload)
+
+    group = {"entry_date": "2026-10-20", "project_path": LAB, "session_ids": [11], "as_of": None}
+    if hub_class is not None:
+        group["client_scope"] = hub_class
+    assert d.process_group(Hub("neutral"), group, _llm(_routing(tmp_path, ROUTING_FULL_TOML)), dry_run=False)
+    return routes[0], posted[0]["route"]
+
+
+@pytest.mark.parametrize("hub_class,route,posted", [
+    ("client", "hub_client", "protected"),
+    ("unscanned", "hub_unscanned", "protected"),
+    ("something-new", "hub_something-new", "protected"),
+    ("lab", None, "general"),
+    (None, None, "general"),
+])
+def test_the_hubs_class_routes_before_the_distillers_own_check(tmp_path, monkeypatch, hub_class, route, posted) -> None:
+    got_route, got_posted = _hub_class_case(tmp_path, monkeypatch, hub_class)
+    assert (got_route, got_posted) == (route, posted)

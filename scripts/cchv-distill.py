@@ -1275,7 +1275,15 @@ def process_group(hub: Hub, group: dict, llm: LLM, dry_run: bool) -> bool:
     if not transcript.strip():
         entry = {"status": "skip", "skip_reason": "no textual content in this day's messages"}
     else:
-        route = route_group(hub, llm.routing, project_path, session_ids)
+        # The hub's class first (security E3): a group the hub holds client, or
+        # has not scanned, goes protected before any general call, even when its
+        # own text names nothing (a family-only or raw-only client session).
+        # Any value but `lab` protects; an older hub sends none.
+        hub_class = group.get("client_scope")
+        if hub_class is not None and hub_class != "lab":
+            route = f"hub_{hub_class}"
+        else:
+            route = route_group(hub, llm.routing, project_path, session_ids)
         # A general call is offered only threads of general origin (#84 #12);
         # if the gate later turns it protected, it keeps that shorter list.
         threads = hub.open_threads(project_path, entry_date, general=route is None)
