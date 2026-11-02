@@ -37,10 +37,11 @@ impl Drop for TempDir {
 }
 
 fn hex(b: &[u8]) -> String {
-    Sha256::digest(b)
-        .iter()
-        .map(|x| format!("{x:02x}"))
-        .collect()
+    use std::fmt::Write;
+    Sha256::digest(b).iter().fold(String::new(), |mut s, x| {
+        let _ = write!(s, "{x:02x}");
+        s
+    })
 }
 
 /// A hub as `run()` builds it, with `[client_scope]` on a fresh routing file.
