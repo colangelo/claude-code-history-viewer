@@ -476,6 +476,33 @@ enforce      = false   # observe: classify and count, hide nothing
   - *Bad routing file:* a missing, invalid, below-floor or changed file is `unknown`, and every
     session counts as client.
   - *Narrowing:* a removed or replaced marker is `unknown` until `client-scope accept-routing`.
+    So is a newly registered instruction block (below).
+- **Registered instruction blocks** (OpenSpec `client-scope-instruction-subtraction`). Claude Code
+  injects ac's instructions files into every session (an `instructions` attachment, and again in
+  the `api-request-blob` rows). A file whose text names a client folder would mark every session.
+  The routing file's owner can register exact versions of such a file:
+
+  ```toml
+  [protected]
+  instruction_blocks = [
+    { sha256 = "…", bytes = 7137, head_sha256 = "…" },   # one line per version
+  ]
+  ```
+
+  - *An entry:* `cchv-hub client-scope instruction-entry FILE` prints it for a file as Claude Code
+    injects it (trailing whitespace removed). Take each version from a source other than the
+    archive (ac's dotfiles repo for the global file). A block under 256 bytes, or a malformed
+    entry, makes the policy `unknown`.
+  - *What it does:* a span of a message string that starts at a line start and hashes to a block
+    is removed; the rest of the string, and every other string, is still matched. Nothing is
+    skipped by row or attachment type, so a client file injected next to the block still marks.
+  - *Before registering:* `cchv-hub client-scope census --routing CANDIDATE --floor CANDIDATE_FLOOR
+    --ids` (read-only) re-reads the sessions stamped client under the candidate and lists those
+    that would be lab. The candidate must keep the live markers.
+  - *Order:* the owner writes the routing file and its floor record, then the pg1 writer runs
+    `client-scope accept-routing` before the hub's next refresh, so there is no `unknown` window.
+  - *Classes only rise:* sessions marked before the registration stay client. Each one goes back
+    to lab only through `client-scope clear`, on the census list and the client desk's word.
 - **Who reads what.** Machine tokens, `[[readers]]` and the trusted Tailscale identity are lab
   read. With `enforce = true` they never get a client session, path, journal entry, thread, stats
   row or identity: a hidden row answers exactly as a missing one.
