@@ -366,6 +366,7 @@ label = "m4m"
 | `[[tokens]]` | everything: reads, ingest under its machine id, journal writes, identity aliases | — | the Mac template + `kv/infra/cchv/hub-tokens` |
 | `[[tokens]]` with `ingest_only = true` | `POST /v1/ingest` under its own machine id | every read, every other write | `kv/agents/cchv/<guest>` |
 | `[[readers]]` (`token`, `machine_id`, `label`) | every authenticated GET | any method but GET/HEAD/OPTIONS, on any path | `kv/agents/cchv-readers/<reader>` |
+| `[[readers]]` with `stats_only = true` (cchv-v0.41.0+) | `GET /v1/stats/daily`, `GET /v1/stats/tool-calls` | everything else, `/v1/login` included (**403**) | `kv/agents/cchv-stats-readers/<name>` |
 
 Readers have their own table on purpose: a hub binary older than cchv-v0.37.0
 does not know it, ignores it, and grants the token nothing (fail closed). Both
@@ -383,12 +384,58 @@ launch, and the launcher does NOT fall back to the cached runtime file; the hub
 itself refuses the same at load. The hub's AppRole needs read and list on both
 paths; each client reads only its own leaf.
 
+**Stats readers (`stats_only`).** For services that store counts and must read
+no message: monitoring's dashboard loader and quota-tap (OpenSpec
+`stats-read-api`, security's D3 condition 3). The scope comes from the folder the
+token is minted in, `kv/agents/cchv-stats-readers/<name>`; the launcher renders
+those children as `[[readers]]` with `stats_only = true`, so nothing inside a leaf
+decides it. **Infra:** the hub's AppRole needs read and list on that folder too.
+A hub older than cchv-v0.41.0 refuses a config with `stats_only` at load (unknown
+field), so render these only once the hub is 0.41.0 or later.
+
 **Revoking a reader (or guest).** Delete its bao leaf, relaunch the hub
 the way §2b does (bootout + bootstrap), then confirm the label is gone from the rendered runtime file:
 `grep -c 'label = "<name>"' ~/.config/cchv/hub.runtime.toml` must print 0. A
 launch that cannot reach bao reuses the cached runtime file, which still holds
 the revoked token, so a revocation is only done when that count is 0 and the
 token answers 401 on `GET /v1/projects`.
+
+**Stats-read routes (cchv-v0.41.0+, OpenSpec `stats-read-api`).** Two GET routes
+for services, both **lab sessions only for a lab reader, in observe as under
+enforce** (security's D3 ruling (a)): a client session adds nothing to any count.
+Both take only the parameters below (any other is 400) and at most 31 days.
+
+- `GET /v1/stats/daily?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=<IANA>`: one row per local
+  day and project. Defaults: `tz` Europe/Rome, `to` today, `from` 30 days before.
+  Answers `{from, to, tz, rows}`. From the stats mirror (503 while it builds).
+  Columns (monitoring's names):
+
+  | column | meaning |
+  |---|---|
+  | `day`, `project` | local day; the project identity's display name (identities that share a name share a row) |
+  | `space` | `ac` on every row (no client row under ruling (a)) |
+  | `sessions` | distinct sessions with a row that day |
+  | `messages` | rows with content (#41's conversation items), not `/v1/stats/global`'s rows-with-a-role |
+  | `turns` | user rows with non-tool-result content, minus compaction boundaries, per session and day |
+  | `tokens_in`, `tokens_out` | usage sums, deduplicated as in `/v1/stats/global` |
+  | `active_seconds` | per session, gaps between consecutive rows, each capped at 300 s |
+  | `ac_messages` | always null (not derivable from what is stored) |
+  | `compactions` | `compact_boundary` rows |
+  | `cost_usd` | reported cost; null when no row reported one |
+
+- `GET /v1/stats/tool-calls?prefix=<name>&since=<RFC 3339>`: tool calls since T
+  (at most 31 days back) whose name equals `prefix` or ends in `__<prefix>`.
+  Answers `{since, last_ingest, by_tool: [{tool, server, count}], by_host:
+  [{host, count}]}`. From Postgres. Codex MCP calls count from cchv-v0.41.0 on,
+  under `mcp__<server>__<tool>` (#102); earlier Codex calls stay `exec`.
+
+**The mirror rebuild with cchv-v0.41.0.** The mirror gains three columns
+(`has_content`, `prompt`, `compaction`) that need the Postgres row, so the first
+start of 0.41.0 resets the mirror file (schema version 2) and builds it cold:
+**every `/v1/stats/*` route answers 503 + `Retry-After` for the build, about 8
+minutes** (497 s measured for the last full build). Announce it with the swap;
+`/v1/healthz/stats` shows the build. A later binary bumps the version only when a
+new mirrored column needs it.
 
 **Client scope (OpenSpec `hub-client-read-scope`).** This keeps client sessions away from every
 reader that is not Claude-only. Off unless `hub.toml` has:

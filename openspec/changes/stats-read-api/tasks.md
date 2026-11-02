@@ -30,5 +30,5 @@
 
 ## 5. Ship
 
-- [ ] 5.1 Docs: `deployment.md` (routes, tokens, the rebuild window), and monitoring's definitions.
+- [x] 5.1 Docs: `deployment.md` (routes, tokens, the rebuild window), and monitoring's definitions.
 - [ ] 5.2 Gate, security's code review, release under the standing go. Infra mints the `monitoring` and `quota-tap` reader tokens and plans the mirror rebuild with the swap.

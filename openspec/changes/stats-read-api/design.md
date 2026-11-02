@@ -70,13 +70,13 @@ The answer is `{since, last_ingest, by_tool: [{tool, server, count}], by_host: [
 ### D5. #102 without re-keying history
 
 The Codex parser keeps `exec` as today.
-- **The link:** when an `item_completed` `McpToolCall` follows, it records `{server, tool}` on that exec message as `mcp`. The serialized record carries it in `raw`, and it stays out of `message_key`, like `cwd` and the attachment payload (a pinned test).
-- **The hub:** at ingest, `message_tool_uses` takes the name `mcp__<server>__<tool>` for an `exec` tool use whose message carries `raw.mcp`.
+- **The link:** when an `item_completed` `McpToolCall` follows, it records `{server, tool}` on that exec message, in a list `mcp` (one `exec` can make several calls). It lands on the most recent tool call only when that call is `exec`. The serialized record carries it in `raw`, and it stays out of `message_key`, like `cwd` and the attachment payload (a pinned test).
+- **The hub:** at ingest, an `exec` tool use whose message carries `raw.mcp` becomes one `message_tool_uses` row per call, named `mcp__<server>__<tool>`. The analytics backfill carries `raw.mcp` so it derives the same rows.
 - **Scope:** new rows only. Archived rows keep `exec`, by design.
 
 ### D6. Tokens and the route walk
 
-- **Tokens:** both routes take lab reader tokens, `kv/agents/cchv-readers/<name>`, launcher-rendered like the blog's.
+- **Tokens:** both routes take lab reader tokens. As built, the stats-only ones live in their own folder, `kv/agents/cchv-stats-readers/<name>`, which the launcher renders as `[[readers]]` with `stats_only = true`: the folder decides the scope, so no flag inside a leaf can be forgotten. A plain reader (`kv/agents/cchv-readers/<name>`) reads the routes too.
 - **Writes:** a `read_only` reader cannot write.
 - **The route walk:** both routes get cases, with a populated mirror for `daily`.
 
