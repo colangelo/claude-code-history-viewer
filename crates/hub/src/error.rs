@@ -71,8 +71,9 @@ impl IntoResponse for HubError {
             HubError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
             HubError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             HubError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
-            HubError::MirrorBehind(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
-            HubError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
+            HubError::MirrorBehind(m) | HubError::Unavailable(m) => {
+                (StatusCode::SERVICE_UNAVAILABLE, m.clone())
+            }
             HubError::Db(e) => {
                 // Log the detail server-side; do not leak it to the client.
                 tracing::error!(error = %e, "database error");

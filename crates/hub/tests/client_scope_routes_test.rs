@@ -1082,7 +1082,10 @@ async fn the_flag_check_and_the_rollup_share_one_mirror_handle() {
         .await
         .unwrap()
         .1;
-    assert_ne!(leaked, before_rows, "the older mirror would leak if aggregated on");
+    assert_ne!(
+        leaked, before_rows,
+        "the older mirror would leak if aggregated on"
+    );
 
     // A request after the swap sees the older watermark and refuses.
     let fresh = hub::stats_api::MirrorSnapshot::take(&w.state).unwrap();
