@@ -438,3 +438,83 @@ async fn alias_writes_do_not_reveal_client_projects() {
     let lab = post(w.lab_path.clone()).await;
     assert_eq!(lab.status().as_u16(), 201, "a lab path still aliases");
 }
+
+/// R2-J: each lab response equals the same request after the client rows are
+/// physically deleted: status, `X-Total-Count` and body. This catches leaks of
+/// ids, counts, ranks and order, not only of strings.
+#[tokio::test]
+async fn lab_responses_equal_responses_with_client_rows_deleted() {
+    let w = world().await;
+    let cp = urlencode(&w.client_path);
+    let (c, l) = (&w.client_canary, &w.lab_canary);
+    let urls = vec![
+        "/v1/projects?limit=500".to_string(),
+        "/v1/sessions?limit=500".to_string(),
+        format!("/v1/sessions?project={cp}"),
+        format!("/v1/search?q={c}"),
+        format!("/v1/search?q={l}"),
+        format!("/v1/search?q={c}&scope=journal"),
+        format!("/v1/search?q={c}&scope=messages&limit=1&offset=0"),
+        "/v1/journal/entries?from=2026-10-01".to_string(),
+        format!("/v1/journal/entries?project={cp}"),
+        "/v1/journal/open-questions?days=3650".to_string(),
+        format!("/v1/journal/open-questions?days=3650&project={cp}"),
+        "/v1/journal/pending?from=2026-10-01&limit=500".to_string(),
+        "/v1/identities".to_string(),
+        format!("/v1/sessions/{}/messages", w.client_id),
+        format!("/v1/sessions/{}/messages", w.client_sid),
+    ];
+    async fn view(
+        w: &World,
+        urls: &[String],
+        who: &str,
+    ) -> Vec<(String, u16, Option<String>, String)> {
+        let mut out = Vec::new();
+        for url in urls {
+            let mut req = reqwest::Client::new().get(format!("{}{url}", w.base));
+            req = match who {
+                "lab" => req.bearer_auth(&w.lab_reader),
+                _ => req.header("Tailscale-User-Login", LOGIN),
+            };
+            let r = req.send().await.unwrap();
+            let total = r
+                .headers()
+                .get("x-total-count")
+                .map(|v| v.to_str().unwrap().to_string());
+            let status = r.status().as_u16();
+            // `as_of` is the database snapshot each pending call takes: it
+            // differs per request whatever the data, so it is masked.
+            let body = r.text().await.unwrap();
+            let body = regex::Regex::new(r#""as_of":"[^"]*""#)
+                .unwrap()
+                .replace_all(&body, r#""as_of":"-""#)
+                .into_owned();
+            out.push((url.clone(), status, total, body));
+        }
+        out
+    }
+    let before_lab = view(&w, &urls, "lab").await;
+    let before_ts = view(&w, &urls, "tailscale").await;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&std::env::var("TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    for sql in [
+        "DELETE FROM journal_entries WHERE project_path = $1",
+        "DELETE FROM project_identity_aliases WHERE project_path = $1",
+        "DELETE FROM messages WHERE session_id IN (SELECT s.id FROM sessions s JOIN projects p ON p.id = s.project_id WHERE p.project_path = $1)",
+        "DELETE FROM sessions WHERE project_id IN (SELECT id FROM projects WHERE project_path = $1)",
+        "DELETE FROM projects WHERE project_path = $1",
+    ] {
+        sqlx::query(sql).bind(&w.client_path).execute(&pool).await.unwrap();
+    }
+
+    for (who, before) in [("lab", before_lab), ("tailscale", before_ts)] {
+        let after = view(&w, &urls, who).await;
+        for (b, a) in before.iter().zip(&after) {
+            assert_eq!(b, a, "{who}: {} differs once the client rows are gone", b.0);
+        }
+    }
+}
