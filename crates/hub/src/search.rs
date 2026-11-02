@@ -5,7 +5,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::auth::Authenticated;
+use crate::auth::{Authenticated, Visibility};
 use crate::error::HubError;
 use crate::pagination::Page;
 use crate::state::AppState;
@@ -96,7 +96,7 @@ pub(crate) fn parse_bound(s: Option<&str>, which: &str) -> Result<Option<DateTim
 }
 
 pub async fn search(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResults>, HubError> {
@@ -123,6 +123,7 @@ pub async fn search(
     let mode = crate::journal::JournalMode::parse(params.mode.as_deref())?;
     let general_only = crate::journal::parse_route_filter(params.route.as_deref())?;
 
+    let vis = auth.visibility(&state);
     // Resolve the project filter once (plain vs `identity:<key>` expansion)
     // and share it between the message and journal legs.
     let project_scope = crate::identity_filter::resolve_project_scope(
@@ -135,7 +136,7 @@ pub async fn search(
     // Message hits: unchanged shape and ordering at every scope. Skipped
     // entirely for `scope=journal` (which performs no message search).
     let results: Vec<SearchHit> = if want_messages {
-        message_hits(&state, &params, &project_scope, from, to, page).await?
+        message_hits(&state, &vis, &params, &project_scope, from, to, page).await?
     } else {
         Vec::new()
     };
@@ -145,6 +146,7 @@ pub async fn search(
     let (journal, journal_degraded) = if want_journal {
         let (hits, degraded) = crate::journal::search_journal(
             &state,
+            &vis,
             &params.q,
             &project_scope,
             page.limit,
@@ -172,8 +174,31 @@ pub async fn search(
 /// OR-ing only ever ADDS hits, and the variant is absent for advanced-syntax
 /// queries so phrases/negation keep exact semantics. `position` locates the
 /// hit in its session's browse ordering (issue #20).
+/// One message hit, as the statement returns it.
+#[derive(sqlx::FromRow)]
+struct MessageHitRow {
+    message_id: i64,
+    message_key: String,
+    uuid: Option<String>,
+    provider: String,
+    session_pk: i64,
+    session_id: String,
+    session_summary: Option<String>,
+    project_name: Option<String>,
+    project_path: Option<String>,
+    machine_hostname: String,
+    timestamp: Option<DateTime<Utc>>,
+    message_type: Option<String>,
+    role: Option<String>,
+    model: Option<String>,
+    snippet: String,
+    rank: f32,
+    position: i64,
+}
+
 async fn message_hits(
     state: &AppState,
+    vis: &Visibility,
     params: &SearchParams,
     project_scope: &crate::identity_filter::ProjectScope,
     from: Option<DateTime<Utc>>,
@@ -181,7 +206,8 @@ async fn message_hits(
     page: Page,
 ) -> Result<Vec<SearchHit>, HubError> {
     let prefix = crate::fts::prefix_tsquery(&params.q);
-    let rows = sqlx::query!(
+    let visible = vis.session_ok("s");
+    let rows = sqlx::query_as::<_, MessageHitRow>(&format!(
         r#"
         WITH q AS (
             SELECT CASE
@@ -190,24 +216,24 @@ async fn message_hits(
             END AS tsq
         )
         SELECT
-            m.id              AS "message_id!",
-            m.message_key     AS "message_key!",
+            m.id              AS message_id,
+            m.message_key,
             m.uuid,
-            m.provider        AS "provider!",
-            m.session_id      AS "session_pk!",
-            s.session_id      AS "session_id!",
+            m.provider,
+            m.session_id      AS session_pk,
+            s.session_id,
             s.summary         AS session_summary,
             p.name            AS project_name,
-            p.project_path     AS "project_path?",
-            mac.hostname      AS "machine_hostname!",
+            p.project_path,
+            mac.hostname      AS machine_hostname,
             m."timestamp",
             m.type            AS message_type,
             m.role,
             m.model,
             ts_headline('simple', coalesce(m.search_text, ''),
                         q.tsq,
-                        'MaxFragments=2, MinWords=3, MaxWords=14') AS "snippet!",
-            ts_rank(m.text_search, q.tsq) AS "rank!",
+                        'MaxFragments=2, MinWords=3, MaxWords=14') AS snippet,
+            ts_rank(m.text_search, q.tsq) AS rank,
             (
                 SELECT count(*) FROM messages m2
                 WHERE m2.session_id = m.session_id
@@ -221,7 +247,7 @@ async fn message_hits(
                                  < (m."timestamp", m.seq, m.id)
                     END
                   )
-            ) AS "position!"
+            ) AS position
         FROM q, messages m
         JOIN sessions s   ON m.session_id = s.id
         LEFT JOIN projects p ON s.project_id = p.id
@@ -233,20 +259,21 @@ async fn message_hits(
           AND ($9::text[] IS NULL OR p.project_path = ANY($9))
           AND ($5::timestamptz IS NULL OR m."timestamp" >= $5)
           AND ($6::timestamptz IS NULL OR m."timestamp" <= $6)
-        ORDER BY "rank!" DESC, m."timestamp" DESC NULLS LAST, m.id DESC
+          AND {visible}
+        ORDER BY rank DESC, m."timestamp" DESC NULLS LAST, m.id DESC
         LIMIT $7 OFFSET $8
-        "#,
-        params.q,
-        params.provider,
-        params.machine,
-        project_scope.plain,
-        from,
-        to,
-        page.limit,
-        page.offset,
-        project_scope.paths.as_deref(),
-        prefix,
-    )
+        "#
+    ))
+    .bind(&params.q)
+    .bind(&params.provider)
+    .bind(&params.machine)
+    .bind(&project_scope.plain)
+    .bind(from)
+    .bind(to)
+    .bind(page.limit)
+    .bind(page.offset)
+    .bind(project_scope.paths.as_deref())
+    .bind(prefix)
     .fetch_all(&state.pool)
     .await?;
 

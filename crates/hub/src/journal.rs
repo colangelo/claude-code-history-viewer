@@ -830,10 +830,11 @@ impl JournalEntry {
 /// Browse `entry`-status rows, filterable by project and date range,
 /// newest-first, paginated. Skip rows never surface.
 pub async fn browse(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<BrowseParams>,
 ) -> Result<Json<Vec<JournalEntry>>, HubError> {
+    let visible = auth.visibility(&state).entry_ok("");
     let from = parse_date(params.from.as_deref(), "from")?;
     let to = parse_date(params.to.as_deref(), "to")?;
     let general_only = parse_route_filter(params.route.as_deref())?;
@@ -845,7 +846,7 @@ pub async fn browse(
     )
     .await?;
 
-    let rows = sqlx::query_as::<_, JournalEntry>(
+    let rows = sqlx::query_as::<_, JournalEntry>(&format!(
         r"
         SELECT entry_date, project_path, status, headline, summary, topics,
                open_questions, session_ids, model, generated_at,
@@ -857,10 +858,11 @@ pub async fn browse(
           AND ($2::date IS NULL OR entry_date >= $2)
           AND ($3::date IS NULL OR entry_date <= $3)
           AND (NOT $7 OR (route = 'general' AND route_at = generated_at))
+          AND {visible}
         ORDER BY entry_date DESC, project_path DESC, id DESC
         LIMIT $4 OFFSET $5
-        ",
-    )
+        "
+    ))
     .bind(&scope.plain)
     .bind(from)
     .bind(to)
@@ -976,8 +978,10 @@ struct RankedRow {
 /// Every hit leaves in its response form: text fields of a non-general row
 /// tagged (#19). `general_only` keeps only rows whose counted route is
 /// `general`, in every mode.
+#[allow(clippy::too_many_arguments)]
 pub async fn search_journal(
     state: &AppState,
+    vis: &crate::auth::Visibility,
     q: &str,
     scope: &crate::identity_filter::ProjectScope,
     limit: i64,
@@ -986,15 +990,17 @@ pub async fn search_journal(
     general_only: bool,
 ) -> Result<(Vec<JournalHit>, bool), HubError> {
     let (hits, degraded) =
-        ranked_journal(state, q, scope, limit, offset, mode, general_only).await?;
+        ranked_journal(state, vis, q, scope, limit, offset, mode, general_only).await?;
     Ok((
         hits.into_iter().map(JournalHit::protected).collect(),
         degraded,
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ranked_journal(
     state: &AppState,
+    vis: &crate::auth::Visibility,
     q: &str,
     scope: &crate::identity_filter::ProjectScope,
     limit: i64,
@@ -1003,14 +1009,14 @@ async fn ranked_journal(
     general_only: bool,
 ) -> Result<(Vec<JournalHit>, bool), HubError> {
     if mode == JournalMode::Keyword {
-        let hits = keyword_hits(state, q, scope, limit, offset, general_only).await?;
+        let hits = keyword_hits(state, vis, q, scope, limit, offset, general_only).await?;
         return Ok((hits.into_iter().map(|r| r.hit).collect(), false));
     }
 
     // Semantic ranking over the scoped active-model vectors; `None` = the
     // capability is unavailable right now → keyword results + degraded flag.
-    let Some(ranked) = semantic_ranked(state, q, scope, general_only).await? else {
-        let hits = keyword_hits(state, q, scope, limit, offset, general_only).await?;
+    let Some(ranked) = semantic_ranked(state, vis, q, scope, general_only).await? else {
+        let hits = keyword_hits(state, vis, q, scope, limit, offset, general_only).await?;
         return Ok((hits.into_iter().map(|r| r.hit).collect(), true));
     };
 
@@ -1030,7 +1036,7 @@ async fn ranked_journal(
             Ok((hits_for_ranked(state, &page).await?, false))
         }
         JournalMode::Hybrid => {
-            let keyword = keyword_hits(state, q, scope, top_k, 0, general_only).await?;
+            let keyword = keyword_hits(state, vis, q, scope, top_k, 0, general_only).await?;
             let mut scores: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
             let mut hit_by_id: std::collections::HashMap<i64, JournalHit> =
                 std::collections::HashMap::new();
@@ -1073,6 +1079,7 @@ async fn ranked_journal(
 /// `fts::prefix_tsquery`.
 async fn keyword_hits(
     state: &AppState,
+    vis: &crate::auth::Visibility,
     q: &str,
     scope: &crate::identity_filter::ProjectScope,
     limit: i64,
@@ -1080,7 +1087,8 @@ async fn keyword_hits(
     general_only: bool,
 ) -> Result<Vec<RankedRow>, HubError> {
     let prefix = crate::fts::prefix_tsquery(q);
-    let hits = sqlx::query_as::<_, RankedRow>(
+    let visible = vis.entry_ok("");
+    let hits = sqlx::query_as::<_, RankedRow>(&format!(
         r"
         WITH q AS (
             SELECT CASE
@@ -1098,10 +1106,11 @@ async fn keyword_hits(
           AND ($2::text IS NULL OR project_path = $2)
           AND ($5::text[] IS NULL OR project_path = ANY($5))
           AND (NOT $7 OR (route = 'general' AND route_at = generated_at))
+          AND {visible}
         ORDER BY rank DESC, entry_date DESC, id DESC
         LIMIT $3 OFFSET $4
-        ",
-    )
+        "
+    ))
     .bind(q)
     .bind(&scope.plain)
     .bind(limit)
@@ -1122,6 +1131,7 @@ async fn keyword_hits(
 /// dimension mismatches the query are skipped defensively.
 async fn semantic_ranked(
     state: &AppState,
+    vis: &crate::auth::Visibility,
     q: &str,
     scope: &crate::identity_filter::ProjectScope,
     general_only: bool,
@@ -1137,7 +1147,8 @@ async fn semantic_ranked(
         }
     };
 
-    let rows = sqlx::query(
+    let visible = vis.entry_ok("je.");
+    let rows = sqlx::query(&format!(
         r"
         SELECT e.journal_entry_id, e.embedding
         FROM journal_embeddings e
@@ -1147,8 +1158,9 @@ async fn semantic_ranked(
           AND ($2::text IS NULL OR je.project_path = $2)
           AND ($3::text[] IS NULL OR je.project_path = ANY($3))
           AND (NOT $4 OR (je.route = 'general' AND je.route_at = je.generated_at))
-        ",
-    )
+          AND {visible}
+        "
+    ))
     .bind(embedder.model_id())
     .bind(&scope.plain)
     .bind(scope.paths.as_deref())

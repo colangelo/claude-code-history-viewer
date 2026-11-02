@@ -85,6 +85,24 @@ impl Visibility {
     }
 }
 
+impl Visibility {
+    /// A SQL boolean over a `journal_entries` row (columns prefixed `p`, e.g.
+    /// `"j."` or `""`): a lab reader sees an entry only with a current general
+    /// route stamp and every session visible (design R2-F). A route-less entry
+    /// (every entry before v0.34.0), a stale stamp, a missing session or an
+    /// empty session list is client.
+    pub fn entry_ok(&self, p: &str) -> String {
+        match self {
+            Visibility::All => "true".into(),
+            Visibility::Lab(None) => "false".into(),
+            Visibility::Lab(Some(_)) => format!(
+                "({p}route IN ('general', 'general-restamped') AND {p}route_at = {p}generated_at AND {})",
+                self.all_sessions_ok(&format!("{p}session_ids"))
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

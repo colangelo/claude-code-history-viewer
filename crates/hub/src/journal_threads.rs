@@ -386,6 +386,35 @@ async fn load_rows(
     .await
 }
 
+/// The thread ids opened, continued or resolved by an entry this reader may
+/// not see. Empty when the reader sees everything.
+async fn hidden_threads(
+    pool: &PgPool,
+    vis: &crate::auth::Visibility,
+    project: Option<&str>,
+    before: NaiveDate,
+) -> Result<std::collections::HashSet<i64>, sqlx::Error> {
+    if vis.sees_all() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let ids: Vec<i64> = sqlx::query_scalar(&format!(
+        r"
+        SELECT DISTINCT t
+        FROM journal_entries e, unnest(e.open_question_threads || e.resolved_threads) AS t
+        WHERE t IS NOT NULL
+          AND NOT {}
+          AND ($1::text IS NULL OR e.project_path = $1)
+          AND e.entry_date < $2
+        ",
+        vis.entry_ok("e.")
+    ))
+    .bind(project)
+    .bind(before)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids.into_iter().collect())
+}
+
 /// The ids among `ids` that are threads of `project_path` NOT of general origin
 /// as of `entry_date` (folded from the rows before it, as the distiller saw them
 /// when it offered threads for that day). Ids the project does not know are left
@@ -434,7 +463,7 @@ pub enum OpenQuestionsResponse {
 }
 
 pub async fn open_questions(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<OpenQuestionsParams>,
 ) -> Result<Json<OpenQuestionsResponse>, HubError> {
@@ -487,6 +516,16 @@ pub async fn open_questions(
     // seen before the window, and the active days that decide `quiet`.
     let rows = load_rows(&state.pool, params.project.as_deref(), before).await?;
     let folded = fold_threads(&rows, QUIET_AFTER_ACTIVE_DAYS);
+    // A lab reader sees a thread only when no entry in its whole history (before
+    // the window and the filters) is hidden from it (design R2-F).
+    let hidden = hidden_threads(
+        &state.pool,
+        &auth.visibility(&state),
+        params.project.as_deref(),
+        before,
+    )
+    .await?;
+    let wanted = |t: &Thread| !hidden.contains(&t.thread_id) && wanted(t);
 
     if let Some(project) = params.project {
         let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);

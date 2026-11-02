@@ -67,7 +67,10 @@ async fn world() -> World {
         .await
         .unwrap();
     hub::MIGRATOR.run(&pool).await.unwrap();
-    sqlx::query("DELETE FROM client_scope_policy").execute(&pool).await.unwrap();
+    sqlx::query("DELETE FROM client_scope_policy")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE client_scope_state SET generation = NULL, enforced_at = NULL")
         .execute(&pool)
         .await
@@ -103,7 +106,13 @@ async fn world() -> World {
     .unwrap();
     config.validate().unwrap();
     let state = hub::AppState::from_config(pool.clone(), &config).unwrap();
-    state.client_scope.as_ref().unwrap().refresh(&pool).await.unwrap();
+    state
+        .client_scope
+        .as_ref()
+        .unwrap()
+        .refresh(&pool)
+        .await
+        .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let router = hub::router(state, None);
@@ -114,7 +123,10 @@ async fn world() -> World {
     let lab_path = format!("/w/labproj-{r}");
     let client_path = format!("/w/clientco/proj-{r}");
     let (lab_sid, client_sid) = (Uuid::new_v4().to_string(), Uuid::new_v4().to_string());
-    for (path, sid, canary) in [(&lab_path, &lab_sid, &lab_canary), (&client_path, &client_sid, &client_canary)] {
+    for (path, sid, canary) in [
+        (&lab_path, &lab_sid, &lab_canary),
+        (&client_path, &client_sid, &client_canary),
+    ] {
         let resp = reqwest::Client::new()
             .post(format!("{base}/v1/ingest"))
             .bearer_auth(&machine_token)
@@ -183,24 +195,82 @@ fn cases(w: &World) -> Vec<(&'static str, String, bool)> {
     vec![
         ("/v1/healthz", "/v1/healthz".into(), false),
         ("/v1/healthz/ingest", "/v1/healthz/ingest".into(), false),
-        ("/v1/healthz/journal", "/v1/healthz/journal?within_days=30".into(), false),
+        (
+            "/v1/healthz/journal",
+            "/v1/healthz/journal?within_days=30".into(),
+            false,
+        ),
         ("/v1/healthz/stats", "/v1/healthz/stats".into(), false),
         ("/v1/healthz/findings", "/v1/healthz/findings".into(), false),
         ("/v1/findings/summary", "/v1/findings/summary".into(), false),
         ("/v1/search", format!("/v1/search?q={c}"), false),
-        ("/v1/search", format!("/v1/search?q={c}&scope=journal"), false),
+        (
+            "/v1/search",
+            format!("/v1/search?q={c}&scope=journal"),
+            false,
+        ),
         ("/v1/search", format!("/v1/search?q={l}"), true),
-        ("/v1/journal/pending", "/v1/journal/pending?from=2026-10-01".into(), false),
-        ("/v1/journal/entries", "/v1/journal/entries?from=2026-10-01".into(), true),
-        ("/v1/journal/open-questions", "/v1/journal/open-questions?days=3650".into(), false),
+        (
+            "/v1/journal/pending",
+            "/v1/journal/pending?from=2026-10-01".into(),
+            false,
+        ),
+        (
+            "/v1/journal/entries",
+            "/v1/journal/entries?from=2026-10-01".into(),
+            true,
+        ),
+        (
+            "/v1/journal/entries",
+            format!("/v1/journal/entries?project={}", urlencode(&w.client_path)),
+            false,
+        ),
+        (
+            "/v1/journal/open-questions",
+            format!(
+                "/v1/journal/open-questions?days=3650&project={}",
+                urlencode(&w.client_path)
+            ),
+            false,
+        ),
+        (
+            "/v1/sessions",
+            format!("/v1/sessions?project={}", urlencode(&w.client_path)),
+            false,
+        ),
+        (
+            "/v1/journal/open-questions",
+            "/v1/journal/open-questions?days=3650".into(),
+            false,
+        ),
         ("/v1/projects", "/v1/projects?limit=500".into(), false),
         ("/v1/sessions", "/v1/sessions?limit=500".into(), false),
-        ("/v1/sessions/{id}/messages", format!("/v1/sessions/{}/messages", w.client_id), false),
-        ("/v1/sessions/{id}/messages", format!("/v1/sessions/{}/messages", w.client_sid), false),
-        ("/v1/sessions/{id}/messages", format!("/v1/sessions/{}/messages", w.lab_id), true),
+        (
+            "/v1/sessions/{id}/messages",
+            format!("/v1/sessions/{}/messages", w.client_id),
+            false,
+        ),
+        (
+            "/v1/sessions/{id}/messages",
+            format!("/v1/sessions/{}/messages", w.client_sid),
+            false,
+        ),
+        (
+            "/v1/sessions/{id}/messages",
+            format!("/v1/sessions/{}/messages", w.lab_id),
+            true,
+        ),
         ("/v1/stats/global", "/v1/stats/global".into(), false),
-        ("/v1/stats/projects/{identity_key}", format!("/v1/stats/projects/{}", urlencode(&w.client_path)), false),
-        ("/v1/stats/sessions/{id}", format!("/v1/stats/sessions/{}", w.client_id), false),
+        (
+            "/v1/stats/projects/{identity_key}",
+            format!("/v1/stats/projects/{}", urlencode(&w.client_path)),
+            false,
+        ),
+        (
+            "/v1/stats/sessions/{id}",
+            format!("/v1/stats/sessions/{}", w.client_id),
+            false,
+        ),
         ("/v1/identities", "/v1/identities".into(), false),
     ]
 }
@@ -230,8 +300,14 @@ async fn get(w: &World, url: &str, who: &str) -> (u16, String) {
 async fn every_registered_get_route_has_a_case() {
     let w = world().await;
     let covered: BTreeSet<String> = cases(&w).iter().map(|(p, _, _)| (*p).to_string()).collect();
-    let missing: Vec<String> = registered_get_paths().difference(&covered).cloned().collect();
-    assert!(missing.is_empty(), "GET routes with no client-scope case: {missing:?}");
+    let missing: Vec<String> = registered_get_paths()
+        .difference(&covered)
+        .cloned()
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "GET routes with no client-scope case: {missing:?}"
+    );
 }
 
 #[tokio::test]
@@ -242,7 +318,10 @@ async fn no_lab_principal_gets_a_client_canary() {
     for (_, url, content) in cases(&w) {
         for who in ["lab", "tailscale", "none"] {
             let (status, body) = get(&w, &url, who).await;
-            if body.contains(&w.client_canary) || body.contains(&w.client_path) {
+            // A path the request itself carries may be echoed back (the same
+            // answer as for a project that does not exist); anything else is a leak.
+            let echoed = url.contains(&urlencode(&w.client_path));
+            if body.contains(&w.client_canary) || (!echoed && body.contains(&w.client_path)) {
                 leaks.push(format!("{who} {url} -> {status}"));
             }
             if content && who != "none" && !body.contains(&w.lab_canary) {
@@ -250,8 +329,14 @@ async fn no_lab_principal_gets_a_client_canary() {
             }
         }
     }
-    assert!(leaks.is_empty(), "client material served to lab readers: {leaks:?}");
-    assert!(unreached.is_empty(), "content cases that did not reach their handler: {unreached:?}");
+    assert!(
+        leaks.is_empty(),
+        "client material served to lab readers: {leaks:?}"
+    );
+    assert!(
+        unreached.is_empty(),
+        "content cases that did not reach their handler: {unreached:?}"
+    );
 }
 
 #[tokio::test]
@@ -262,7 +347,7 @@ async fn a_client_reader_sees_client_sessions() {
         format!("/v1/sessions/{}/messages", w.client_id),
         format!("/v1/search?q={}", w.client_canary),
         "/v1/sessions?limit=500".to_string(),
-        "/v1/journal/entries?from=2026-10-01".to_string(),
+        format!("/v1/journal/entries?project={}", urlencode(&w.client_path)),
     ] {
         let (status, body) = get(&w, &url, "client").await;
         assert_eq!(status, 200, "{url}");
