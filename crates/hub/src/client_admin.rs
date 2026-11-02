@@ -7,6 +7,7 @@
 use sqlx::PgPool;
 
 use crate::client_policy::Policy;
+use crate::client_scope::normalize;
 use crate::client_state::{audit, record_set};
 
 /// Accept the routing file's marker set as it is now, removals included
@@ -139,21 +140,71 @@ fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
-/// `restamp-history --from FILE` (design R3-E8, security E8): make lab again
-/// only the entries the distiller's live router listed in `file`, each after a
-/// re-check of what may have changed since the router read it. The hub makes
-/// no client decision of its own here.
+/// One ingest batch writes its rows with the batch's start time, so a batch
+/// that began before the classify run but committed after it carries an
+/// earlier stamp. Anything changed this long before the run started counts as
+/// changed since (security E8 R7).
+pub const RESTAMP_INGEST_MARGIN_SECS: i64 = 900;
+
+/// When protected routing went live (v0.27.0, the distiller's
+/// `ROUTING_LIVE_AT`): a Claude entry generated after it was protected by the
+/// router of its day.
+const ROUTING_LIVE_AT: &str = "2026-10-21T10:16:59Z";
+
+fn is_claude(model: Option<&str>) -> bool {
+    let m = model.unwrap_or_default().to_lowercase();
+    ["claude", "haiku", "sonnet", "opus"]
+        .iter()
+        .any(|w| m.contains(w))
+}
+
+/// Read the classify step's file: a regular file, not a link, readable by its
+/// owner only (security E8 P3).
+pub fn read_restamp_file(path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    // The path itself must not be a link; the file opened must be that same
+    // inode (a swap between the two calls is refused).
+    let link = std::fs::symlink_metadata(path)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+    if !link.file_type().is_file() {
+        anyhow::bail!(
+            "{} is not a regular file (a link is refused)",
+            path.display()
+        );
+    }
+    let mut f = std::fs::File::open(path)?;
+    let meta = f.metadata()?;
+    if (meta.dev(), meta.ino()) != (link.dev(), link.ino()) || !meta.is_file() {
+        anyhow::bail!("{} changed while it was opened", path.display());
+    }
+    if meta.mode() & 0o077 != 0 {
+        anyhow::bail!("{} must be mode 0600 (owner only)", path.display());
+    }
+    let mut out = Vec::new();
+    f.read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// `restamp-history --from FILE` (design R3-E8, security E8 and its code
+/// review R1-R8): make lab again only the entries the distiller's live router
+/// listed in `file`, each after a re-check of what may have changed since.
 ///
-/// The whole file is refused when its generation is not the accepted one, its
-/// distiller is older than [`RESTAMP_MIN_DISTILLER`], it finished more than
-/// [`RESTAMP_MAX_AGE_HOURS`] before `now`, or `approved_by` is empty (E7).
-/// Each entry is then locked and written with its audit row in one
-/// transaction, only when it is still unstamped, was not regenerated, names
-/// the same sessions, and every session is lab at the current generation with
-/// no row or message change after `started_at`. `approved_by: None` is the
-/// dry run: the same checks, nothing written.
+/// The whole file is refused when it does not come from `policy` (the hub's
+/// own routing files), its distiller is older than [`RESTAMP_MIN_DISTILLER`],
+/// it finished more than [`RESTAMP_MAX_AGE_HOURS`] before `now`, or
+/// `approved_by` is empty (E7). The run stops when the accepted generation is
+/// not the file's (R2, read per entry). Each entry must still carry no route
+/// at all (R3), not be regenerated, name the same sessions, pass the Claude
+/// cutoff and the entry-text and path checks against the policy's markers AND
+/// terms (R6), and every session must be lab at the generation with no row or
+/// message change since the run started, less a margin (R7). The apply locks
+/// what it reads and writes each route with its audit row in one transaction;
+/// `approved_by: None` is the dry run, which locks nothing and runs on a
+/// read-only pool (R1).
 pub async fn restamp_from_file(
     pool: &PgPool,
+    policy: &Policy,
     file: &[u8],
     approved_by: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
@@ -166,11 +217,10 @@ pub async fn restamp_from_file(
     if f.format != 1 {
         anyhow::bail!("not a restamp file: format {}", f.format);
     }
-    let current: Option<String> = sqlx::query_scalar("SELECT generation FROM client_scope_state")
-        .fetch_one(pool)
-        .await?;
-    if current.as_deref() != Some(f.generation.as_str()) {
-        anyhow::bail!("the file's generation is not the accepted one: re-run the classify step");
+    if f.generation != policy.generation {
+        anyhow::bail!(
+            "the file's generation is not that of the hub's routing files: re-run the classify step"
+        );
     }
     let min = version_triple(RESTAMP_MIN_DISTILLER).expect("a valid minimum");
     if version_triple(&f.distiller_version).map_or(true, |v| v < min) {
@@ -185,13 +235,30 @@ pub async fn restamp_from_file(
     {
         anyhow::bail!("the file is older than {RESTAMP_MAX_AGE_HOURS} h (or dated ahead): re-run the classify step");
     }
+    let since = f.started_at - chrono::Duration::seconds(RESTAMP_INGEST_MARGIN_SECS);
+    let apply = approved_by.is_some();
     let file_sha = sha256_hex(file);
     let mut report = RestampReport::default();
     for item in &f.restampable {
         report.listed += 1;
         let mut tx = pool.begin().await?;
-        let verdict = restamp_check(&mut tx, item, &f.generation, f.started_at).await?;
-        match verdict {
+        // R2: the accepted generation, read (and in the apply held) per entry.
+        let current: Option<String> = sqlx::query_scalar(if apply {
+            "SELECT generation FROM client_scope_state FOR SHARE"
+        } else {
+            "SELECT generation FROM client_scope_state"
+        })
+        .fetch_one(&mut *tx)
+        .await?;
+        if current.as_deref() != Some(f.generation.as_str()) {
+            tx.rollback().await?;
+            anyhow::bail!(
+                "the accepted generation is not the file's (after {} of {} entries): re-run the classify step",
+                report.listed - 1,
+                f.restampable.len()
+            );
+        }
+        match restamp_check(&mut tx, policy, item, since, apply).await? {
             Err(reason) => *report.skipped.entry(reason).or_default() += 1,
             Ok(id) => {
                 report.restamped += 1;
@@ -225,56 +292,106 @@ pub async fn restamp_from_file(
     Ok(report)
 }
 
-/// The per-entry re-check, under a row lock: the entry id, or why it is skipped.
+/// The per-entry re-check: the entry id, or why it is skipped. `apply` locks
+/// the entry (`FOR UPDATE`) and its sessions (`FOR SHARE`); the dry run locks
+/// nothing (R1).
 async fn restamp_check(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    policy: &Policy,
     item: &RestampItem,
-    generation: &str,
-    started_at: chrono::DateTime<chrono::Utc>,
+    since: chrono::DateTime<chrono::Utc>,
+    apply: bool,
 ) -> anyhow::Result<Result<i64, &'static str>> {
-    type Row = (
-        i64,
-        chrono::DateTime<chrono::Utc>,
-        Vec<i64>,
-        Option<String>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    );
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT id, generated_at, session_ids, route, route_at FROM journal_entries
-         WHERE entry_date = $1 AND project_path = $2 AND status = 'entry' FOR UPDATE",
-    )
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: i64,
+        generated_at: chrono::DateTime<chrono::Utc>,
+        session_ids: Vec<i64>,
+        route: Option<String>,
+        model: Option<String>,
+        project_path: String,
+        headline: Option<String>,
+        summary: Option<String>,
+        topics: Vec<String>,
+        open_questions: Vec<String>,
+    }
+    let lock = if apply { " FOR UPDATE" } else { "" };
+    let row: Option<Row> = sqlx::query_as(&format!(
+        "SELECT id, generated_at, session_ids, route, model, project_path, headline, summary,
+                topics, open_questions
+         FROM journal_entries
+         WHERE entry_date = $1 AND project_path = $2 AND status = 'entry'{lock}"
+    ))
     .bind(item.entry_date)
     .bind(&item.project_path)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some((id, generated_at, sessions, route, route_at)) = row else {
+    let Some(e) = row else {
         return Ok(Err("gone"));
     };
-    if route.is_some() && route_at == Some(generated_at) {
+    // R3: any route at all, current or stale, is a stamp.
+    if e.route.is_some() {
         return Ok(Err("stamped"));
     }
-    if generated_at != item.generated_at {
+    if e.generated_at != item.generated_at {
         return Ok(Err("regenerated"));
     }
-    if sessions != item.session_ids || sessions.is_empty() {
+    if e.session_ids != item.session_ids || e.session_ids.is_empty() {
         return Ok(Err("sessions_differ"));
     }
-    let (lab, changed): (i64, bool) = sqlx::query_as(
-        "SELECT count(*) FILTER (WHERE s.client_class = 'none' AND s.client_gen = $2),
-                bool_or(s.updated_at > $3
-                        OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.created_at > $3))
-         FROM sessions s WHERE s.id = ANY($1)",
-    )
-    .bind(&sessions)
-    .bind(generation)
-    .bind(started_at)
-    .fetch_one(&mut **tx)
+    // R6: the classify step's own checks, again, against the same policy.
+    let live: chrono::DateTime<chrono::Utc> = ROUTING_LIVE_AT.parse().expect("a valid cutoff");
+    if e.generated_at >= live && is_claude(e.model.as_deref()) {
+        return Ok(Err("was_protected"));
+    }
+    let hit = |text: &str| {
+        let t = normalize(text);
+        policy.markers.matches(&t) || policy.terms.iter().any(|w| t.contains(w.as_str()))
+    };
+    let texts = [e.headline.as_deref(), e.summary.as_deref()]
+        .into_iter()
+        .flatten()
+        .chain(e.topics.iter().map(String::as_str))
+        .chain(e.open_questions.iter().map(String::as_str));
+    for t in texts {
+        if hit(t) {
+            return Ok(Err("entry_text"));
+        }
+    }
+    if hit(&e.project_path) {
+        return Ok(Err("path"));
+    }
+    // R7: hold the sessions (apply), then: lab at the generation, and no row
+    // or message change since the run started, less one ingest batch.
+    let share = if apply { " FOR SHARE" } else { "" };
+    /// (id, class, generation, last row change).
+    type Held = (
+        i64,
+        Option<String>,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let held: Vec<Held> = sqlx::query_as(&format!(
+        "SELECT id, client_class, client_gen, updated_at FROM sessions WHERE id = ANY($1){share}"
+    ))
+    .bind(&e.session_ids)
+    .fetch_all(&mut **tx)
     .await?;
-    if usize::try_from(lab).ok() != Some(sessions.len()) {
+    let lab = held.iter().all(|(_, class, gen, _)| {
+        class.as_deref() == Some("none") && gen.as_deref() == Some(policy.generation.as_str())
+    });
+    if held.len() != e.session_ids.len() || !lab {
         return Ok(Err("session_not_lab"));
     }
-    if changed {
+    let new_messages: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM messages WHERE session_id = ANY($1) AND created_at > $2)",
+    )
+    .bind(&e.session_ids)
+    .bind(since)
+    .fetch_one(&mut **tx)
+    .await?;
+    if new_messages || held.iter().any(|(_, _, _, updated)| *updated > since) {
         return Ok(Err("changed_since"));
     }
-    Ok(Ok(id))
+    Ok(Ok(e.id))
 }

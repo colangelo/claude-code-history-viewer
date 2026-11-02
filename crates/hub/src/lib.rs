@@ -333,10 +333,11 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
             println!("enforcement latch lifted; a config with enforce = false now observes");
         }
         ClientScopeAdmin::Restamp { from, approved_by } => {
-            let file = std::fs::read(&from)
-                .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", from.display()))?;
+            let p = policy()?;
+            let file = client_admin::read_restamp_file(&from)?;
             let r = client_admin::restamp_from_file(
                 &pool,
+                &p,
                 &file,
                 approved_by.as_deref(),
                 chrono::Utc::now(),

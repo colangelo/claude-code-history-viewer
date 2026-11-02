@@ -206,7 +206,11 @@ async fn entry_with(
     .fetch_one(pool)
     .await
     .unwrap();
-    (id, project, at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+    (
+        id,
+        project,
+        at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    )
 }
 
 async fn unstamped_entry(pool: &PgPool, sessions: &[i64]) -> (i64, String, String) {
@@ -300,25 +304,38 @@ async fn restamp_from_file_applies_only_unchanged_lab_entries() {
     let (_, row_p, row_at) = unstamped_entry(&pool, &[row_only]).await;
     let (stamped, stamped_p, stamped_at) = unstamped_entry(&pool, &[lab]).await;
     let (stale, stale_p, stale_at) = unstamped_entry(&pool, &[lab]).await;
-    let (_, text_p, text_at) = entry_with(&pool, &[lab], "gpt-x", "work on /w/clientco", None, None).await;
-    let (_, term_p, term_at) = entry_with(&pool, &[lab], "gpt-x", "the clientword deal", None, None).await;
+    let (_, text_p, text_at) =
+        entry_with(&pool, &[lab], "gpt-x", "work on /w/clientco", None, None).await;
+    let (_, term_p, term_at) =
+        entry_with(&pool, &[lab], "gpt-x", "the clientword deal", None, None).await;
     let path = format!("/w/clientco/{}", Uuid::new_v4());
-    let (_, path_p, path_at) = entry_with(&pool, &[lab], "gpt-x", "lab day", Some(&path), None).await;
+    let (_, path_p, path_at) =
+        entry_with(&pool, &[lab], "gpt-x", "lab day", Some(&path), None).await;
     let (_, claude_p, claude_at) = entry_with(
-        &pool, &[lab], "claude-haiku-5-5", "lab day", None,
+        &pool,
+        &[lab],
+        "claude-haiku-5-5",
+        "lab day",
+        None,
         Some(cutoff + chrono::Duration::hours(1)),
     )
     .await;
     let (july, july_p, july_at) = entry_with(
-        &pool, &[lab], "haiku", "lab day", None,
+        &pool,
+        &[lab],
+        "haiku",
+        "lab day",
+        None,
         Some(cutoff - chrono::Duration::days(90)),
     )
     .await;
-    sqlx::query("UPDATE journal_entries SET route = 'protected', route_at = generated_at WHERE id = $1")
-        .bind(stamped)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE journal_entries SET route = 'protected', route_at = generated_at WHERE id = $1",
+    )
+    .bind(stamped)
+    .execute(&pool)
+    .await
+    .unwrap();
     // R3: a stale protected stamp is still a stamp.
     sqlx::query("UPDATE journal_entries SET route = 'protected', route_at = generated_at - interval '1 hour' WHERE id = $1")
         .bind(stale)
@@ -374,7 +391,11 @@ async fn restamp_from_file_applies_only_unchanged_lab_entries() {
         .await
         .unwrap();
     assert_eq!(dry.render(), want);
-    assert_eq!(route_of(&pool, clean).await, None, "a dry run writes nothing");
+    assert_eq!(
+        route_of(&pool, clean).await,
+        None,
+        "a dry run writes nothing"
+    );
     let before = audits(&pool, "restamp-history").await;
 
     let done = restamp_from_file(&pool, &p, &file, Some("ac via the client desk"), later())
@@ -437,9 +458,17 @@ async fn restamp_route_write_rolls_back_with_a_failed_audit() {
     .execute(&pool)
     .await
     .unwrap();
-    let file = restamp_file(&g, hub::client_admin::RESTAMP_MIN_DISTILLER, started, &[(project, at, vec![lab])]);
+    let file = restamp_file(
+        &g,
+        hub::client_admin::RESTAMP_MIN_DISTILLER,
+        started,
+        &[(project, at, vec![lab])],
+    );
     let res = restamp_from_file(
-        &pool, &p, &file, Some("fail-the-audit"),
+        &pool,
+        &p,
+        &file,
+        Some("fail-the-audit"),
         started + chrono::Duration::seconds(10),
     )
     .await;
@@ -467,15 +496,47 @@ async fn restamp_from_file_refuses_an_untrusted_file() {
     let now = chrono::Utc::now();
     let ok = hub::client_admin::RESTAMP_MIN_DISTILLER;
     for (pol, file, by, why) in [
-        (&p, restamp_file(&"b".repeat(64), ok, started, &item), None, "generation"),
-        (&other, restamp_file(&g, ok, started, &item), None, "routing files"),
-        (&p, restamp_file(&g, "0.39.1", started, &item), None, "distiller"),
-        (&p, restamp_file(&g, ok, started - chrono::Duration::hours(25), &item), None, "older than 24 h"),
-        (&p, restamp_file(&g, ok, started, &item), Some(""), "approved-by"),
-        (&p, restamp_file(&g, ok, started, &item), Some("  "), "approved-by"),
+        (
+            &p,
+            restamp_file(&"b".repeat(64), ok, started, &item),
+            None,
+            "generation",
+        ),
+        (
+            &other,
+            restamp_file(&g, ok, started, &item),
+            None,
+            "routing files",
+        ),
+        (
+            &p,
+            restamp_file(&g, "0.39.1", started, &item),
+            None,
+            "distiller",
+        ),
+        (
+            &p,
+            restamp_file(&g, ok, started - chrono::Duration::hours(25), &item),
+            None,
+            "older than 24 h",
+        ),
+        (
+            &p,
+            restamp_file(&g, ok, started, &item),
+            Some(""),
+            "approved-by",
+        ),
+        (
+            &p,
+            restamp_file(&g, ok, started, &item),
+            Some("  "),
+            "approved-by",
+        ),
         (&p, b"not json".to_vec(), None, "not a restamp file"),
     ] {
-        let err = restamp_from_file(&pool, pol, &file, by, now).await.unwrap_err();
+        let err = restamp_from_file(&pool, pol, &file, by, now)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains(why), "{why}: {err}");
     }
     // R2: the accepted generation moved after the file was written.
@@ -500,7 +561,10 @@ fn restamp_file_must_be_private_and_not_a_link() {
     let open = dir.join("open.json");
     std::fs::write(&open, b"{}").unwrap();
     std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(hub::client_admin::read_restamp_file(&open).unwrap_err().to_string().contains("0600"));
+    assert!(hub::client_admin::read_restamp_file(&open)
+        .unwrap_err()
+        .to_string()
+        .contains("0600"));
     let link = dir.join("link.json");
     std::os::unix::fs::symlink(&good, &link).unwrap();
     assert!(hub::client_admin::read_restamp_file(&link).is_err());
