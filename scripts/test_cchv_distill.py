@@ -1361,3 +1361,35 @@ def test_the_client_token_is_never_taken_from_the_environment(monkeypatch, tmp_p
     cache.write_text("cached-tok")
     monkeypatch.setattr(d, "CLIENT_TOKEN_CACHE", cache)
     assert d.resolve_client_token() == "cached-tok"
+
+
+def test_a_client_token_in_cchv_hub_token_is_refused(monkeypatch, tmp_path) -> None:
+    cache = tmp_path / "client"
+    cache.write_text("the-client-token")
+    monkeypatch.setattr(d, "CLIENT_TOKEN_CACHE", cache)
+    monkeypatch.setattr(d, "TOKEN_CACHE", tmp_path / "machine")
+    monkeypatch.setattr(d, "bao_login", lambda: None)
+    monkeypatch.setattr(d, "bao_token", lambda: "the-machine-token")
+    monkeypatch.setattr(d, "op_token", lambda: None)
+    monkeypatch.setenv("CCHV_HUB_TOKEN", "the-client-token")
+    assert d.resolve_token() == "the-machine-token"
+    assert (tmp_path / "machine").read_text() == "the-machine-token", "never cached as the machine token"
+
+
+def test_no_hub_token_reaches_a_model_cli(monkeypatch) -> None:
+    monkeypatch.setenv("CCHV_HUB_TOKEN", "m")
+    monkeypatch.setenv("CCHV_HUB_CLIENT_TOKEN", "c")
+    seen = {}
+
+    class Done:
+        returncode = 0
+        stdout = json.dumps({"result": "{}", "modelUsage": {"claude-x": {}}})
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        seen["env"] = kw.get("env", {})
+        return Done()
+
+    monkeypatch.setattr(d.subprocess, "run", fake_run)
+    d._claude_generate("claude-x", "prompt", direct=True)
+    assert not set(d.HUB_TOKEN_ENV) & set(seen["env"]), "neither token variable is passed on"

@@ -257,8 +257,25 @@ def op_token() -> str | None:
 TOKEN_CACHE = Path.home() / ".config/cchv/distill-hub-token"
 
 
+def _is_client_token(tok: str) -> bool:
+    """Whether `tok` is the distiller's client-read token (cached or in bao)."""
+    known = []
+    if CLIENT_TOKEN_CACHE.is_file():
+        known.append(CLIENT_TOKEN_CACHE.read_text().strip())
+    client_token = bao_login()
+    if client_token:
+        known.append(bao_kv_field(client_token, CLIENT_TOKEN_KV, "token") or "")
+    return any(k and k == tok for k in known)
+
+
 def resolve_token() -> str:
-    tok = os.environ.get("CCHV_HUB_TOKEN") or bao_token() or op_token()
+    env_tok = os.environ.get("CCHV_HUB_TOKEN")
+    if env_tok and _is_client_token(env_tok):
+        # A client-read token must never land in the machine-token cache or be
+        # used as the machine token (security review).
+        log("refusing CCHV_HUB_TOKEN: it is the client-read token, not a machine token")
+        env_tok = None
+    tok = env_tok or bao_token() or op_token()
     if tok:
         try:
             TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
@@ -284,6 +301,9 @@ def resolve_token() -> str:
 # last-known-good cache. NEVER from the environment: an environment variable
 # is readable by every child process, a model CLI included.
 CLIENT_TOKEN_CACHE = Path.home() / ".config/cchv/distill-client-token"
+# Environment variables that may hold a hub token: removed from every model
+# CLI's environment.
+HUB_TOKEN_ENV = ("CCHV_HUB_TOKEN", "CCHV_HUB_CLIENT_TOKEN")
 CLIENT_TOKEN_KV = "agents/cchv-client-readers/distiller"
 
 
@@ -1006,7 +1026,13 @@ def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str
     It is the protected call, so its errors describe the CLI's output by length
     and hash and never quote it (the client's security review #18).
     """
-    env = {k: v for k, v in os.environ.items() if not (direct and k in PROXY_ENV)}
+    # The hub tokens never reach a model CLI's environment (security review):
+    # neither the machine token nor a client-read token, whatever the route.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not (direct and k in PROXY_ENV) and k not in HUB_TOKEN_ENV
+    }
 
     def show(text: str) -> str:
         return describe(text) if direct else repr(text[:300])
