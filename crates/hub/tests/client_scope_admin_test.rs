@@ -183,7 +183,7 @@ async fn accept_routing_makes_a_narrowed_set_usable() {
 
 /// R2-F: only an entry whose own text and every session match nothing under
 /// the full router (markers AND terms), with every session lab, is restamped.
-/// An unstamped entry for the restamp tests; returns (id, generated_at).
+/// An unstamped entry for the restamp tests: its id, project path and `generated_at`.
 async fn unstamped_entry(pool: &PgPool, sessions: &[i64]) -> (i64, String, String) {
     let project = format!("/w/rs-{}", Uuid::new_v4());
     let (id, at): (i64, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
@@ -195,7 +195,11 @@ async fn unstamped_entry(pool: &PgPool, sessions: &[i64]) -> (i64, String, Strin
     .fetch_one(pool)
     .await
     .unwrap();
-    (id, project, at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true))
+    (
+        id,
+        project,
+        at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    )
 }
 
 fn restamp_file(
@@ -255,11 +259,13 @@ async fn restamp_from_file_applies_only_unchanged_lab_entries() {
     let (_, gen_p, gen_at) = unstamped_entry(&pool, &[old_gen]).await;
     let (_, grow_p, grow_at) = unstamped_entry(&pool, &[grows]).await;
     let (stamped, stamped_p, stamped_at) = unstamped_entry(&pool, &[lab]).await;
-    sqlx::query("UPDATE journal_entries SET route = 'protected', route_at = generated_at WHERE id = $1")
-        .bind(stamped)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE journal_entries SET route = 'protected', route_at = generated_at WHERE id = $1",
+    )
+    .bind(stamped)
+    .execute(&pool)
+    .await
+    .unwrap();
     // `grows` gets a message after the router's read.
     sqlx::query(
         "INSERT INTO messages (session_id, machine_id, provider, message_key, content, raw)
@@ -288,13 +294,24 @@ async fn restamp_from_file_applies_only_unchanged_lab_entries() {
         ],
     );
 
-    let dry = restamp_from_file(&pool, &file, None, chrono::Utc::now()).await.unwrap();
-    assert_eq!(dry.render(), "listed 8, restamped 1; skipped: changed_since 1, gone 1, regenerated 1, \
-                               session_not_lab 2, sessions_differ 1, stamped 1");
-    assert_eq!(route_of(&pool, clean).await, None, "a dry run writes nothing");
+    // The classify run "finished" 5 s after it started; apply after that.
+    let later = || chrono::Utc::now() + chrono::Duration::seconds(10);
+    let dry = restamp_from_file(&pool, &file, None, later())
+        .await
+        .unwrap();
+    assert_eq!(
+        dry.render(),
+        "listed 8, restamped 1; skipped: changed_since 1, gone 1, regenerated 1, \
+                               session_not_lab 2, sessions_differ 1, stamped 1"
+    );
+    assert_eq!(
+        route_of(&pool, clean).await,
+        None,
+        "a dry run writes nothing"
+    );
     let before = audits(&pool, "restamp-history").await;
 
-    let done = restamp_from_file(&pool, &file, Some("ac via the client desk"), chrono::Utc::now())
+    let done = restamp_from_file(&pool, &file, Some("ac via the client desk"), later())
         .await
         .unwrap();
     assert_eq!(done.render(), dry.render());
@@ -315,7 +332,10 @@ async fn restamp_from_file_applies_only_unchanged_lab_entries() {
     .unwrap();
     assert_eq!(gen.as_deref(), Some(g.as_str()));
     let detail = detail.unwrap();
-    assert!(detail.contains(&hex(&file)) && detail.contains(hub::client_admin::RESTAMP_MIN_DISTILLER), "{detail}");
+    assert!(
+        detail.contains(&hex(&file)) && detail.contains(hub::client_admin::RESTAMP_MIN_DISTILLER),
+        "{detail}"
+    );
 }
 
 /// E8: the whole file is refused when it cannot be trusted, and E7: an empty
@@ -337,11 +357,31 @@ async fn restamp_from_file_refuses_an_untrusted_file() {
     let now = chrono::Utc::now();
     let ok = hub::client_admin::RESTAMP_MIN_DISTILLER;
     for (file, by, why) in [
-        (restamp_file(&"b".repeat(64), ok, started, &item), None, "generation"),
-        (restamp_file(&g, "0.39.1", started, &item), None, "distiller"),
-        (restamp_file(&g, ok, started - chrono::Duration::hours(25), &item), None, "older than 24 h"),
-        (restamp_file(&g, ok, started, &item), Some(""), "approved-by"),
-        (restamp_file(&g, ok, started, &item), Some("  "), "approved-by"),
+        (
+            restamp_file(&"b".repeat(64), ok, started, &item),
+            None,
+            "generation",
+        ),
+        (
+            restamp_file(&g, "0.39.1", started, &item),
+            None,
+            "distiller",
+        ),
+        (
+            restamp_file(&g, ok, started - chrono::Duration::hours(25), &item),
+            None,
+            "older than 24 h",
+        ),
+        (
+            restamp_file(&g, ok, started, &item),
+            Some(""),
+            "approved-by",
+        ),
+        (
+            restamp_file(&g, ok, started, &item),
+            Some("  "),
+            "approved-by",
+        ),
         (b"not json".to_vec(), None, "not a restamp file"),
     ] {
         let err = restamp_from_file(&pool, &file, by, now).await.unwrap_err();

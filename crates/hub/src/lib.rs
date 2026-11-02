@@ -283,7 +283,13 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
         .client_scope
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("no [client_scope] in the hub config"))?;
-    let read_only = matches!(action, ClientScopeAdmin::Restamp { approved_by: None });
+    let read_only = matches!(
+        action,
+        ClientScopeAdmin::Restamp {
+            approved_by: None,
+            ..
+        }
+    );
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(std::time::Duration::from_secs(5))
@@ -326,13 +332,24 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
             client_admin::unlatch(&pool, &reason, &approved_by).await?;
             println!("enforcement latch lifted; a config with enforce = false now observes");
         }
-        ClientScopeAdmin::Restamp { approved_by } => {
-            let p = policy()?;
-            let r = client_admin::restamp_history(&pool, &p, approved_by.as_deref()).await?;
+        ClientScopeAdmin::Restamp { from, approved_by } => {
+            let file = std::fs::read(&from)
+                .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", from.display()))?;
+            let r = client_admin::restamp_from_file(
+                &pool,
+                &file,
+                approved_by.as_deref(),
+                chrono::Utc::now(),
+            )
+            .await?;
             println!(
-                "restamp-history{}: checked {}, restampable {}, entry text hit {}, session not lab {}, session term hit {}",
-                if approved_by.is_some() { "" } else { " (dry run, nothing written)" },
-                r.checked, r.restampable, r.entry_text_hit, r.session_not_lab, r.session_term_hit
+                "restamp-history{}: {}",
+                if approved_by.is_some() {
+                    ""
+                } else {
+                    " (dry run, nothing written)"
+                },
+                r.render()
             );
         }
     }
@@ -353,7 +370,10 @@ pub enum ClientScopeAdmin {
         reason: String,
         approved_by: String,
     },
+    /// Apply the distiller's `--restamp-history` file (design R3-E8);
+    /// `approved_by: None` is the dry run.
     Restamp {
+        from: std::path::PathBuf,
         approved_by: Option<String>,
     },
 }

@@ -7,7 +7,6 @@
 use sqlx::PgPool;
 
 use crate::client_policy::Policy;
-use crate::client_scope::{normalize, Markers};
 use crate::client_state::{audit, record_set};
 
 /// Accept the routing file's marker set as it is now, removals included
@@ -73,112 +72,209 @@ pub async fn unlatch(pool: &PgPool, reason: &str, approved_by: &str) -> anyhow::
     audit(pool, "unlatch", None, Some(reason), Some(approved_by)).await
 }
 
-/// (id, headline, summary, topics, open questions, session ids).
-type EntryRow = (
-    i64,
-    Option<String>,
-    Option<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<i64>,
-);
+/// The oldest distiller whose `--restamp-history` file this hub applies: the
+/// release that ships the classify step (design R3-E8).
+pub const RESTAMP_MIN_DISTILLER: &str = "0.40.0";
+/// A file older than this is refused (security, E8-b).
+pub const RESTAMP_MAX_AGE_HOURS: i64 = 24;
 
-/// Counts only.
-#[derive(Debug, Default)]
-pub struct RestampReport {
-    pub checked: u64,
-    pub restampable: u64,
-    pub entry_text_hit: u64,
-    pub session_not_lab: u64,
-    pub session_term_hit: u64,
+#[derive(Debug, serde::Deserialize)]
+struct RestampFile {
+    format: u32,
+    distiller_version: String,
+    generation: String,
+    started_at: chrono::DateTime<chrono::Utc>,
+    finished_at: chrono::DateTime<chrono::Utc>,
+    restampable: Vec<RestampItem>,
 }
 
-/// `restamp-history` (R2-F): an entry with no current route stamp becomes lab
-/// again only when its own text (headline, summary, topics, questions) and
-/// every one of its sessions match nothing under the FULL router: the path
-/// markers and the content terms. Its sessions must also be lab under the
-/// current generation. A dry run writes nothing; the write needs ac's row with
-/// the client desk's word, which `approved_by` names.
-pub async fn restamp_history(
-    pool: &PgPool,
-    policy: &Policy,
-    approved_by: Option<&str>,
-) -> anyhow::Result<RestampReport> {
-    let mut report = RestampReport::default();
-    let terms = &policy.terms;
-    let hit = |m: &Markers, text: &str| {
-        let t = normalize(text);
-        m.matches(&t) || terms.iter().any(|w| t.contains(w.as_str()))
-    };
-    let rows: Vec<EntryRow> = sqlx::query_as(
-        "SELECT id, headline, summary, topics, open_questions, session_ids
-             FROM journal_entries
-             WHERE status = 'entry'
-               AND (route IS NULL OR route_at IS DISTINCT FROM generated_at)
-             ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await?;
-    for (id, headline, summary, topics, questions, sessions) in rows {
-        report.checked += 1;
-        let text = [headline.unwrap_or_default(), summary.unwrap_or_default()]
-            .into_iter()
-            .chain(topics)
-            .chain(questions)
+#[derive(Debug, serde::Deserialize)]
+struct RestampItem {
+    entry_date: chrono::NaiveDate,
+    project_path: String,
+    generated_at: chrono::DateTime<chrono::Utc>,
+    session_ids: Vec<i64>,
+}
+
+/// Counts only: entries listed, entries restamped (or that a dry run would
+/// restamp), and the entries skipped per reason.
+#[derive(Debug, Default)]
+pub struct RestampReport {
+    pub listed: u64,
+    pub restamped: u64,
+    pub skipped: std::collections::BTreeMap<&'static str, u64>,
+}
+
+impl RestampReport {
+    pub fn render(&self) -> String {
+        let skipped = self
+            .skipped
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
             .collect::<Vec<_>>()
-            .join("\n");
-        if hit(&policy.markers, &text) {
-            report.entry_text_hit += 1;
-            continue;
-        }
-        let lab: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM sessions WHERE id = ANY($1) AND client_class = 'none' AND client_gen = $2",
+            .join(", ");
+        format!(
+            "listed {}, restamped {}; skipped: {}",
+            self.listed,
+            self.restamped,
+            if skipped.is_empty() { "none" } else { &skipped }
         )
-        .bind(&sessions)
-        .bind(&policy.generation)
+    }
+}
+
+fn version_triple(v: &str) -> Option<(u64, u64, u64)> {
+    let mut it = v.trim().split('.').map(|p| p.parse::<u64>().ok());
+    let t = (it.next()??, it.next()??, it.next()??);
+    it.next().is_none().then_some(t)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+/// `restamp-history --from FILE` (design R3-E8, security E8): make lab again
+/// only the entries the distiller's live router listed in `file`, each after a
+/// re-check of what may have changed since the router read it. The hub makes
+/// no client decision of its own here.
+///
+/// The whole file is refused when its generation is not the accepted one, its
+/// distiller is older than [`RESTAMP_MIN_DISTILLER`], it finished more than
+/// [`RESTAMP_MAX_AGE_HOURS`] before `now`, or `approved_by` is empty (E7).
+/// Each entry is then locked and written with its audit row in one
+/// transaction, only when it is still unstamped, was not regenerated, names
+/// the same sessions, and every session is lab at the current generation with
+/// no row or message change after `started_at`. `approved_by: None` is the
+/// dry run: the same checks, nothing written.
+pub async fn restamp_from_file(
+    pool: &PgPool,
+    file: &[u8],
+    approved_by: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<RestampReport> {
+    if approved_by.is_some_and(|by| by.trim().is_empty()) {
+        anyhow::bail!("--approved-by is empty: name who approved the restamp");
+    }
+    let f: RestampFile =
+        serde_json::from_slice(file).map_err(|e| anyhow::anyhow!("not a restamp file: {e}"))?;
+    if f.format != 1 {
+        anyhow::bail!("not a restamp file: format {}", f.format);
+    }
+    let current: Option<String> = sqlx::query_scalar("SELECT generation FROM client_scope_state")
         .fetch_one(pool)
         .await?;
-        if sessions.is_empty() || usize::try_from(lab).unwrap_or(0) != sessions.len() {
-            report.session_not_lab += 1;
-            continue;
+    if current.as_deref() != Some(f.generation.as_str()) {
+        anyhow::bail!("the file's generation is not the accepted one: re-run the classify step");
+    }
+    let min = version_triple(RESTAMP_MIN_DISTILLER).expect("a valid minimum");
+    if version_triple(&f.distiller_version).map_or(true, |v| v < min) {
+        anyhow::bail!(
+            "the file comes from distiller {}, older than {RESTAMP_MIN_DISTILLER}",
+            f.distiller_version
+        );
+    }
+    if now - f.finished_at > chrono::Duration::hours(RESTAMP_MAX_AGE_HOURS)
+        || f.finished_at > now
+        || f.started_at > f.finished_at
+    {
+        anyhow::bail!("the file is older than {RESTAMP_MAX_AGE_HOURS} h (or dated ahead): re-run the classify step");
+    }
+    let file_sha = sha256_hex(file);
+    let mut report = RestampReport::default();
+    for item in &f.restampable {
+        report.listed += 1;
+        let mut tx = pool.begin().await?;
+        let verdict = restamp_check(&mut tx, item, &f.generation, f.started_at).await?;
+        match verdict {
+            Err(reason) => *report.skipped.entry(reason).or_default() += 1,
+            Ok(id) => {
+                report.restamped += 1;
+                if let Some(by) = approved_by {
+                    sqlx::query(
+                        "UPDATE journal_entries SET route = 'general-restamped', route_at = generated_at WHERE id = $1",
+                    )
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                    sqlx::query(
+                        "INSERT INTO client_scope_audit (action, entry_id, generation, detail, approved_by)
+                         VALUES ('restamp-history', $1, $2, $3, $4)",
+                    )
+                    .bind(id)
+                    .bind(&f.generation)
+                    .bind(format!(
+                        "file sha256 {file_sha}; distiller {}; classified {}",
+                        f.distiller_version, f.started_at
+                    ))
+                    .bind(by)
+                    .execute(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                    continue;
+                }
+            }
         }
-        // The hub's flag uses no terms (Q1), so the terms are checked here,
-        // over every message of every session.
-        let term_hit: bool = if terms.is_empty() {
-            false
-        } else {
-            let pattern: Vec<String> = terms.iter().map(|t| format!("%{t}%")).collect();
-            sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM messages WHERE session_id = ANY($1)
-                                AND lower(coalesce(content::text, '')) LIKE ANY($2))",
-            )
-            .bind(&sessions)
-            .bind(&pattern)
-            .fetch_one(pool)
-            .await?
-        };
-        if term_hit {
-            report.session_term_hit += 1;
-            continue;
-        }
-        report.restampable += 1;
-        if let Some(by) = approved_by {
-            sqlx::query(
-                "UPDATE journal_entries SET route = 'general-restamped', route_at = generated_at WHERE id = $1",
-            )
-            .bind(id)
-            .execute(pool)
-            .await?;
-            sqlx::query(
-                "INSERT INTO client_scope_audit (action, entry_id, generation, approved_by)
-                 VALUES ('restamp-history', $1, $2, $3)",
-            )
-            .bind(id)
-            .bind(&policy.generation)
-            .bind(by)
-            .execute(pool)
-            .await?;
-        }
+        tx.rollback().await?;
     }
     Ok(report)
+}
+
+/// The per-entry re-check, under a row lock: the entry id, or why it is skipped.
+async fn restamp_check(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    item: &RestampItem,
+    generation: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Result<i64, &'static str>> {
+    type Row = (
+        i64,
+        chrono::DateTime<chrono::Utc>,
+        Vec<i64>,
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT id, generated_at, session_ids, route, route_at FROM journal_entries
+         WHERE entry_date = $1 AND project_path = $2 AND status = 'entry' FOR UPDATE",
+    )
+    .bind(item.entry_date)
+    .bind(&item.project_path)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((id, generated_at, sessions, route, route_at)) = row else {
+        return Ok(Err("gone"));
+    };
+    if route.is_some() && route_at == Some(generated_at) {
+        return Ok(Err("stamped"));
+    }
+    if generated_at != item.generated_at {
+        return Ok(Err("regenerated"));
+    }
+    if sessions != item.session_ids || sessions.is_empty() {
+        return Ok(Err("sessions_differ"));
+    }
+    let (lab, changed): (i64, bool) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE s.client_class = 'none' AND s.client_gen = $2),
+                bool_or(s.updated_at > $3
+                        OR EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.created_at > $3))
+         FROM sessions s WHERE s.id = ANY($1)",
+    )
+    .bind(&sessions)
+    .bind(generation)
+    .bind(started_at)
+    .fetch_one(&mut **tx)
+    .await?;
+    if usize::try_from(lab).ok() != Some(sessions.len()) {
+        return Ok(Err("session_not_lab"));
+    }
+    if changed {
+        return Ok(Err("changed_since"));
+    }
+    Ok(Ok(id))
 }

@@ -35,7 +35,7 @@ USAGE:
                                          clear one session's client class (a narrowing); audited
     hub client-scope unlatch --reason TEXT --approved-by WHO
                                          lift the enforcement latch (emergency); audited
-    hub client-scope restamp-history --dry-run | --approved-by WHO
+    hub client-scope restamp-history --from FILE --dry-run | --approved-by WHO
                                          make pre-routing journal entries lab again where their
                                          text and sessions match nothing under the full router
                                          (markers and terms); the write is audited
@@ -272,8 +272,16 @@ async fn main() -> anyhow::Result<()> {
                 if dry == by.is_some() {
                     usage_error("client-scope restamp-history needs exactly one of --dry-run or --approved-by WHO");
                 }
-                hub::run_client_scope_admin(hub::ClientScopeAdmin::Restamp { approved_by: by })
-                    .await
+                // The classify step's file (`cchv-distill --restamp-history FILE`):
+                // the hub no longer decides on its own (design R3-E8).
+                let from = flag_values(&args[2..], "--from").pop().unwrap_or_else(|| {
+                    usage_error("client-scope restamp-history needs --from FILE (from cchv-distill --restamp-history)")
+                });
+                hub::run_client_scope_admin(hub::ClientScopeAdmin::Restamp {
+                    from: from.into(),
+                    approved_by: by,
+                })
+                .await
             }
             Some("sweep") => {
                 let dry_run = args[2..].iter().any(|a| a == "--dry-run");
