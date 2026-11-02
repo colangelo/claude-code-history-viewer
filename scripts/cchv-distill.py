@@ -475,6 +475,21 @@ class Hub:
         except (requests.RequestException, RuntimeError) as e:
             log(f"WARN: tick record failed (continuing): {e}")
 
+    def client_scope_health(self) -> dict:
+        """`/v1/healthz/client-scope` with the read credential: mode, generation
+        prefix, and the caller's own scope (design R3-E8). A 503 still carries
+        the body, so it is returned rather than raised."""
+        headers = {"Authorization": f"Bearer {self.read_token}"} if self.read_token else None
+        r = self.session.get(f"{self.url}/v1/healthz/client-scope",
+                             timeout=HTTP_TIMEOUT_SECS, headers=headers)
+        return r.json()
+
+    def journal_entries(self, offset: int, limit: int) -> list[dict]:
+        return _with_retry(
+            f"journal entries (offset {offset})",
+            lambda: self.get("/v1/journal/entries", limit=limit, offset=offset).json(),
+        )
+
     def pending(self, from_date: str | None, limit: int) -> list[dict]:
         return _with_retry(
             "pending query",
@@ -936,6 +951,138 @@ def load_routing(path: Path = ROUTING_FILE, floor: Path | None = None) -> Routin
     return r
 
 
+# --- restamp-history, step 1: classify (design R3-E8, security E8) -----------
+#
+# The hub's `restamp-history --from FILE` makes a historical entry lab again only
+# when this step listed it. This step decides with the live router and nothing
+# else: the hub re-checks only what may have changed since, and writes.
+
+# When protected routing went live (v0.27.0). A Claude entry generated after it
+# was protected by the router of its day and stays hidden.
+ROUTING_LIVE_AT = datetime(2026, 10, 21, 10, 16, 59, tzinfo=timezone.utc)
+# Where the file may be written: both folders are GPT-denied (security, E8-c).
+RESTAMP_DIRS = (Path.home() / ".config" / "cchv", Path.home() / ".local" / "state" / "cchv")
+RESTAMP_PAGE = 200
+
+
+class RestampRefused(RuntimeError):
+    """The classify step will not start: its answer could not be trusted."""
+
+
+def routing_generation(routing: Path = ROUTING_FILE, floor: Path = ROUTING_FLOOR_FILE) -> str:
+    """The hub's policy generation: sha256 of (routing bytes ‖ floor bytes)."""
+    return hashlib.sha256(routing.read_bytes() + floor.read_bytes()).hexdigest()
+
+
+def _is_claude(model) -> bool:
+    m = model.lower() if isinstance(model, str) else ""
+    return any(w in m for w in ("claude", "haiku", "sonnet", "opus"))
+
+
+def restamp_entry_class(hub, routing: Routing, entry: dict, sessions: dict) -> str | None:
+    """Why an unstamped entry stays hidden, or None when it is restampable.
+
+    The checks run in order and the first hit decides. `sessions` caches each
+    session's class for the run: a session in many entries is read once.
+    """
+    try:
+        generated = datetime.fromisoformat(entry["generated_at"])
+    except (KeyError, TypeError, ValueError):
+        return "unreadable"
+    if generated >= ROUTING_LIVE_AT and _is_claude(entry.get("model")):
+        return "was_protected"
+    texts = [entry.get("headline"), entry.get("summary"),
+             *(entry.get("topics") or []), *(entry.get("open_questions") or [])]
+    for t in texts:
+        if t is None:
+            continue
+        if not isinstance(t, str):
+            return "unreadable"
+        n = normalize(t)
+        if routing.marker_in(n) or routing.term_in(n):
+            return "entry_text"
+    project = entry.get("project_path")
+    if not isinstance(project, str):
+        return "unreadable"
+    if routing.marker_in(normalize(project)):
+        return "path"
+    ids = entry.get("session_ids")
+    if not isinstance(ids, list) or not all(type(i) is int for i in ids):
+        return "unreadable"
+    if not ids:
+        return "no_sessions"
+    for sid in ids:
+        if sid not in sessions:
+            # The live router's whole-session pass, one session at a time; the
+            # project path is checked above, so none is passed here.
+            sessions[sid] = route_group(hub, routing, "", [sid])
+        if sessions[sid] is not None:
+            return sessions[sid]
+    return None
+
+
+def _open_new_private(path: Path):
+    """Create `path` for writing: it must not exist, and a link is never followed."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    return os.fdopen(fd, "w")
+
+
+def restamp_classify(hub, routing: Routing, generation: str, out: Path,
+                     allowed_dirs: tuple[Path, ...] = RESTAMP_DIRS) -> dict[str, int]:
+    """Classify every unstamped entry; write the restampable ones to `out`.
+
+    Refuses to start (`RestampRefused`) when the answer could not be trusted:
+    protect-all routing, a hub on another generation, client scope off, or a
+    lab caller under enforce (it would see a partial history). The file holds
+    only restampable entries; every other entry is a count per class.
+    """
+    if routing.protect_all:
+        raise RestampRefused(f"routing is protect-all ({routing.reason})")
+    folder = out.parent.resolve()
+    if not any(folder == a.resolve() or a.resolve() in folder.parents for a in allowed_dirs):
+        raise RestampRefused(f"{out} is outside the allowed folders")
+    health = hub.client_scope_health()
+    if health.get("mode") not in ("observe", "enforce"):
+        raise RestampRefused("client scope is not on at the hub")
+    if health.get("generation") != generation[:12]:
+        raise RestampRefused("the hub's generation differs from the routing files here")
+    if health.get("mode") == "enforce" and health.get("caller_scope") != "client":
+        raise RestampRefused("a lab caller under enforce sees a partial history")
+
+    started = datetime.now(timezone.utc)
+    with _open_new_private(out) as fh:
+        counts: Counter = Counter()
+        sessions: dict = {}
+        keep: list[dict] = []
+        offset = 0
+        while True:
+            page = hub.journal_entries(offset, RESTAMP_PAGE)
+            if not page:
+                break
+            offset += len(page)
+            for e in page:
+                if e.get("status") != "entry" or e.get("route") is not None:
+                    continue
+                counts["checked"] += 1
+                cls = restamp_entry_class(hub, routing, e, sessions)
+                if cls is None:
+                    counts["restampable"] += 1
+                    keep.append({k: e[k] for k in
+                                 ("entry_date", "project_path", "generated_at", "session_ids")})
+                else:
+                    counts[f"class:{cls}"] += 1
+        json.dump({
+            "format": 1,
+            "distiller_version": DISTILL_VERSION,
+            "generation": generation,
+            "started_at": started.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "counts": dict(counts),
+            "restampable": keep,
+        }, fh, indent=1)
+    return dict(counts)
+
+
 def record_routing_floor(path: Path, floor: Path,
                          narrowing_approved_by: str | None = None) -> tuple[bool, str]:
     """Record the routing file's counts and sha256 as its floor (`--record-routing-floor`).
@@ -1361,7 +1508,29 @@ def main() -> int:
                          "(after an approved edit; refuses to lower a count)")
     ap.add_argument("--narrowing-approved-by",
                     help="with --record-routing-floor: who approved lowering a count")
+    ap.add_argument("--restamp-history", metavar="FILE",
+                    help="classify every unstamped journal entry with the live router and write "
+                         "the restampable ones to FILE (new, 0600, under ~/.config/cchv or "
+                         "~/.local/state/cchv) for `cchv-hub client-scope restamp-history --from`; "
+                         "hub GETs only, no model call (design R3-E8)")
     args = ap.parse_args()
+
+    if args.restamp_history:
+        log(f"cchv-distill {DISTILL_VERSION} blob={script_blob_id()[:12]} mode=restamp-history")
+        routing = load_routing(ROUTING_FILE, floor=ROUTING_FLOOR_FILE)
+        if routing.protect_all:
+            log(f"REFUSED: routing is protect-all ({routing.reason})")
+            return 2
+        hub = Hub(args.hub_url, resolve_token(), read_token=resolve_client_token())
+        try:
+            counts = restamp_classify(hub, routing, routing_generation(),
+                                      Path(args.restamp_history).expanduser())
+        except (RestampRefused, FileExistsError, OSError) as e:
+            log(f"REFUSED: {e}")
+            return 2
+        log("restamp-history classify: "
+            + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        return 0
 
     if args.record_routing_floor:
         ok, msg = record_routing_floor(ROUTING_FILE, ROUTING_FLOOR_FILE,

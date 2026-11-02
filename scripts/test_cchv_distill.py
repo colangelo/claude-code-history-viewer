@@ -1439,7 +1439,7 @@ def test_the_hubs_class_routes_before_the_distillers_own_check(tmp_path, monkeyp
 
 AFTER = "2026-10-25T12:00:00Z"  # generated after protected routing went live
 BEFORE = "2026-09-01T12:00:00Z"
-GEN = "a" * 64
+RESTAMP_GEN = "a" * 64
 
 
 class RestampHub:
@@ -1447,7 +1447,7 @@ class RestampHub:
 
     def __init__(self, entries, sessions, health=None, page=2) -> None:
         self.entries, self.sessions, self.page = entries, sessions, page
-        self.health = health or {"mode": "observe", "generation": GEN[:12], "caller_scope": "lab"}
+        self.health = health or {"mode": "observe", "generation": RESTAMP_GEN[:12], "caller_scope": "lab"}
         self.reads = []
 
     def client_scope_health(self):
@@ -1474,7 +1474,7 @@ def _classify(tmp_path, entries, sessions, health=None, out=None):
     r = _routing(tmp_path, ROUTING_FULL_TOML)
     hub = RestampHub(entries, sessions, health)
     out = out or tmp_path / "restamp.json"
-    counts = d.restamp_classify(hub, r, GEN, out, allowed_dirs=(tmp_path,))
+    counts = d.restamp_classify(hub, r, RESTAMP_GEN, out, allowed_dirs=(tmp_path,))
     return counts, out, hub
 
 
@@ -1514,7 +1514,7 @@ def test_restamp_a_clean_entry_is_restampable(tmp_path, model, at) -> None:
     rec = json.loads(out.read_text())
     assert [(e["entry_date"], e["project_path"], e["session_ids"]) for e in rec["restampable"]] == [
         ("2026-09-01", LAB, [1])]
-    assert rec["generation"] == GEN and rec["distiller_version"] == d.DISTILL_VERSION
+    assert rec["generation"] == RESTAMP_GEN and rec["distiller_version"] == d.DISTILL_VERSION
     assert rec["started_at"] <= rec["finished_at"]
 
 
@@ -1536,8 +1536,8 @@ def test_restamp_file_names_no_hidden_entry(tmp_path) -> None:
 
 @pytest.mark.parametrize("health, why", [
     ({"mode": "observe", "generation": "b" * 12, "caller_scope": "lab"}, "generation"),
-    ({"mode": "enforce", "generation": GEN[:12], "caller_scope": "lab"}, "lab caller"),
-    ({"mode": "enforce", "generation": GEN[:12], "caller_scope": None}, "lab caller"),
+    ({"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": "lab"}, "lab caller"),
+    ({"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": None}, "lab caller"),
     ({"mode": "off"}, "not on"),
 ])
 def test_restamp_refuses_to_start(tmp_path, health, why) -> None:
@@ -1547,7 +1547,7 @@ def test_restamp_refuses_to_start(tmp_path, health, why) -> None:
 
 
 def test_restamp_reads_as_a_client_reader_under_enforce(tmp_path) -> None:
-    health = {"mode": "enforce", "generation": GEN[:12], "caller_scope": "client"}
+    health = {"mode": "enforce", "generation": RESTAMP_GEN[:12], "caller_scope": "client"}
     counts, _, _ = _classify(tmp_path, [_entry(1)], {1: LAB_SESSION}, health)
     assert counts["restampable"] == 1
 
@@ -1555,7 +1555,7 @@ def test_restamp_reads_as_a_client_reader_under_enforce(tmp_path) -> None:
 def test_restamp_refuses_protect_all_routing(tmp_path) -> None:
     r = d.load_routing(tmp_path / "missing.toml")
     with pytest.raises(d.RestampRefused, match="protect-all"):
-        d.restamp_classify(RestampHub([], {}), r, GEN, tmp_path / "o.json", allowed_dirs=(tmp_path,))
+        d.restamp_classify(RestampHub([], {}), r, RESTAMP_GEN, tmp_path / "o.json", allowed_dirs=(tmp_path,))
 
 
 def test_restamp_refuses_an_existing_file_or_a_link(tmp_path) -> None:
@@ -1576,7 +1576,7 @@ def test_restamp_refuses_a_file_outside_the_allowed_folders(tmp_path) -> None:
     inside = tmp_path / "ok"
     inside.mkdir()
     with pytest.raises(d.RestampRefused, match="outside"):
-        d.restamp_classify(RestampHub([_entry(1)], {1: LAB_SESSION}), r, GEN,
+        d.restamp_classify(RestampHub([_entry(1)], {1: LAB_SESSION}), r, RESTAMP_GEN,
                            tmp_path / "restamp.json", allowed_dirs=(inside,))
 
 
