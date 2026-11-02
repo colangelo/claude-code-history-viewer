@@ -426,7 +426,18 @@ test failed each time.
 - **R7:** the apply holds the sessions `FOR SHARE`. A row or message change since `started_at`, less
   a 15-minute margin for one ingest batch, skips the entry.
 - **R8:** an entry's sessions are routed as one group, so the live per-group limits hold.
-- **R9** (unknown blocks and a null `cwd` in the shared router) lands with E1, before any run.
+- **R9** (unknown blocks and a null `cwd` in the shared router), met (security d53f34c):
+  - **Unknown blocks** (a80ee182): `flatten` reads only the block types the hub serves. Any
+    other type, a missing type or a wrong-case type makes the group unreadable. This covers live
+    routing too.
+  - **Null `cwd`** (security's ruling, option a): null stays "no signal for this message", and a
+    missing key still protects. The reason is the data. On pg1 (2026-11-02, 14 days), 1.90M of
+    2.02M served Claude messages had no `cwd` in the record, and so did every Codex, pi and
+    opencode message. Reading null as unavailable would have protected every group and ended
+    general routing. The folder is still checked through the project path and every text and
+    tool value, and tests pin both.
+  - **With E1** (option d), the hub serves each provider's folder as `cwd` from where that
+    provider keeps it.
 - **P3s done:** the classify step reads as a client reader in every mode. The apply reads only a
   private regular file and refuses links. Tests cover a session-row-only change, an audit failure, and
   the dry run on a read-only pool.

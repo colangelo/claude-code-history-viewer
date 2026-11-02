@@ -695,6 +695,21 @@ def test_a_null_cwd_is_no_signal(tmp_path) -> None:
     assert hit is None
 
 
+# R9 ruling (security d53f34c, option a): null stays "no signal" because most served
+# records carry no cwd (pg1 2026-11-02: 1.90M of 2.02M Claude messages, every Codex,
+# pi and opencode message). The folder is still checked through the project path and
+# every text and tool value.
+def test_r9_with_a_null_cwd_the_project_path_still_protects(tmp_path) -> None:
+    r = _routing(tmp_path, ROUTING_FULL_TOML)
+    hub = RoutingHub({1: [_msg(_text("neutral"), cwd=None)]})
+    assert d.route_group(hub, r, "/Users/ac/_sync/dev/_clientx/repo", [1]) == "path"
+
+
+def test_r9_with_a_null_cwd_a_folder_in_the_text_still_protects(tmp_path) -> None:
+    hit, _ = _route(tmp_path, {1: [_msg(_text("cd /Users/ac/_sync/dev/_clientx/repo"), cwd=None)]})
+    assert hit is not None
+
+
 def test_a_cwd_under_a_marker_protects(tmp_path) -> None:
     hit, _ = _route(tmp_path, {1: [_msg(_text("neutral"), cwd="/Users/ac/_sync/dev/_clientx/repo")]})
     assert hit == "cwd"
