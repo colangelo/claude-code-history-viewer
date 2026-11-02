@@ -3884,6 +3884,7 @@ mod tests {
             provider: provider.map(std::string::ToString::to_string),
             attachment: None,
             cwd: None,
+            mcp: None,
         }
     }
 
@@ -4250,6 +4251,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4303,6 +4305,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4354,6 +4357,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4401,6 +4405,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let usage = extract_token_usage(&msg);
@@ -4446,6 +4451,7 @@ mod tests {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         };
 
         let usage = extract_token_usage(&msg);

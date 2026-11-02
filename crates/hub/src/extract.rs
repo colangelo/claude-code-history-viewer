@@ -135,9 +135,11 @@ pub fn tool_uses(
                 // #102 (stats-read-api D5): a Codex `exec` counts as the MCP
                 // calls it made, one row each under `mcp__<server>__<tool>`.
                 // Only the first `exec` of a message takes them.
-                let mcp = (name == "exec" && !mcp_taken)
-                    .then(|| mcp_names(raw))
-                    .unwrap_or_default();
+                let mcp = if name == "exec" && !mcp_taken {
+                    mcp_names(raw)
+                } else {
+                    Vec::new()
+                };
                 if !mcp.is_empty() {
                     mcp_taken = true;
                     for tool_name in mcp {

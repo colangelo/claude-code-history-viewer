@@ -1012,6 +1012,7 @@ mod tests {
             provider: Some("claude".to_string()),
             attachment: None,
             cwd: None,
+            mcp: None,
         }
     }
 

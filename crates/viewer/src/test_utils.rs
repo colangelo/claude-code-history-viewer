@@ -204,6 +204,7 @@ impl MessageBuilder {
             provider: None,
             attachment: None,
             cwd: None,
+            mcp: None,
         }
     }
 
