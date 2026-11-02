@@ -910,7 +910,7 @@ mod tests {
         // ac-mbm5, where a scan via ~/.config/claude silently fell back to the
         // transcript cwd for every project.
         let (_d, root) = real_tmp();
-        let real = format!("{root}/_sync/dev/_aruba/mpic-lambda");
+        let real = format!("{root}/_sync/dev/_acme/demo-project");
         std::fs::create_dir_all(&real).unwrap();
         for base in [
             "/Users/whoever/.claude/projects",
