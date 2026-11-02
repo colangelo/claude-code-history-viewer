@@ -29,7 +29,7 @@ struct Env {
     policy: hub::client_policy::Policy,
     machine: Uuid,
     project: i64,
-    _dir: std::path::PathBuf,
+    dir: std::path::PathBuf,
 }
 
 async fn env() -> Env {
@@ -73,7 +73,7 @@ async fn env() -> Env {
         policy,
         machine,
         project,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -414,4 +414,94 @@ async fn a_rescan_reads_sessions_already_stamped_lab() {
             Some(e.policy.generation.clone())
         )
     );
+}
+
+/// The candidate routing file: the same markers, plus one registered block.
+fn candidate(e: &Env, block: &str) -> hub::client_policy::Policy {
+    let routing = ROUTING.replace(
+        "content_terms = [\"clientword\"]",
+        &format!(
+            "content_terms = [\"clientword\"]\ninstruction_blocks = [{}]",
+            hub::client_policy::instruction_entry(block)
+        ),
+    );
+    std::fs::write(e.dir.join("c.toml"), &routing).unwrap();
+    std::fs::write(
+        e.dir.join("cf.json"),
+        json!({"sha256": hex(routing.as_bytes()), "plain_path_markers": 1,
+               "encoded_path_markers": 0, "content_terms": 1})
+        .to_string(),
+    )
+    .unwrap();
+    let hub::client_policy::Load::Ready(p) =
+        hub::client_policy::load_paths(&e.dir.join("c.toml"), &e.dir.join("cf.json"))
+    else {
+        panic!("candidate policy")
+    };
+    p
+}
+
+/// The census for instruction blocks (openspec
+/// `client-scope-instruction-subtraction`, D5): read-only, the sessions stamped
+/// client at the generation given, re-read under the candidate.
+#[tokio::test]
+async fn the_lowering_census_rereads_client_sessions_under_the_candidate() {
+    let e = env().await;
+    let block = format!(
+        "## Rules\n{}Client notes live in /ClientCo/notes.\n",
+        "A lab line. ".repeat(30)
+    );
+    let only_block = session(
+        &e,
+        &[&format!("Contents of CLAUDE.md:\n\n{block}\n\nlab work")],
+    )
+    .await;
+    let appended = session(&e, &[&format!("{block}\nopen /clientco/q3")]).await;
+    let family = session(&e, &[&block]).await;
+    let other_gen = session(&e, &[&block]).await;
+    let gen = e.policy.generation.clone();
+    for (id, class, g) in [
+        (only_block, "text_marker", gen.as_str()),
+        (appended, "text_marker", gen.as_str()),
+        (family, "family:text_marker", gen.as_str()),
+        (other_gen, "text_marker", "an-older-generation"),
+    ] {
+        assert!(stamp(&e.pool, id, class, g, 0).await.unwrap());
+    }
+    let ids = [only_block, appended, family, other_gen];
+    let before: Vec<(Option<String>, Option<String>)> = {
+        let mut v = Vec::new();
+        for id in ids {
+            v.push(class_and_gen(&e, id).await);
+        }
+        v
+    };
+
+    let c = hub::client_sweep::lowering(&e.pool, &candidate(&e, &block), &gen, None, Some(&ids))
+        .await
+        .unwrap();
+    assert_eq!(c.scanned, 3, "the other generation is not read");
+    assert_eq!(
+        c.to_lab,
+        vec![
+            (only_block, "text_marker".to_string()),
+            (family, "family:text_marker".to_string())
+        ]
+    );
+    assert_eq!(c.moves[&("text_marker".to_string(), "none".to_string())], 1);
+    assert_eq!(
+        c.moves[&("text_marker".to_string(), "text_marker".to_string())],
+        1
+    );
+    let mut after = Vec::new();
+    for id in ids {
+        after.push(class_and_gen(&e, id).await);
+    }
+    assert_eq!(before, after, "the census writes nothing");
+
+    // Under the live policy (no blocks) nothing would move to lab.
+    let live = hub::client_sweep::lowering(&e.pool, &e.policy, &gen, None, Some(&ids))
+        .await
+        .unwrap();
+    assert!(live.to_lab.is_empty());
 }

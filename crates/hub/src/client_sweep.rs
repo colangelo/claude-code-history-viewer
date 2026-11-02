@@ -357,3 +357,50 @@ pub async fn census(
     }
     Ok(c)
 }
+
+/// What a candidate routing file would lower (openspec
+/// `client-scope-instruction-subtraction`, D5): ids and classes only.
+#[derive(Debug, Default)]
+pub struct Lowering {
+    pub scanned: u64,
+    /// (stamped class, candidate class of the session's own content) → sessions.
+    pub moves: BTreeMap<(String, String), u64>,
+    /// The sessions whose own content is lab under the candidate, with their
+    /// stamped class. A `family:` session stays client while a member is.
+    pub to_lab: Vec<(i64, String)>,
+}
+
+/// Re-read, under `candidate`, the sessions stamped with a client class at
+/// `stamped_gen` (their last message within `days`, when given). Writes nothing.
+pub async fn lowering(
+    pool: &PgPool,
+    candidate: &Policy,
+    stamped_gen: &str,
+    days: Option<i32>,
+    only_sessions: Option<&[i64]>,
+) -> anyhow::Result<Lowering> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, client_class FROM sessions
+         WHERE client_gen = $1 AND client_class IS NOT NULL AND client_class <> 'none'
+           AND ($2::int IS NULL OR last_message_time >= now() - make_interval(days => $2))
+           AND ($3::bigint[] IS NULL OR id = ANY($3))
+         ORDER BY id",
+    )
+    .bind(stamped_gen)
+    .bind(days)
+    .bind(only_sessions)
+    .fetch_all(pool)
+    .await?;
+    let mut out = Lowering::default();
+    for (id, stamped) in rows {
+        let (class, _) = classify_session(pool, candidate, id).await?;
+        out.scanned += 1;
+        *out.moves
+            .entry((stamped.clone(), class.as_str().to_string()))
+            .or_default() += 1;
+        if class == Class::None {
+            out.to_lab.push((id, stamped));
+        }
+    }
+    Ok(out)
+}

@@ -61,6 +61,18 @@ pub fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// The routing-file entry for an instructions file as Claude Code injects it:
+/// trailing whitespace removed (measured against the archive, 2026-11-02).
+pub fn instruction_entry(file_text: &str) -> String {
+    let b = InstructionBlock::of(file_text.trim_end());
+    format!(
+        "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\" }}",
+        hex(&b.sha256),
+        b.bytes,
+        hex(&b.head_sha256)
+    )
+}
+
 fn unhex32(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -412,13 +424,7 @@ content_terms = ["clientword"]
     }
 
     fn block_entry(text: &str) -> String {
-        let b = InstructionBlock::of(text);
-        format!(
-            "{{ sha256 = \"{}\", bytes = {}, head_sha256 = \"{}\" }}",
-            hex(&b.sha256),
-            b.bytes,
-            hex(&b.head_sha256)
-        )
+        instruction_entry(text)
     }
 
     fn with_blocks(entries: &str) -> String {
@@ -437,7 +443,10 @@ content_terms = ["clientword"]
             panic!("expected ready");
         };
         assert_eq!(p.instruction_hashes.len(), 1);
-        assert!(!p.markers.hits_message_text(&text), "the block is subtracted");
+        assert!(
+            !p.markers.hits_message_text(&text),
+            "the block is subtracted"
+        );
         assert!(p.markers.hits_message_text(&format!("{text}/clientco")));
         assert_eq!(
             p.accepted_set().len(),
@@ -456,14 +465,15 @@ content_terms = ["clientword"]
     fn a_bad_instruction_entry_is_unknown() {
         let fs = Files::new("badblocks");
         let short = block_entry("## Rules\nsee /clientco\n");
-        let good = block_entry(&"lab line. ".repeat(30));
+        let good = block_entry(&format!("{}end", "lab line. ".repeat(30)));
         let bad = [
             short.clone(),
             good.replace("sha256 = \"", "sha256 = \"zz"),
             good.replace("head_sha256", "head"),
-            good.replace("bytes = 300", "bytes = \"300\""),
+            good.replace("bytes = 303", "bytes = \"303\""),
             "\"just a string\"".to_string(),
         ];
+        assert!(bad.iter().all(|b| *b != good), "every bad entry differs");
         for entry in bad {
             let (r, f) = fs.write(&with_blocks(&entry), None);
             assert_eq!(
@@ -472,7 +482,10 @@ content_terms = ["clientword"]
                 "{entry}"
             );
         }
-        let (r, f) = fs.write(&GOOD.replace("model", "instruction_blocks = 1\nmodel"), None);
+        let (r, f) = fs.write(
+            &GOOD.replace("model", "instruction_blocks = 1\nmodel"),
+            None,
+        );
         assert_eq!(reason(load_paths(&r, &f)), "instruction_blocks invalid");
     }
 
@@ -482,7 +495,10 @@ content_terms = ["clientword"]
         let set = |xs: &[&str]| xs.iter().map(|s| (*s).to_string()).collect::<BTreeSet<_>>();
         let accepted = set(&["a", "b", "instruction:x"]);
         assert_eq!(
-            compare(&accepted, &set(&["a", "b", "instruction:x", "instruction:y"])),
+            compare(
+                &accepted,
+                &set(&["a", "b", "instruction:x", "instruction:y"])
+            ),
             Acceptance::Narrowed {
                 removed: 0,
                 added: 0,

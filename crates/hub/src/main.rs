@@ -47,6 +47,14 @@ USAGE:
                                          --dry-run is read-only and prints counts only;
                                          --rescan also reads sessions already stamped lab
                                          (run once after a release that changes the extractor)
+    hub client-scope instruction-entry FILE
+                                         print the routing-file entry that registers FILE as
+                                         Claude Code injects it (trailing whitespace removed)
+    hub client-scope census --routing FILE --floor FILE [--days N] [--ids]
+                                         read-only: re-read the sessions stamped client under a
+                                         candidate routing file with the same markers, and count
+                                         them by stamped -> candidate class; --ids lists the
+                                         session ids that would be lab (ids and classes only)
 ";
 
 /// Every value of a repeatable `--flag V` / `--flag=V`.
@@ -295,6 +303,35 @@ async fn main() -> anyhow::Result<()> {
                     from: from.into(),
                     approved_by: by,
                 })
+                .await
+            }
+            Some("instruction-entry") => {
+                let file = args
+                    .get(2)
+                    .unwrap_or_else(|| usage_error("client-scope instruction-entry needs FILE"));
+                match std::fs::read_to_string(file) {
+                    Ok(text) => {
+                        println!("{}", hub::client_policy::instruction_entry(&text));
+                        Ok(())
+                    }
+                    Err(e) => Err(anyhow::anyhow!("cannot read {file}: {e}")),
+                }
+            }
+            Some("census") => {
+                let need = |flag: &str| {
+                    flag_values(&args[2..], flag).pop().unwrap_or_else(|| {
+                        usage_error(&format!("client-scope census needs {flag} FILE"))
+                    })
+                };
+                let days = flag_i64(&args[2..], "--days").map(|d| {
+                    i32::try_from(d).unwrap_or_else(|_| usage_error("--days is too large"))
+                });
+                hub::run_client_scope_census(
+                    need("--routing").into(),
+                    need("--floor").into(),
+                    days.or(Some(31)),
+                    args[2..].iter().any(|a| a == "--ids"),
+                )
                 .await
             }
             Some("sweep") => {

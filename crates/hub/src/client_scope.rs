@@ -740,7 +740,10 @@ mod tests {
         let raw = instructions_attachment(&[&b]);
         let none = serde_json::json!({});
         // The control: unregistered, the injected copies mark the session.
-        assert_eq!(one(&registered(&[]), &content, &none, None), Class::TextMarker);
+        assert_eq!(
+            one(&registered(&[]), &content, &none, None),
+            Class::TextMarker
+        );
         assert_eq!(one(&registered(&[]), &Value::Null, &raw, None), Class::Raw);
         let m = registered(&[&b]);
         assert_eq!(one(&m, &content, &none, None), Class::None);
@@ -765,7 +768,12 @@ mod tests {
             Class::TextMarker
         );
         assert_eq!(
-            one(&m, &Value::Null, &instructions_attachment(&[&changed]), None),
+            one(
+                &m,
+                &Value::Null,
+                &instructions_attachment(&[&changed]),
+                None
+            ),
             Class::Raw
         );
     }
@@ -775,7 +783,11 @@ mod tests {
         let b = block_text();
         let m = registered(&[&b]);
         let none = serde_json::json!({});
-        for tail in ["\nnow open /clientco/q3.xlsx", "/clientco/q3.xlsx", " see /CLIENTCO"] {
+        for tail in [
+            "\nnow open /clientco/q3.xlsx",
+            "/clientco/q3.xlsx",
+            " see /CLIENTCO",
+        ] {
             assert_eq!(
                 one(&m, &request_copy(&format!("{b}{tail}")), &none, None),
                 Class::TextMarker,
@@ -784,7 +796,12 @@ mod tests {
         }
         // Before the block, on its own line.
         assert_eq!(
-            one(&m, &request_copy(&format!("cd /clientco\n{b}")), &none, None),
+            one(
+                &m,
+                &request_copy(&format!("cd /clientco\n{b}")),
+                &none,
+                None
+            ),
             Class::TextMarker
         );
     }
@@ -793,7 +810,10 @@ mod tests {
     fn an_attachment_holding_a_client_file_still_raises() {
         let b = block_text();
         let m = registered(&[&b]);
-        let raw = instructions_attachment(&[&b, "# Project rules\nThe data sits in /clientco/exports.\n"]);
+        let raw = instructions_attachment(&[
+            &b,
+            "# Project rules\nThe data sits in /clientco/exports.\n",
+        ]);
         assert_eq!(one(&m, &Value::Null, &raw, None), Class::Raw);
     }
 
@@ -818,7 +838,8 @@ mod tests {
         assert_eq!(one(&m, &request_copy(&old), &none, None), Class::None);
         assert_eq!(one(&m, &request_copy(&new), &none, None), Class::None);
         // A tool input that only quotes the block is subtracted too (D3).
-        let tool = serde_json::json!([{"type": "tool_use", "name": "Write", "input": {"content": new}}]);
+        let tool =
+            serde_json::json!([{"type": "tool_use", "name": "Write", "input": {"content": new}}]);
         assert_eq!(one(&m, &tool, &none, None), Class::None);
     }
 }

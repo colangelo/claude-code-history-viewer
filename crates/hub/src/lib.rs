@@ -502,6 +502,74 @@ pub async fn run_client_scope_sweep(dry_run: bool, batch: i64, rescan: bool) -> 
     Ok(())
 }
 
+/// `hub client-scope census` (openspec `client-scope-instruction-subtraction`,
+/// D5): read-only; the sessions stamped client at the accepted generation,
+/// re-read under a candidate routing file that keeps the live markers.
+pub async fn run_client_scope_census(
+    routing: std::path::PathBuf,
+    floor: std::path::PathBuf,
+    days: Option<i32>,
+    ids: bool,
+) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let cs = config
+        .client_scope
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("no [client_scope] in the hub config"))?;
+    let live = match client_policy::load(cs) {
+        client_policy::Load::Ready(p) => p,
+        client_policy::Load::Unknown(why) => anyhow::bail!("client scope policy unknown: {why}"),
+    };
+    let candidate = match client_policy::load_paths(&routing, &floor) {
+        client_policy::Load::Ready(p) => p,
+        client_policy::Load::Unknown(why) => anyhow::bail!("candidate policy unknown: {why}"),
+    };
+    if candidate.marker_hashes != live.marker_hashes {
+        anyhow::bail!(
+            "the candidate changes the path markers; this census measures instruction blocks only"
+        );
+    }
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET default_transaction_read_only = on")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&config.database_url)
+        .await?;
+    let accepted: Option<String> = sqlx::query_scalar("SELECT generation FROM client_scope_state")
+        .fetch_optional(&pool)
+        .await?
+        .flatten();
+    if accepted.as_deref() != Some(live.generation.as_str()) {
+        anyhow::bail!(
+            "the hub has not accepted the live routing generation; nothing to compare against"
+        );
+    }
+    let c = client_sweep::lowering(&pool, &candidate, &live.generation, days, None).await?;
+    println!(
+        "client-scope census (read-only): {} instruction blocks in the candidate; sessions stamped client{}: {}",
+        candidate.instruction_hashes.len(),
+        days.map_or(String::new(), |d| format!(", last message within {d} days")),
+        c.scanned
+    );
+    for ((stamped, now), n) in &c.moves {
+        println!("  {stamped} -> {now}: {n}");
+    }
+    println!("would be lab (own content): {}", c.to_lab.len());
+    if ids {
+        for (id, stamped) in &c.to_lab {
+            println!("  {id} {stamped}");
+        }
+    }
+    Ok(())
+}
+
 /// `hub findings journal-scan`: the detector over the journal entries,
 /// read-only, locations and rule counts only.
 pub async fn run_findings_journal_scan(rules: Vec<redact::Rule>) -> anyhow::Result<()> {
