@@ -32,6 +32,9 @@ impl Snapshot {
 
 pub struct ClientScope {
     cfg: ClientScopeConfig,
+    /// Built because the latch is set while the config has no `[client_scope]`
+    /// (security K1): there is no policy to load, and lab readers see nothing.
+    no_section: bool,
     snapshot: RwLock<Snapshot>,
     /// The latch as last read from `client_scope_state.enforced_at`.
     latched: RwLock<bool>,
@@ -40,10 +43,23 @@ pub struct ClientScope {
 impl ClientScope {
     pub fn new(cfg: ClientScopeConfig) -> Self {
         Self {
+            no_section: false,
             cfg,
             snapshot: RwLock::new(Snapshot::Unknown("not loaded yet".into())),
             latched: RwLock::new(false),
         }
+    }
+
+    /// A scope for a hub whose config lost its `[client_scope]` section after
+    /// the hub had enforced: it enforces, knows no policy, and says why.
+    pub fn without_section() -> Self {
+        let mut scope = Self::new(ClientScopeConfig {
+            routing_file: std::path::PathBuf::new(),
+            floor_file: std::path::PathBuf::new(),
+            enforce: false,
+        });
+        scope.no_section = true;
+        scope
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -65,6 +81,13 @@ impl ClientScope {
     /// an unchanged generation is a no-op.
     pub async fn refresh(&self, pool: &PgPool) -> anyhow::Result<()> {
         self.refresh_latch(pool).await?;
+        if self.no_section {
+            *self.snapshot.write().expect("client scope lock") = Snapshot::Unknown(
+                "the hub has enforced client scope, but the config has no [client_scope] section"
+                    .into(),
+            );
+            return Ok(());
+        }
         let load = client_policy::load(&self.cfg);
         let next = match load {
             Load::Unknown(reason) => {

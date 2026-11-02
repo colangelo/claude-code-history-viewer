@@ -537,11 +537,12 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let mut state = AppState::from_config(pool, &config)?;
+    let state = AppState::from_config(pool, &config)?;
     tracing::info!(
         redact = ?state.redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
         "credential detection: every rule flags; listed rules also redact"
     );
+    let mut state = state.with_orphan_latch().await?;
     // Client scope: load the policy before serving, then re-validate it every
     // 60 s (ingest also re-validates before each batch). A failure to read the
     // database here is fatal: the hub would not know its latch.

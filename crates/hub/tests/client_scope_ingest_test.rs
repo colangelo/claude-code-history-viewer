@@ -460,3 +460,64 @@ async fn the_latch_outlives_an_observe_config() {
     assert!(s.enforcing(), "the latch holds");
     assert!(s.latch_overrides_config(), "and says so");
 }
+
+/// Security K1: the latch is in the database, so a config with no
+/// `[client_scope]` section must not lift it. Lab readers then see nothing.
+#[tokio::test]
+async fn a_latched_hub_without_the_section_shows_lab_readers_nothing() {
+    let hub = spawn().await;
+    let s = sid();
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        session(&s),
+        vec![msg(&s, text("lab"), json!({"cwd": "/w/lab"}))],
+    )
+    .await;
+    sqlx::query("UPDATE client_scope_state SET enforced_at = now()")
+        .execute(&hub.pool)
+        .await
+        .unwrap();
+
+    let reader = format!("tok-r-{}", Uuid::new_v4());
+    let config: hub::HubConfig = toml::from_str(&format!(
+        "database_url = \"unused\"\n[[readers]]\ntoken = \"{reader}\"\nmachine_id = \"{}\"\nlabel = \"r\"\n",
+        Uuid::new_v4()
+    ))
+    .unwrap();
+    let state = hub::AppState::from_config(hub.pool.clone(), &config)
+        .unwrap()
+        .with_orphan_latch()
+        .await
+        .unwrap();
+    let scope = state
+        .client_scope
+        .clone()
+        .expect("the latch turns client scope on");
+    scope.refresh(&hub.pool).await.unwrap();
+    assert!(scope.enforcing() && scope.snapshot().generation().is_none());
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = hub::router(state, None);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let body = reqwest::Client::new()
+        .get(format!("{base}/v1/sessions?limit=500"))
+        .bearer_auth(&reader)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(body, "[]", "a lab reader sees no session");
+    let health = reqwest::get(format!("{base}/v1/healthz/client-scope"))
+        .await
+        .unwrap();
+    assert_eq!(health.status().as_u16(), 503);
+    sqlx::query("UPDATE client_scope_state SET enforced_at = NULL")
+        .execute(&hub.pool)
+        .await
+        .unwrap();
+}

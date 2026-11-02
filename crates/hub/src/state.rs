@@ -96,6 +96,30 @@ impl AppState {
         self
     }
 
+    /// Security K1: the latch lives in the database, so a config without
+    /// `[client_scope]` (a stale pre-feature render, a deleted section) must not
+    /// lift it. When the latch is set and the section is missing, client scope is
+    /// turned on with no policy: lab readers see no session, and
+    /// `/v1/healthz/client-scope` answers 503.
+    pub async fn with_orphan_latch(mut self) -> anyhow::Result<Self> {
+        if self.client_scope.is_some() {
+            return Ok(self);
+        }
+        let latched: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT enforced_at FROM client_scope_state")
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
+        if latched.is_some() {
+            tracing::error!(
+                "client scope was enforced, but the config has no [client_scope]: \
+                 every session is client to lab readers until the section is restored"
+            );
+            self.client_scope = Some(Arc::new(crate::client_state::ClientScope::without_section()));
+        }
+        Ok(self)
+    }
+
     /// Turn client scope on with this config (builder-style, same reason).
     /// Call [`crate::client_state::ClientScope::refresh`] before serving.
     pub fn with_client_scope(mut self, cfg: Option<crate::config::ClientScopeConfig>) -> Self {
