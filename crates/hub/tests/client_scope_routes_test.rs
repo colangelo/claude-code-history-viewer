@@ -517,7 +517,7 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
     }
 }
 
-/// R2-H: a browser trades its token once for an HttpOnly cookie of the same
+/// R2-H: a browser trades its token once for an `HttpOnly` cookie of the same
 /// scope; a forged or signed-out cookie reads nothing.
 #[tokio::test]
 async fn login_cookie_carries_the_tokens_scope_and_nothing_more() {
