@@ -413,6 +413,27 @@ None of it runs before this design is built, tested and reviewed.
 version is 0.40.0, the release that ships the classify step. Each check was removed in turn, and a
 test failed each time.
 
+**Security's code review (2026-11-02, `docs/reviews/2026-11-02-cchv-e8-restamp-code.md`), as fixed:**
+- **R1:** the dry run takes no locks, so it runs on the CLI's read-only pool.
+- **R2:** the accepted generation is read per entry (held `FOR SHARE` in the apply). The run stops on a
+  change.
+- **R3:** any route at all, stale or current, counts as a stamp.
+- **R4:** the router and the generation come from the same bytes (`load_routing_snapshot`).
+- **R5:** in the shared session reader, which live routing also uses, a missing, unparsable or moving
+  `X-Total-Count` is an incomplete read, so the session is unreadable.
+- **R6:** the apply re-checks the Claude cutoff, the entry text and the project path against the hub's
+  own routing files (markers and terms). The file must carry that policy's generation.
+- **R7:** the apply holds the sessions `FOR SHARE`. A row or message change since `started_at`, less
+  a 15-minute margin for one ingest batch, skips the entry.
+- **R8:** an entry's sessions are routed as one group, so the live per-group limits hold.
+- **R9** (unknown blocks and a null `cwd` in the shared router) lands with E1, before any run.
+- **P3s done:** the classify step reads as a client reader in every mode. The apply reads only a
+  private regular file and refuses links. Tests cover a session-row-only change, an audit failure, and
+  the dry run on a read-only pool.
+- **P3s open:** the hub's effective class at classify, a producer-to-CLI test at 0.40.0, and an
+  interrupted-run test. An interrupted run leaves a file that is not JSON, and the apply refuses it.
+- **Residual, in the backlog:** re-check the general history when markers or terms are added.
+
 ## Context
 
 ### What reads the hub today (security's list, bell e790f4ca)
