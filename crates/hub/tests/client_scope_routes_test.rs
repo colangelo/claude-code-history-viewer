@@ -741,3 +741,21 @@ async fn unscanned_sessions_and_route_less_entries_are_hidden() {
         "positive control: the stamped lab entry is still served"
     );
 }
+
+/// E8 (design R3-E8): the restamp's classify step refuses to run as a lab
+/// caller under enforce, so the client-scope health names the caller's scope.
+/// Anonymous callers get `null`; nobody gets more than their own scope.
+#[tokio::test]
+async fn client_scope_health_names_the_callers_scope() {
+    let w = world().await;
+    let mut seen = Vec::new();
+    for who in ["client", "lab", "tailscale", "none"] {
+        let (_, body) = get(&w, "/v1/healthz/client-scope", who).await;
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        seen.push(format!("{who}={}", v["caller_scope"]));
+    }
+    assert_eq!(
+        seen,
+        ["client=\"client\"", "lab=\"lab\"", "tailscale=\"lab\"", "none=null"]
+    );
+}
