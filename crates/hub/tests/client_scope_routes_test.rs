@@ -54,6 +54,7 @@ struct World {
     lab_canary: String,
     client_canary: String,
     client_path: String,
+    lab_path: String,
     client_id: i64,
     lab_id: i64,
     client_sid: String,
@@ -144,6 +145,30 @@ async fn world() -> World {
             .unwrap();
         assert!(resp.status().is_success());
     }
+    // A pending day (closed, inside the 7-day horizon, no entry) for both.
+    let two_days_ago = (chrono::Utc::now() - chrono::Duration::days(2))
+        .format("%Y-%m-%dT12:00:00Z")
+        .to_string();
+    for (path, sid, canary) in [
+        (&lab_path, &lab_sid, &lab_canary),
+        (&client_path, &client_sid, &client_canary),
+    ] {
+        let resp = reqwest::Client::new()
+            .post(format!("{base}/v1/ingest"))
+            .bearer_auth(&machine_token)
+            .json(&json!({
+                "machine": {"machine_id": machine, "hostname": format!("rt-{}", &r[..8]), "os": "macos"},
+                "projects": [{"provider": "claude", "project_path": path, "name": "p"}],
+                "sessions": [{"provider": "claude", "session_id": sid, "project_path": path, "summary": canary}],
+                "messages": [{"provider": "claude", "session_id": sid, "message_key": Uuid::new_v4().to_string(),
+                              "seq": 1, "timestamp": two_days_ago, "type": "user", "role": "user",
+                              "content": [{"type": "text", "text": "later"}], "raw": {"cwd": path}}],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_success());
+    }
     let id = |sid: String| {
         let pool = pool.clone();
         async move {
@@ -180,6 +205,7 @@ async fn world() -> World {
         lab_canary,
         client_canary,
         client_path,
+        lab_path,
         client_id,
         lab_id,
         client_sid,
@@ -189,89 +215,85 @@ async fn world() -> World {
 
 /// The concrete requests for every registered GET path. `true` marks a
 /// content case: it must return the lab canary to a lab reader.
-fn cases(w: &World) -> Vec<(&'static str, String, bool)> {
+fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
     let c = &w.client_canary;
     let l = &w.lab_canary;
+    let cp = urlencode(&w.client_path);
+    let lab = || Some(l.clone());
+    let lab_path = || Some(w.lab_path.clone());
     vec![
-        ("/v1/healthz", "/v1/healthz".into(), false),
-        ("/v1/healthz/ingest", "/v1/healthz/ingest".into(), false),
+        ("/v1/healthz", "/v1/healthz".into(), None),
+        ("/v1/healthz/ingest", "/v1/healthz/ingest".into(), None),
         (
             "/v1/healthz/journal",
-            "/v1/healthz/journal?within_days=30".into(),
-            false,
+            "/v1/healthz/journal?within_days=7".into(),
+            lab_path(),
         ),
-        ("/v1/healthz/stats", "/v1/healthz/stats".into(), false),
-        ("/v1/healthz/findings", "/v1/healthz/findings".into(), false),
-        ("/v1/findings/summary", "/v1/findings/summary".into(), false),
-        ("/v1/search", format!("/v1/search?q={c}"), false),
+        ("/v1/healthz/stats", "/v1/healthz/stats".into(), None),
+        ("/v1/healthz/findings", "/v1/healthz/findings".into(), None),
+        ("/v1/findings/summary", "/v1/findings/summary".into(), None),
+        ("/v1/search", format!("/v1/search?q={c}"), None),
         (
             "/v1/search",
             format!("/v1/search?q={c}&scope=journal"),
-            false,
+            None,
         ),
-        ("/v1/search", format!("/v1/search?q={l}"), true),
+        ("/v1/search", format!("/v1/search?q={l}"), lab()),
         (
             "/v1/journal/pending",
-            "/v1/journal/pending?from=2026-10-01".into(),
-            false,
+            "/v1/journal/pending?from=2026-10-01&limit=500".into(),
+            lab_path(),
         ),
         (
             "/v1/journal/entries",
             "/v1/journal/entries?from=2026-10-01".into(),
-            true,
+            lab(),
         ),
         (
             "/v1/journal/entries",
-            format!("/v1/journal/entries?project={}", urlencode(&w.client_path)),
-            false,
-        ),
-        (
-            "/v1/journal/open-questions",
-            format!(
-                "/v1/journal/open-questions?days=3650&project={}",
-                urlencode(&w.client_path)
-            ),
-            false,
-        ),
-        (
-            "/v1/sessions",
-            format!("/v1/sessions?project={}", urlencode(&w.client_path)),
-            false,
+            format!("/v1/journal/entries?project={cp}"),
+            None,
         ),
         (
             "/v1/journal/open-questions",
             "/v1/journal/open-questions?days=3650".into(),
-            false,
+            None,
         ),
-        ("/v1/projects", "/v1/projects?limit=500".into(), false),
-        ("/v1/sessions", "/v1/sessions?limit=500".into(), false),
+        (
+            "/v1/journal/open-questions",
+            format!("/v1/journal/open-questions?days=3650&project={cp}"),
+            None,
+        ),
+        ("/v1/projects", "/v1/projects?limit=500".into(), None),
+        ("/v1/sessions", "/v1/sessions?limit=500".into(), None),
+        ("/v1/sessions", format!("/v1/sessions?project={cp}"), None),
         (
             "/v1/sessions/{id}/messages",
             format!("/v1/sessions/{}/messages", w.client_id),
-            false,
+            None,
         ),
         (
             "/v1/sessions/{id}/messages",
             format!("/v1/sessions/{}/messages", w.client_sid),
-            false,
+            None,
         ),
         (
             "/v1/sessions/{id}/messages",
             format!("/v1/sessions/{}/messages", w.lab_id),
-            true,
+            lab(),
         ),
-        ("/v1/stats/global", "/v1/stats/global".into(), false),
+        ("/v1/stats/global", "/v1/stats/global".into(), None),
         (
             "/v1/stats/projects/{identity_key}",
-            format!("/v1/stats/projects/{}", urlencode(&w.client_path)),
-            false,
+            format!("/v1/stats/projects/{cp}"),
+            None,
         ),
         (
             "/v1/stats/sessions/{id}",
             format!("/v1/stats/sessions/{}", w.client_id),
-            false,
+            None,
         ),
-        ("/v1/identities", "/v1/identities".into(), false),
+        ("/v1/identities", "/v1/identities".into(), None),
     ]
 }
 
@@ -324,8 +346,10 @@ async fn no_lab_principal_gets_a_client_canary() {
             if body.contains(&w.client_canary) || (!echoed && body.contains(&w.client_path)) {
                 leaks.push(format!("{who} {url} -> {status}"));
             }
-            if content && who != "none" && !body.contains(&w.lab_canary) {
-                unreached.push(format!("{who} {url} -> {status}"));
+            if let Some(want) = content.as_ref().filter(|_| who != "none") {
+                if !body.contains(want.as_str()) {
+                    unreached.push(format!("{who} {url} -> {status}"));
+                }
             }
         }
     }

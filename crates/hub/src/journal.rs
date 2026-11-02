@@ -268,11 +268,14 @@ fn parse_date(s: Option<&str>, which: &str) -> Result<Option<NaiveDate>, HubErro
 /// Groups on the still-open logical day are excluded. Newest-first, honoring
 /// `from` + `limit`.
 pub async fn pending(
-    _auth: Authenticated,
+    auth: Authenticated,
     State(state): State<AppState>,
     Query(params): Query<PendingParams>,
 ) -> Result<Json<Vec<PendingGroup>>, HubError> {
     let from = parse_date(params.from.as_deref(), "from")?;
+    // A lab reader lists only groups whose every session it may see; the
+    // distiller reads with its client-read token and lists all.
+    let visible = auth.visibility(&state).all_sessions_ok("g.session_ids");
     let page = Page::from(params.limit, None);
 
     let mut tx = begin_fold_tx(&state.pool).await?;
@@ -308,6 +311,7 @@ pub async fn pending(
                       AND m.ingest_xid IS NOT NULL
                       AND NOT pg_visible_in_snapshot(
                                 m.ingest_xid, j.generated_snapshot)))
+          AND {visible}
         ORDER BY g.entry_date DESC, g.project_path DESC
         LIMIT $3
         "#

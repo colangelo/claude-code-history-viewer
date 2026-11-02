@@ -300,6 +300,7 @@ struct JournalGroupRow {
     entry_date: NaiveDate,
     project_path: String,
     latest_arrival: DateTime<Utc>,
+    path_visible: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -489,6 +490,12 @@ pub async fn healthz_journal(
     // gets investigated. `SESSION_DAYS_CTE` now carries the arrival, which is
     // both free there and the more correct number (see its doc comment).
     let horizon_from = horizon_from(Utc::now(), day_start_hour, within_days);
+    // The verdict counts every group; a group's path goes only to a read
+    // principal that may see all of its sessions (L1, then design D6).
+    let path_visible = match &reader {
+        Some(r) => r.visibility(&state).all_sessions_ok("g.session_ids"),
+        None => "false".to_string(),
+    };
     // Raised `work_mem`, scoped to this statement. The fold spills ~35 MB per process
     // at the 4 MB default and this is the whole of #36's fix; the rationale, the
     // measurements and why it is not a covering index live on
@@ -514,7 +521,8 @@ pub async fn healthz_journal(
             FROM sess_win
             GROUP BY entry_date, project_path
         )
-        SELECT g.entry_date, g.project_path, g.latest_arrival
+        SELECT g.entry_date, g.project_path, g.latest_arrival,
+               {path_visible} AS path_visible
         FROM grp g
         LEFT JOIN journal_entries j
             ON j.entry_date = g.entry_date AND j.project_path = g.project_path
@@ -533,6 +541,7 @@ pub async fn healthz_journal(
         ORDER BY g.entry_date DESC, g.project_path DESC
         "#,
         session_days = crate::journal::SESSION_DAYS_CTE,
+        path_visible = path_visible,
     ))
     .bind(day_start_hour)
     .bind(horizon_from)
@@ -580,7 +589,7 @@ pub async fn healthz_journal(
             any_stale |= stale;
             JournalStaleGroup {
                 entry_date: r.entry_date,
-                project_path: reader.is_some().then_some(r.project_path),
+                project_path: r.path_visible.then_some(r.project_path),
                 latest_arrival: r.latest_arrival,
                 stale,
             }
