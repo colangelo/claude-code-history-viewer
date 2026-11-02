@@ -45,19 +45,27 @@ They need one rebuild (derived state, about 8 minutes of 503 on the stats routes
 | `compactions` | `compaction` rows |
 | `cost_usd` | sum of reported cost; `null` when no row that day reported one |
 
-### D3. Client sessions: SECURITY DECIDES (open)
+### D3. Client sessions: RULED (a) (security, 2026-11-02 18:33Z)
 
-- **(a)** A lab reader gets lab sessions only, under enforce and observe alike. Client sessions are absent; no `aruba` row. This is today's R2-E rule applied in observe too, so nothing new needs approval. The differential test then covers the route as it stands.
+Option (a), on both routes, in observe and enforce. Security's conditions:
+1. The client filter sits in the query path the R2-E differential test covers. That test is extended to both routes: a client session with a marker changes no count a lab token sees.
+2. No caller parameter filters on content, a project name or a session id. The only parameters are `from`, `to`, `tz` and the tool `prefix`. The 31-day bound holds on BOTH routes, so the counts cannot become an oracle for a client term. Monitoring's history is loaded window by window.
+3. Reader tokens `kv/agents/cchv-readers/monitoring` and `.../quota-tap` are scoped to the stats routes only: they read no messages.
+4. The #102 mapping is new rows only, and the mirror rebuild's 503 window is announced to monitoring.
+
+The options as written before the ruling:
+
+- **(a), chosen:** A lab reader gets lab sessions only, under enforce and observe alike. Client sessions are absent; no `aruba` row. This is today's R2-E rule applied in observe too, so nothing new needs approval. The differential test then covers the route as it stands.
 - **(b)** A counts-only row per day, `project = space = 'aruba'`, built by the hub from `client_class`, never from a name. It is served only to a principal with a new scope `stats-aggregate`, granted per reader token by security. The differential test gets an explicit exception for that one row, and a test proves the row carries no field but counts.
 
-The recommendation is (a) now. (b) can follow if ac wants Aruba volume on the board.
+
 
 ### D4. `/v1/stats/tool-calls?prefix=<name>&since=<RFC3339>`
 
 The answer is `{since, last_ingest, by_tool: [{tool, server, count}], by_host: [{host, count}]}`.
-- **Where it reads:** Postgres (`message_tool_uses` ⋈ `messages` ⋈ `machines`), bounded by `since` (at most 31 days) and an index on `messages."timestamp"`. The mirror has no host.
+- **Where it reads:** Postgres (`message_tool_uses` ⋈ `messages` ⋈ `machines`), bounded by `since` (at most 31 days; the same bound on `/v1/stats/daily`) and an index on `messages."timestamp"`. The mirror has no host.
 - **Matching:** the name's last `__` segment equals `prefix`, or `prefix` is a full name.
-- **Client sessions:** follow D3's ruling. Under (a), the answer counts lab sessions only.
+- **Client sessions:** lab sessions only (D3).
 
 ### D5. #102 without re-keying history
 

@@ -1,6 +1,6 @@
 ## 0. Before building
 
-- [ ] 0.1 Security reviews this change, and rules on D3: (a) lab rows only, or (b) a counts-only `aruba` row under a `stats-aggregate` scope.
+- [x] 0.1 Security reviews this change and rules on D3: (a), with conditions 1-4 (design D3).
 - [ ] 0.2 monitoring confirms the column definitions (D2) for its panel labels.
 
 ## 1. Mirror
@@ -11,12 +11,17 @@
 ## 2. `GET /v1/stats/daily`
 
 - [ ] 2.1 Red: route tests over a populated mirror, one per D2 column. These include a day with no cost (null), the 300 s gap cap, and a compaction that does not count as a turn.
-- [ ] 2.2 The route, with D3 as ruled. Route-walk case. Differential test (or its documented exception under b).
+- [ ] 2.2 The route, with lab sessions only (D3 a) and the 31-day bound. Route-walk case. The R2-E differential test is extended to this route.
 
 ## 3. `GET /v1/stats/tool-calls`
 
-- [ ] 3.1 Red: counts per tool and host since T. A last-segment match. The 31-day bound is refused past it. Client sessions follow D3.
+- [ ] 3.1 Red: counts per tool and host since T. A last-segment match. The 31-day bound is refused past it. Lab sessions only (D3 a). The R2-E differential test is extended to this route.
 - [ ] 3.2 The route, plus an index migration on `messages ("timestamp")` if the plan needs it (EXPLAIN on a pg1 copy first). Route-walk case.
+
+## 3b. Stats-only reader tokens (D3 condition 3)
+
+- [ ] 3b.1 Red: a reader marked `stats_only` gets 403 on every non-stats GET route (route-walk driven) and 200 on both stats routes.
+- [ ] 3b.2 The `stats_only` reader flag in config and in the launcher's `[[readers]]` rendering.
 
 ## 4. #102 Codex MCP calls
 

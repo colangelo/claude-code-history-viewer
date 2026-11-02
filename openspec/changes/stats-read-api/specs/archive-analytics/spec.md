@@ -2,7 +2,7 @@
 
 ### Requirement: Daily stats per project
 
-The hub SHALL serve `GET /v1/stats/daily?from&to&tz` to an authenticated reader. It answers one row per local day and project identity, with the columns `day, project, space, sessions, messages, turns, tokens_in, tokens_out, active_seconds, ac_messages, compactions, cost_usd`, defined in design D2. Client sessions SHALL follow security's D3 ruling. In no case SHALL a client project's name or path appear in the answer.
+The hub SHALL serve `GET /v1/stats/daily?from&to&tz` to an authenticated reader. It answers one row per local day and project identity, with the columns `day, project, space, sessions, messages, turns, tokens_in, tokens_out, active_seconds, ac_messages, compactions, cost_usd`, defined in design D2. A lab reader SHALL see lab sessions only, in observe and enforce alike, and `from`/`to` SHALL span at most 31 days. The only parameters SHALL be `from`, `to` and `tz`.
 
 #### Scenario: A compaction is not a turn
 - **WHEN** a session has, on one day, two user prompts, one compaction boundary and the summary prompt that follows it
@@ -12,9 +12,9 @@ The hub SHALL serve `GET /v1/stats/daily?from&to&tz` to an authenticated reader.
 - **WHEN** no row of a project on a day carries a cost
 - **THEN** `cost_usd` is null for that row, not 0
 
-#### Scenario: Client sessions never name the client
-- **WHEN** a lab reader asks for a window that contains client-class sessions
-- **THEN** no row carries a client project's name or path
+#### Scenario: A client session changes nothing a lab reader sees
+- **WHEN** a client-class session with a marker is added to a window
+- **THEN** every count a lab reader gets for that window is unchanged
 
 ### Requirement: Tool-call counts
 
