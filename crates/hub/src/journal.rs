@@ -230,6 +230,12 @@ pub struct PendingGroup {
     pub project_path: String,
     pub session_ids: Vec<i64>,
     pub as_of: String,
+    /// The hub's class of the group (security E3): `client` when any session
+    /// is client, `unscanned` when any is not scanned under the current
+    /// generation, else `lab`. Absent when client scope is off. The distiller
+    /// sends anything but `lab` to the protected route only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_scope: Option<String>,
 }
 
 fn parse_date(s: Option<&str>, which: &str) -> Result<Option<NaiveDate>, HubError> {
@@ -291,7 +297,19 @@ pub async fn pending(
             GROUP BY 1, 2
         )
         SELECT g.entry_date, g.project_path, g.session_ids,
-               pg_current_snapshot()::text AS as_of
+               pg_current_snapshot()::text AS as_of,
+               CASE WHEN $4::bool THEN
+                 CASE
+                   WHEN EXISTS (SELECT 1 FROM sessions cs WHERE cs.id = ANY(g.session_ids)
+                                 AND cs.client_class IS NOT NULL AND cs.client_class <> 'none')
+                     THEN 'client'
+                   WHEN EXISTS (SELECT 1 FROM sessions cs WHERE cs.id = ANY(g.session_ids)
+                                 AND (cs.client_class IS NULL
+                                      OR cs.client_gen IS DISTINCT FROM $5::text))
+                     THEN 'unscanned'
+                   ELSE 'lab'
+                 END
+               END AS client_scope
         FROM grp g
         LEFT JOIN journal_entries j
             ON j.entry_date = g.entry_date
@@ -319,6 +337,13 @@ pub async fn pending(
     .bind(DAY_START_HOUR)
     .bind(from)
     .bind(page.limit)
+    .bind(state.client_scope.is_some())
+    .bind(
+        state
+            .client_scope
+            .as_ref()
+            .and_then(|c| c.snapshot().generation().map(str::to_string)),
+    )
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;

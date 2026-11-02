@@ -601,3 +601,85 @@ async fn ingest_during_a_policy_outage_leaves_the_session_unscanned() {
         (Some("text_marker".into()), true)
     );
 }
+
+/// Security E3: the pending list tells the distiller the hub's class of each
+/// group, so a group the hub holds client (or has not scanned) never goes to
+/// the general model. `lab` only when every session is lab under the current
+/// generation.
+#[tokio::test]
+async fn pending_groups_carry_the_hubs_class() {
+    let hub = spawn().await;
+    let day = (chrono::Utc::now() - chrono::Duration::days(2))
+        .format("%Y-%m-%dT12:00:00Z")
+        .to_string();
+    let mk = |tag: &str| {
+        let s = sid();
+        let mut row = session(&s);
+        row["project_path"] = json!(format!("/w/e3-{tag}-{s}"));
+        (s, row)
+    };
+    let at = |s: &str, text: &str| {
+        let mut m = msg(
+            s,
+            json!([{"type": "text", "text": text}]),
+            json!({"cwd": "/w/lab"}),
+        );
+        m["timestamp"] = json!(day);
+        m
+    };
+    let (lab, lab_row) = mk("lab");
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        lab_row.clone(),
+        vec![at(&lab, "plain")],
+    )
+    .await;
+    let (cli, cli_row) = mk("client");
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        cli_row.clone(),
+        vec![at(&cli, "see clientco.")],
+    )
+    .await;
+    let (uns, uns_row) = mk("unscanned");
+    ingest(
+        &hub,
+        hub.machine,
+        &hub.token,
+        uns_row.clone(),
+        vec![at(&uns, "plain")],
+    )
+    .await;
+    sqlx::query("UPDATE sessions SET client_gen = NULL WHERE session_id = $1")
+        .bind(&uns)
+        .execute(&hub.pool)
+        .await
+        .unwrap();
+
+    let groups: Vec<Value> = reqwest::Client::new()
+        .get(format!(
+            "{}/v1/journal/pending?from=2026-10-01&limit=1000",
+            hub.base
+        ))
+        .bearer_auth(&hub.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let class_of = |row: &Value| {
+        let path = row["project_path"].as_str().unwrap();
+        groups
+            .iter()
+            .find(|g| g["project_path"] == path)
+            .map(|g| g["client_scope"].as_str().unwrap_or("<absent>").to_string())
+    };
+    assert_eq!(class_of(&lab_row).as_deref(), Some("lab"));
+    assert_eq!(class_of(&cli_row).as_deref(), Some("client"));
+    assert_eq!(class_of(&uns_row).as_deref(), Some("unscanned"));
+}

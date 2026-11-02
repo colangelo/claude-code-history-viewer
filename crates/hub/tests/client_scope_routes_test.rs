@@ -418,7 +418,15 @@ async fn alias_writes_do_not_reveal_client_projects() {
     let key: String = {
         let body = get(&w, "/v1/identities", "client").await.1;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        v.as_array().unwrap()[0]["identity_key"]
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|id| {
+                id["members"]
+                    .as_array()
+                    .is_some_and(|ms| ms.iter().any(|m| m["project_path"] == w.lab_path.as_str()))
+            })
+            .expect("the lab project's identity")["identity_key"]
             .as_str()
             .unwrap()
             .to_string()
