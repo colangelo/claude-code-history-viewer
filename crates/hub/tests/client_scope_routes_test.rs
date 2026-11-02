@@ -258,6 +258,14 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
         (
             "/v1/journal/entries",
             "/v1/journal/entries?from=2026-10-01".into(),
+            None,
+        ),
+        // The positive control asks for the lab project only: the shared test
+        // database keeps gaining entries of the same date, so an unfiltered page
+        // can end before the lab entry.
+        (
+            "/v1/journal/entries",
+            format!("/v1/journal/entries?project={}", urlencode(&w.lab_path)),
             lab(),
         ),
         (
@@ -590,6 +598,17 @@ async fn login_cookie_carries_the_tokens_scope_and_nothing_more() {
     let (status, _) = with_cookie(client_cookie, client_msgs).await;
     assert_eq!(status, 401, "signed out");
 
+    // A login cookie only reads: alias writes refuse it.
+    let lab_cookie = login(w.lab_reader.clone()).await;
+    let r = reqwest::Client::new()
+        .post(format!("{}/v1/identities/aliases", w.base))
+        .header("Cookie", lab_cookie)
+        .json(&json!({"project_path": w.lab_path, "identity_key": "x"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 401, "a cookie cannot write aliases");
+
     // Only a bearer token logs in: not the Tailscale identity.
     let r = reqwest::Client::new()
         .post(format!("{}/v1/login", w.base))
@@ -703,7 +722,12 @@ async fn unscanned_sessions_and_route_less_entries_are_hidden() {
         leaks.is_empty(),
         "unscanned / route-less material served to lab readers: {leaks:?}"
     );
-    let (_, body) = get(&w, "/v1/journal/entries?from=2026-10-01", "lab").await;
+    let (_, body) = get(
+        &w,
+        &format!("/v1/journal/entries?project={}", urlencode(&w.lab_path)),
+        "lab",
+    )
+    .await;
     assert!(
         body.contains(&w.lab_canary),
         "positive control: the stamped lab entry is still served"

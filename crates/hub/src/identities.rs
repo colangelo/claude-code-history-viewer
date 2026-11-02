@@ -281,6 +281,16 @@ pub struct CreateAlias {
 }
 
 /// Create (or re-point — a path belongs to at most one identity) an alias.
+/// Alias writes need a write-capable principal: a machine token or the
+/// trusted Tailscale identity. A login cookie or a client reader only reads.
+/// (A `[[readers]]` bearer is refused earlier, by the write layer.)
+fn refuse_read_only_principal(auth: &Authenticated) -> Result<(), HubError> {
+    if auth.0.starts_with("cookie:") || auth.0.starts_with("client-reader:") {
+        return Err(HubError::Unauthorized);
+    }
+    Ok(())
+}
+
 /// Whether some project at `path` holds a session this reader may see.
 async fn path_visible(
     state: &AppState,
@@ -302,6 +312,7 @@ pub async fn create_alias(
     State(state): State<AppState>,
     Json(payload): Json<CreateAlias>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), HubError> {
+    refuse_read_only_principal(&auth)?;
     let vis = auth.visibility(&state);
     let principal = auth.0;
     let path = payload.project_path.trim();
@@ -372,6 +383,7 @@ pub async fn delete_alias(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, HubError> {
+    refuse_read_only_principal(&auth)?;
     let vis = auth.visibility(&state);
     if !vis.sees_all() {
         let path: Option<String> =

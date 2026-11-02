@@ -81,7 +81,9 @@ pub async fn login(
     headers: HeaderMap,
 ) -> Result<Response, HubError> {
     let Authenticated(principal, scope) = crate::auth::bearer_read_principal(&headers, &state)?;
-    let value = state.logins.insert(principal, scope);
+    // Marked as a cookie session: it may read, and nothing may write on it
+    // (alias writes refuse it, security's small item).
+    let value = state.logins.insert(format!("cookie:{principal}"), scope);
     let mut resp = StatusCode::NO_CONTENT.into_response();
     resp.headers_mut()
         .insert(SET_COOKIE, cookie(&value, LIFETIME.as_secs()));

@@ -59,6 +59,9 @@ impl ClientScope {
             enforce: false,
         });
         scope.no_section = true;
+        // Enforcing from the first instant, before any refresh reads the latch
+        // back (security's hardening note on K1).
+        *scope.latched.write().expect("client scope lock") = true;
         scope
     }
 
