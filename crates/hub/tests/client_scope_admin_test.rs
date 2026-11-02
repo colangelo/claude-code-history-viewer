@@ -635,7 +635,9 @@ async fn protect_raises_a_lab_session_and_audits_it() {
     let before = audits(&pool, "protect").await;
     for id in [lab, unscanned] {
         let (_, rev) = class_of(&pool, id).await;
-        let out = protect(&pool, id, "names the client only", "manager-aruba").await.unwrap();
+        let out = protect(&pool, id, "names the client only", "manager-aruba")
+            .await
+            .unwrap();
         assert_eq!(out, hub::client_admin::Protected::Raised);
         assert_eq!(class_of(&pool, id).await, (Some("manual".into()), rev + 1));
     }
@@ -656,10 +658,19 @@ async fn protect_raises_a_lab_session_and_audits_it() {
 async fn protect_never_lowers_or_changes_a_client_session() {
     let pool = pool().await;
     let client = session(&pool, "x", Some("text_marker"), Some("g")).await;
-    let before = (class_of(&pool, client).await, audits(&pool, "protect").await);
+    let before = (
+        class_of(&pool, client).await,
+        audits(&pool, "protect").await,
+    );
     let out = protect(&pool, client, "r", "manager-aruba").await.unwrap();
     assert_eq!(out, hub::client_admin::Protected::AlreadyClient);
-    assert_eq!((class_of(&pool, client).await, audits(&pool, "protect").await), before);
+    assert_eq!(
+        (
+            class_of(&pool, client).await,
+            audits(&pool, "protect").await
+        ),
+        before
+    );
 }
 
 #[tokio::test]

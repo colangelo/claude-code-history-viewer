@@ -35,6 +35,7 @@ USAGE:
                                          clear one session's client class (a narrowing); audited
     hub client-scope unlatch --reason TEXT --approved-by WHO
                                          lift the enforcement latch (emergency); audited
+    hub client-scope protect --session N --reason TEXT --approved-by WHO
     hub client-scope restamp-history --from FILE --dry-run | --approved-by WHO
                                          make pre-routing journal entries lab again where their
                                          text and sessions match nothing under the full router
@@ -253,6 +254,17 @@ async fn main() -> anyhow::Result<()> {
                     reason: flag_values(&args[2..], "--reason")
                         .pop()
                         .unwrap_or_else(|| usage_error("client-scope clear needs --reason TEXT")),
+                    approved_by: approver(&args[2..]),
+                })
+                .await
+            }
+            Some("protect") => {
+                hub::run_client_scope_admin(hub::ClientScopeAdmin::Protect {
+                    session: flag_i64(&args[2..], "--session")
+                        .unwrap_or_else(|| usage_error("client-scope protect needs --session N")),
+                    reason: flag_values(&args[2..], "--reason")
+                        .pop()
+                        .unwrap_or_else(|| usage_error("client-scope protect needs --reason TEXT")),
                     approved_by: approver(&args[2..]),
                 })
                 .await

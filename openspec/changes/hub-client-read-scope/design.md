@@ -434,6 +434,33 @@ test failed each time.
   interrupted-run test. An interrupted run leaves a file that is not JSON, and the apply refuses it.
 - **Residual, in the backlog:** re-check the general history when markers or terms are added.
 
+### R3-P. A raise-only mark by hand: `client-scope protect` (manager-aruba, 2026-11-02)
+
+**Why.** The narrower marker list (Q1) leaves some sessions lab that the client desk wants hidden
+anyway: a session that only names the client, and the two known R4 cases (a client project plan
+with no host or path). Neither markers nor terms can express "this one session".
+
+**The command.** `cchv-hub client-scope protect --session N --reason TEXT --approved-by WHO`, run
+by the pg1 writer.
+- **Raise only.** A lab or unscanned session becomes `manual`. A session already client is left
+  exactly as it is: no change, no audit row.
+- **Sticky.** Ingest and the sweep only ever raise a class. Only the audited `clear` lowers, and a
+  lowering stays ac's word.
+- **Audited.** The change and its audit row commit together. The row holds the previous class, the
+  generation, the reason and the approver. An empty reason or approver is refused.
+- **Approver.** For client-side raises, the client manager (manager-aruba). A raise is fail-closed.
+- **Not covered:** copies of the session in its family. E2's family closure covers them.
+
+**Visibility.** Every reader compares the stored class with `none`, so `manual` hides the session
+from lab readers with no other change.
+
+**Tests.** A lab and an unscanned session are raised and audited; a client session is unchanged and
+not audited; an empty approver or reason, or a missing session, is refused. Each guard was removed in
+turn, and a test failed.
+
+**First use** (after review and release): a3319313 (names only, security's ask), and the two plan-only
+sessions 65de9e9f and 918ed06e.
+
 ## Context
 
 ### What reads the hub today (security's list, bell e790f4ca)

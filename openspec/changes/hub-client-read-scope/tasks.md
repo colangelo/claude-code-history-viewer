@@ -144,6 +144,8 @@ before `enforce = true`:
 - [ ] E14 The cookie: HTTPS listener only, named `__Host-`, and a test that no response carries
       `Access-Control-Allow-Credentials`.
 - [ ] E15 The launcher's minimum hub version once latched.
+- [x] `client-scope protect`, an audited raise-only mark by hand (design § R3-P); its first use waits on
+      security's review and the release.
 - [ ] One definition of "general" (`general` and `general-restamped`), used by every filter.
 
 ## 5. Rollout (R2-I)

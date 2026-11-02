@@ -325,6 +325,18 @@ pub async fn run_client_scope_admin(action: ClientScopeAdmin) -> anyhow::Result<
             client_admin::clear(&pool, session, &reason, &approved_by).await?;
             println!("cleared session {session}; it is lab only after a sweep stamps it");
         }
+        ClientScopeAdmin::Protect {
+            session,
+            reason,
+            approved_by,
+        } => match client_admin::protect(&pool, session, &reason, &approved_by).await? {
+            client_admin::Protected::Raised => {
+                println!("protected session {session}: it is client (manual) from now on");
+            }
+            client_admin::Protected::AlreadyClient => {
+                println!("session {session} is already client: nothing changed");
+            }
+        },
         ClientScopeAdmin::Unlatch {
             reason,
             approved_by,
@@ -363,6 +375,12 @@ pub enum ClientScopeAdmin {
         approved_by: String,
     },
     Clear {
+        session: i64,
+        reason: String,
+        approved_by: String,
+    },
+    /// Raise one session to client by hand; raise-only.
+    Protect {
         session: i64,
         reason: String,
         approved_by: String,

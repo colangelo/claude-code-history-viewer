@@ -64,6 +64,73 @@ pub async fn clear(
     Ok(())
 }
 
+/// What `protect` did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Protected {
+    /// The session was lab or unscanned and is now `manual`.
+    Raised,
+    /// The session was already client: nothing changed, nothing audited.
+    AlreadyClient,
+}
+
+/// Raise one session to client by hand (`client-scope protect`, manager-aruba
+/// 2026-11-02). Raise-only: a lab or unscanned session becomes `manual`, a
+/// client session is left exactly as it is. The class is sticky: ingest and the
+/// sweep only raise, and only the audited `clear` lowers it (ac's word). The
+/// audit row (previous class, generation, reason, approver) commits with the
+/// change. Copies in the session's family are not raised here (E2).
+pub async fn protect(
+    pool: &PgPool,
+    session: i64,
+    reason: &str,
+    approved_by: &str,
+) -> anyhow::Result<Protected> {
+    if approved_by.trim().is_empty() {
+        anyhow::bail!("--approved-by is empty: name who approved the raise");
+    }
+    if reason.trim().is_empty() {
+        anyhow::bail!("--reason is empty: say why the session is client");
+    }
+    let mut tx = pool.begin().await?;
+    let before: Option<Option<String>> =
+        sqlx::query_scalar("SELECT client_class FROM sessions WHERE id = $1 FOR UPDATE")
+            .bind(session)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(class) = before else {
+        anyhow::bail!("no session {session}");
+    };
+    if class.as_deref().is_some_and(|c| c != "none") {
+        tx.rollback().await?;
+        return Ok(Protected::AlreadyClient);
+    }
+    sqlx::query(
+        "UPDATE sessions SET client_class = 'manual', client_rev = client_rev + 1 WHERE id = $1",
+    )
+    .bind(session)
+    .execute(&mut *tx)
+    .await?;
+    let generation: Option<String> =
+        sqlx::query_scalar("SELECT generation FROM client_scope_state")
+            .fetch_one(&mut *tx)
+            .await?;
+    sqlx::query(
+        "INSERT INTO client_scope_audit (action, session_id, generation, detail, approved_by)
+         VALUES ('protect', $1, $2, $3, $4)",
+    )
+    .bind(session)
+    .bind(generation)
+    .bind(format!(
+        "was {}; {reason}",
+        class.as_deref().unwrap_or("unscanned")
+    ))
+    .bind(approved_by)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Protected::Raised)
+}
+
 /// Lift the enforcement latch (an emergency switch, R2-I).
 pub async fn unlatch(pool: &PgPool, reason: &str, approved_by: &str) -> anyhow::Result<()> {
     sqlx::query("UPDATE client_scope_state SET enforced_at = NULL, updated_at = now()")
