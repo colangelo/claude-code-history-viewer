@@ -103,6 +103,12 @@ impl RefreshOutcome {
     }
 }
 
+/// The mirror's table layout. Bump it when a mirrored column needs the
+/// Postgres row to fill (an `ALTER TABLE` cannot backfill it): a file stamped
+/// with another version is reset on open, and the next refresh is a cold build.
+/// `2`: `has_content`, `prompt`, `compaction` (openspec stats-read-api D1).
+pub const SCHEMA_VERSION: &str = "2";
+
 /// How many messages to pull from Postgres per round trip.
 const FETCH_CHUNK: i64 = 50_000;
 
@@ -230,9 +236,46 @@ impl Mirror {
         Ok(guard.try_clone()?)
     }
 
+    /// Create the tables, first resetting a file written under an older
+    /// [`SCHEMA_VERSION`]. The reset drops the tables rather than moving the
+    /// file aside: nothing in an outdated mirror needs inspecting, and an aside
+    /// copy would double the disk the mirror takes.
     fn create_schema(&self) -> anyhow::Result<()> {
         let conn = self.conn.lock().expect("mirror connection poisoned");
+        let version: Option<String> = conn
+            .query_row(
+                "SELECT v FROM mirror_meta WHERE k = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        if version.as_deref() != Some(SCHEMA_VERSION) {
+            let had_rows = conn
+                .query_row("SELECT count(*) > 0 FROM messages", [], |r| r.get(0))
+                .unwrap_or(false);
+            if had_rows {
+                tracing::warn!(
+                    from = version.as_deref().unwrap_or("none"),
+                    to = SCHEMA_VERSION,
+                    path = %self.path.display(),
+                    "stats mirror: schema version changed; resetting — the next refresh is a cold build and /v1/stats/* answers 503 until it finishes"
+                );
+            }
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS messages;
+                 DROP TABLE IF EXISTS sessions;
+                 DROP TABLE IF EXISTS projects;
+                 DROP TABLE IF EXISTS project_identity_aliases;
+                 DROP TABLE IF EXISTS message_tool_uses;
+                 DROP TABLE IF EXISTS message_tool_results;
+                 DROP TABLE IF EXISTS mirror_meta;",
+            )?;
+        }
         conn.execute_batch(SCHEMA)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO mirror_meta (k, v) VALUES ('schema_version', ?)",
+            [SCHEMA_VERSION],
+        )?;
         Ok(())
     }
 
@@ -380,7 +423,16 @@ impl Mirror {
             let rows = sqlx::query_as::<_, MessageRow>(
                 r#"SELECT m.id, m.session_id, m.message_id, m.uuid::text, m.provider,
                           m.model, m.role, m."timestamp", m.input_tokens, m.output_tokens,
-                          m.cache_creation_tokens, m.cache_read_tokens, m.cost_usd
+                          m.cache_creation_tokens, m.cache_read_tokens, m.cost_usd,
+                          m.content IS NOT NULL AS has_content,
+                          -- A prompt: a user row with content that is not only
+                          -- tool results. CASE so only user rows open content.
+                          CASE WHEN m.role = 'user' AND m.content IS NOT NULL
+                               THEN jsonb_typeof(m.content) <> 'array'
+                                 OR EXISTS (SELECT 1 FROM jsonb_array_elements(m.content) e
+                                             WHERE e->>'type' IS DISTINCT FROM 'tool_result')
+                               ELSE false END AS prompt,
+                          coalesce(m.raw->>'subtype' = 'compact_boundary', false) AS compaction
                      FROM messages m
                     WHERE m.id > $1
                     ORDER BY m.id
@@ -991,7 +1043,13 @@ CREATE TABLE IF NOT EXISTS messages (
     group_key             VARCHAR,
     conversational        BOOLEAN,
     -- NULL means "not yet decided"; compute_derived() fills it once.
-    usage_row             BOOLEAN
+    usage_row             BOOLEAN,
+    -- /v1/stats/daily (openspec stats-read-api D1), computed from the Postgres
+    -- row at sync: content IS NOT NULL (#41's conversation items); a user row
+    -- with content that is not only tool results; a compact_boundary row.
+    has_content           BOOLEAN,
+    prompt                BOOLEAN,
+    compaction            BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS messages_group ON messages (session_id, group_key, id);
 CREATE INDEX IF NOT EXISTS messages_ts ON messages (ts_utc);
@@ -1070,18 +1128,22 @@ struct MessageRow {
     cache_creation_tokens: Option<i64>,
     cache_read_tokens: Option<i64>,
     cost_usd: Option<f64>,
+    has_content: bool,
+    prompt: bool,
+    compaction: bool,
 }
 
 impl Mirrored for MessageRow {
     const INSERT_PREFIX: &'static str = "INSERT OR IGNORE INTO messages
         (id, session_id, message_id, uuid, provider, model, role, ts_utc,
          input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-         cost_usd, group_key, conversational, usage_row) VALUES ";
+         cost_usd, group_key, conversational, usage_row, has_content, prompt,
+         compaction) VALUES ";
     /// The last three expressions are the derived columns: `group_key` is the
     /// dedup key, `conversational` is "this row is a turn, not bookkeeping", and
     /// `usage_row` starts NULL for `compute_derived` to decide.
     const ROW: &'static str = "(?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?,
-         coalesce(?, ?, CAST(? AS VARCHAR)), ? IS NOT NULL, NULL)";
+         coalesce(?, ?, CAST(? AS VARCHAR)), ? IS NOT NULL, NULL, ?, ?, ?)";
 
     fn binds(&self) -> Vec<Value> {
         vec![
@@ -1112,6 +1174,9 @@ impl Mirrored for MessageRow {
             Value::BigInt(self.id),
             // conversational = role IS NOT NULL
             text(self.role.as_deref()),
+            Value::Boolean(self.has_content),
+            Value::Boolean(self.prompt),
+            Value::Boolean(self.compaction),
         ]
     }
 }

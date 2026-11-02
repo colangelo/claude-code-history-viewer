@@ -5,8 +5,8 @@
 
 ## 1. Mirror
 
-- [ ] 1.1 Red: a mirror test with a compaction boundary, a compact-summary prompt, a tool-result-only user row and a mixed user row expects `has_content`, `prompt` and `compaction` values.
-- [ ] 1.2 Add the three columns at mirror sync, with a schema-version bump that forces one rebuild.
+- [x] 1.1 Red: a mirror test with a compaction boundary, a compact-summary prompt, a tool-result-only user row and a mixed user row expects `has_content`, `prompt` and `compaction` values.
+- [x] 1.2 Add the three columns at mirror sync, with a schema-version bump that forces one rebuild.
 
 ## 2. `GET /v1/stats/daily`
 
