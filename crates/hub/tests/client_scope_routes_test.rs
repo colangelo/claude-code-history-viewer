@@ -470,6 +470,7 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
         who: &str,
     ) -> Vec<(String, u16, Option<String>, String)> {
         let mut out = Vec::new();
+        let as_of = regex::Regex::new(r#""as_of":"[^"]*""#).unwrap();
         for url in urls {
             let mut req = reqwest::Client::new().get(format!("{}{url}", w.base));
             req = match who {
@@ -485,10 +486,7 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
             // `as_of` is the database snapshot each pending call takes: it
             // differs per request whatever the data, so it is masked.
             let body = r.text().await.unwrap();
-            let body = regex::Regex::new(r#""as_of":"[^"]*""#)
-                .unwrap()
-                .replace_all(&body, r#""as_of":"-""#)
-                .into_owned();
+            let body = as_of.replace_all(&body, r#""as_of":"-""#).into_owned();
             out.push((url.clone(), status, total, body));
         }
         out
