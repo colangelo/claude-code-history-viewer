@@ -111,6 +111,29 @@ pub async fn refuse_read_only_writes(
     next.run(request).await
 }
 
+/// The paths a `stats_only` reader may request (stats-read-api D3 c3).
+pub const STATS_ONLY_PATHS: [&str; 2] = ["/v1/stats/daily", "/v1/stats/tool-calls"];
+
+/// Router layer: a `stats_only` reader token gets 403 on every request but a
+/// GET of [`STATS_ONLY_PATHS`] — `/v1/login` included, so it cannot become a
+/// cookie that reads elsewhere. Outermost of the auth layers, so a route added
+/// later is refused without code of its own.
+pub async fn refuse_stats_only_elsewhere(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let allowed = matches!(*request.method(), Method::GET | Method::HEAD)
+        && STATS_ONLY_PATHS.contains(&request.uri().path());
+    if !allowed
+        && bearer(request.headers()).is_some_and(|t| state.stats_only.contains(t))
+    {
+        return HubError::Forbidden("this token reads the stats routes only".into())
+            .into_response();
+    }
+    next.run(request).await
+}
+
 /// The machine id behind a token that may ingest (full or ingest-only; a
 /// read-only token is refused). Ingest only.
 pub struct IngestMachine(pub Uuid);

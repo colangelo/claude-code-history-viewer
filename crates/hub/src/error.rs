@@ -9,6 +9,8 @@ use serde_json::json;
 pub enum HubError {
     /// Missing or invalid bearer token.
     Unauthorized,
+    /// An authenticated caller whose token may not make this request.
+    Forbidden(String),
     /// Well-formed request that failed validation.
     BadRequest(String),
     /// The referenced resource does not exist.
@@ -33,6 +35,7 @@ impl std::fmt::Display for HubError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HubError::Unauthorized => write!(f, "unauthorized"),
+            HubError::Forbidden(m) => write!(f, "forbidden: {m}"),
             HubError::BadRequest(m) => write!(f, "bad request: {m}"),
             HubError::NotFound(m) => write!(f, "not found: {m}"),
             HubError::Db(e) => write!(f, "database error: {e}"),
@@ -62,6 +65,7 @@ impl IntoResponse for HubError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             HubError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
+            HubError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
             HubError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             HubError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             HubError::MirrorBehind(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),

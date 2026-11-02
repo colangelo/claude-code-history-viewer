@@ -240,6 +240,14 @@ pub struct ReaderEntry {
     pub token: String,
     pub machine_id: Uuid,
     pub label: String,
+    /// Limit this reader to the stats-read routes (`/v1/stats/daily`,
+    /// `/v1/stats/tool-calls`): every other request is 403, `/v1/login`
+    /// included (openspec stats-read-api D3 condition 3). For services that
+    /// store counts and must read no message (monitoring, quota-tap). A binary
+    /// that predates the flag refuses the whole config (`deny_unknown_fields`),
+    /// so it can never load as an unlimited reader.
+    #[serde(default)]
+    pub stats_only: bool,
 }
 
 fn default_bind_addr() -> String {
@@ -320,6 +328,15 @@ impl HubConfig {
     /// The tokens limited to reading (see `TokenEntry::read_only`).
     pub fn read_only_tokens(&self) -> HashSet<String> {
         self.readers.iter().map(|r| r.token.clone()).collect()
+    }
+
+    /// The readers limited to the stats-read routes (`ReaderEntry::stats_only`).
+    pub fn stats_only_tokens(&self) -> HashSet<String> {
+        self.readers
+            .iter()
+            .filter(|r| r.stats_only)
+            .map(|r| r.token.clone())
+            .collect()
     }
 
     /// Refuse a token string or a machine id that appears twice across

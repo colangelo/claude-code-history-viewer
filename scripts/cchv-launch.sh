@@ -276,6 +276,11 @@ render() {
       # no write of any kind), from kv/agents/cchv-readers/<reader>. Each
       # reader's client reads only its own entry.
       render_scoped_tokens agents/cchv-readers readers "" reader
+      # Stats readers (monitoring, quota-tap): read-only AND limited to the
+      # stats-read routes (`stats_only`, openspec stats-read-api D3 c3), from
+      # kv/agents/cchv-stats-readers/<name>. Their own folder, so the scope
+      # comes from where the token lives: no flag inside a leaf to forget.
+      render_scoped_tokens agents/cchv-stats-readers readers stats_only stats-reader
       # Client readers (the distiller, ac's browser, the blog's client
       # audience): read-only, and they read client sessions. From
       # kv/agents/cchv-client-readers/<name>; rendered as sha256 only.

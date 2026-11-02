@@ -51,6 +51,8 @@ fn registered_get_paths() -> BTreeSet<String> {
 struct World {
     base: String,
     lab_reader: String,
+    /// A `[[readers]]` token with `stats_only = true` (stats-read-api D3 c3).
+    stats_reader: String,
     client_reader: String,
     lab_canary: String,
     client_canary: String,
@@ -107,14 +109,17 @@ async fn world_with(enforce: bool) -> World {
     let r = Uuid::new_v4().simple().to_string();
     let (machine, machine_token) = (Uuid::new_v4(), format!("tok-m-{r}"));
     let lab_reader = format!("tok-lab-{r}");
+    let stats_reader = format!("tok-stats-{r}");
     let client_reader = format!("tok-client-{r}");
     let config: hub::HubConfig = toml::from_str(&format!(
         "database_url = \"unused\"\n\
          trust_tailscale_identity = [\"{LOGIN}\"]\n\
          [[tokens]]\ntoken = \"{machine_token}\"\nmachine_id = \"{machine}\"\nlabel = \"m\"\n\
          [[readers]]\ntoken = \"{lab_reader}\"\nmachine_id = \"{}\"\nlabel = \"blog\"\n\
+         [[readers]]\ntoken = \"{stats_reader}\"\nmachine_id = \"{}\"\nlabel = \"monitoring\"\nstats_only = true\n\
          [[client_readers]]\ntoken_sha256 = \"{}\"\nmachine_id = \"{}\"\nlabel = \"distiller\"\n\
          [client_scope]\nrouting_file = \"{}\"\nfloor_file = \"{}\"\nenforce = {enforce}\n",
+        Uuid::new_v4(),
         Uuid::new_v4(),
         hex(client_reader.as_bytes()),
         Uuid::new_v4(),
@@ -251,6 +256,7 @@ async fn world_with(enforce: bool) -> World {
     World {
         base,
         lab_reader,
+        stats_reader,
         client_reader,
         lab_canary,
         client_canary,
@@ -389,6 +395,7 @@ async fn get(w: &World, url: &str, who: &str) -> (u16, String) {
     let mut req = reqwest::Client::new().get(format!("{}{url}", w.base));
     req = match who {
         "lab" => req.bearer_auth(&w.lab_reader),
+        "stats" => req.bearer_auth(&w.stats_reader),
         "client" => req.bearer_auth(&w.client_reader),
         "tailscale" => req.header("Tailscale-User-Login", LOGIN),
         _ => req,
@@ -440,6 +447,52 @@ async fn no_lab_principal_gets_a_client_canary() {
         unreached.is_empty(),
         "content cases that did not reach their handler: {unreached:?}"
     );
+}
+
+/// stats-read-api D3 condition 3: a `stats_only` reader reads the two
+/// stats-read routes and nothing else: 403 on every other GET case of the walk,
+/// and no `/v1/login` cookie that would carry its read scope elsewhere.
+#[tokio::test]
+async fn a_stats_only_reader_reads_the_stats_routes_and_nothing_else() {
+    let w = world().await;
+    let allowed = ["/v1/stats/daily", "/v1/stats/tool-calls"];
+    let mut wrong = Vec::new();
+    for (path, url, _) in cases(&w) {
+        let (status, body) = get(&w, &url, "stats").await;
+        let want = if allowed.contains(&path) { 200 } else { 403 };
+        if status != want {
+            wrong.push(format!("{url} -> {status} (want {want}) {}", &body[..body.len().min(120)]));
+        }
+    }
+    assert!(wrong.is_empty(), "stats_only reader: {wrong:#?}");
+    for allowed_path in allowed {
+        assert!(
+            cases(&w).iter().any(|(p, _, _)| *p == allowed_path),
+            "the walk has a case for {allowed_path}"
+        );
+    }
+    let login = reqwest::Client::new()
+        .post(format!("{}/v1/login", w.base))
+        .bearer_auth(&w.stats_reader)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status().as_u16(), 403, "no cookie for a stats_only token");
+    let write = reqwest::Client::new()
+        .post(format!("{}/v1/journal/ticks", w.base))
+        .bearer_auth(&w.stats_reader)
+        .json(&json!({"mode": "forward"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        matches!(write.status().as_u16(), 401 | 403),
+        "a stats_only token writes nothing: {}",
+        write.status()
+    );
+    // The control: the ordinary lab reader is not refused on the same walk.
+    let (status, _) = get(&w, "/v1/projects?limit=500", "lab").await;
+    assert_eq!(status, 200);
 }
 
 #[tokio::test]

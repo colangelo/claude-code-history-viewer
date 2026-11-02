@@ -20,8 +20,8 @@
 
 ## 3b. Stats-only reader tokens (D3 condition 3)
 
-- [ ] 3b.1 Red: a reader marked `stats_only` gets 403 on every non-stats GET route (route-walk driven) and 200 on both stats routes.
-- [ ] 3b.2 The `stats_only` reader flag in config and in the launcher's `[[readers]]` rendering.
+- [x] 3b.1 Red: a reader marked `stats_only` gets 403 on every non-stats GET route (route-walk driven) and 200 on both stats routes.
+- [x] 3b.2 The `stats_only` reader flag in config and in the launcher's `[[readers]]` rendering.
 
 ## 4. #102 Codex MCP calls
 

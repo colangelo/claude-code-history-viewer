@@ -23,6 +23,10 @@ pub struct AppState {
     /// Tokens (a subset of `tokens`) limited to reading: accepted by
     /// `Authenticated`, refused by every write (see `auth`).
     pub read_only: Arc<HashSet<String>>,
+    /// Reader tokens limited to the stats-read routes (`stats_only = true`):
+    /// a subset of `read_only`, refused everywhere else by
+    /// [`crate::auth::refuse_stats_only_elsewhere`].
+    pub stats_only: Arc<HashSet<String>>,
     /// Tailscale logins granted READ scope via the `Tailscale-User-Login`
     /// header (see `HubConfig::trust_tailscale_identity`). Empty = disabled.
     pub trusted_identities: Arc<Vec<String>>,
@@ -61,6 +65,7 @@ impl AppState {
             tokens: Arc::new(tokens),
             ingest_only: Arc::new(HashSet::new()),
             read_only: Arc::new(HashSet::new()),
+            stats_only: Arc::new(HashSet::new()),
             trusted_identities: Arc::new(trusted_identities),
             embedder: None,
             embed_nudge: Arc::new(Notify::new()),
@@ -85,6 +90,7 @@ impl AppState {
         )
         .with_ingest_only_tokens(config.ingest_only_tokens())
         .with_read_only_tokens(config.read_only_tokens())
+        .with_stats_only_tokens(config.stats_only_tokens())
         .with_redact_rules(config.redaction.rules()?)
         .with_client_scope(config.client_scope.clone())
         .with_client_readers(config.client_reader_map()))
@@ -130,6 +136,12 @@ impl AppState {
     /// Limit these tokens to `/v1/ingest` (builder-style, same reason).
     pub fn with_ingest_only_tokens(mut self, tokens: HashSet<String>) -> Self {
         self.ingest_only = Arc::new(tokens);
+        self
+    }
+
+    /// Limit these reader tokens to the stats-read routes (builder-style).
+    pub fn with_stats_only_tokens(mut self, tokens: HashSet<String>) -> Self {
+        self.stats_only = Arc::new(tokens);
         self
     }
 

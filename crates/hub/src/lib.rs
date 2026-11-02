@@ -178,6 +178,10 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
             state.clone(),
             auth::refuse_read_only_writes,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::refuse_stats_only_elsewhere,
+        ))
         .layer(cors)
         // API responses carry NO freshness metadata of their own, which lets a
         // browser heuristically cache a `/v1/journal/entries` (or search/browse)
