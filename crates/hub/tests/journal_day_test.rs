@@ -688,6 +688,7 @@ async fn each_day_reports_its_own_arrival_not_the_session_s() {
     let body: Value = reqwest::Client::new()
         .get(format!("{}/v1/healthz/journal", hub.base))
         .query(&[("within_days", "10")])
+        .bearer_auth(&hub.token)
         .send()
         .await
         .unwrap()

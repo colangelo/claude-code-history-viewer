@@ -1067,11 +1067,48 @@ async fn journal_health_stale_closed_day_pages() {
     // Closed, in-window day whose data arrived 3h ago (> the default 2h grace).
     seed_day(&hub, &pool, &project, "1 day", "3 hours").await;
 
-    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token)).await;
     // A stale group forces the whole endpoint to 503 regardless of other data.
     assert_eq!(resp.status(), 503);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "stale");
+    assert_eq!(find_group(&body, &project)["stale"], Value::Bool(true));
+}
+
+/// Security L1 (2026-11-02): the health route takes no credential, so its group
+/// list must not name a project to a caller that is not a read principal. The
+/// verdict, the status code and the per-group dates stay, so the monitor works.
+#[tokio::test]
+async fn journal_health_names_no_project_without_a_read_credential() {
+    let hub = spawn().await;
+    let pool = connect_pool().await;
+    let project = format!("/w/jh-anon-{}", hub.hostname);
+    seed_day(&hub, &pool, &project, "1 day", "3 hours").await;
+
+    for token in [None, Some("tok-not-a-real-token")] {
+        let resp = get(&hub, "/v1/healthz/journal", &[], token).await;
+        assert_eq!(resp.status(), 503, "{token:?}: the verdict is unchanged");
+        let text = resp.text().await.unwrap();
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(body["status"], "stale", "{token:?}");
+        let groups = body["groups"].as_array().unwrap();
+        assert!(!groups.is_empty(), "{token:?}: groups are still listed");
+        assert!(
+            groups.iter().all(|g| g.get("project_path").is_none()),
+            "{token:?}: no project_path field without a read credential"
+        );
+        assert!(
+            !text.contains(&project),
+            "{token:?}: the project path appears nowhere in the body"
+        );
+    }
+
+    // A read principal still gets the detail it needs to triage.
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(find_group(&body, &project)["stale"], Value::Bool(true));
 }
 
@@ -1083,7 +1120,7 @@ async fn journal_health_fresh_within_grace_not_stale() {
     // Closed, in-window day whose data just arrived → pending but within grace.
     seed_day(&hub, &pool, &project, "1 day", "1 minute").await;
 
-    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token)).await;
     let body: Value = resp.json().await.unwrap();
     // Present (it is pending) but not stale — the hourly tick still has time.
     assert_eq!(find_group(&body, &project)["stale"], Value::Bool(false));
@@ -1098,7 +1135,7 @@ async fn journal_health_old_history_outside_window_ignored() {
     // explicit backfill — must not page under the default 7-day horizon.
     seed_day(&hub, &pool, &project, "10 days", "10 days").await;
 
-    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token)).await;
     let body: Value = resp.json().await.unwrap();
     assert!(
         group_absent(&body, &project),
@@ -1107,7 +1144,7 @@ async fn journal_health_old_history_outside_window_ignored() {
 
     // Widening the horizon to 30 days brings the same group into scope (proving
     // the window — not some other filter — is what excluded it), and it's stale.
-    let resp = get(&hub, "/v1/healthz/journal", &[("within_days", "30")], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[("within_days", "30")], Some(&hub.token)).await;
     let body: Value = resp.json().await.unwrap();
     assert_eq!(find_group(&body, &project)["stale"], Value::Bool(true));
 }
@@ -1141,7 +1178,7 @@ async fn journal_health_drained_day_absent() {
     .await
     .unwrap();
 
-    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token)).await;
     let body: Value = resp.json().await.unwrap();
     assert!(
         group_absent(&body, &project),
@@ -1157,7 +1194,7 @@ async fn journal_health_open_day_absent() {
     // The still-open logical day (first message == now) is never evaluated.
     seed_day(&hub, &pool, &project, "0 seconds", "0 seconds").await;
 
-    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token)).await;
     let body: Value = resp.json().await.unwrap();
     assert!(
         group_absent(&body, &project),
@@ -1176,7 +1213,7 @@ async fn journal_health_rejects_bad_params() {
         ("max_tick_age_secs", "0"),
         ("max_tick_age_secs", "abc"),
     ] {
-        let resp = get(&hub, "/v1/healthz/journal", &[q], None).await;
+        let resp = get(&hub, "/v1/healthz/journal", &[q], Some(&hub.token)).await;
         assert_eq!(resp.status(), 400, "param {q:?} must 400");
     }
 }
@@ -1206,7 +1243,7 @@ async fn journal_health_grace_runs_from_arrival_not_from_the_day_close() {
     seed_day(&old, &pool, &old_project, "1 day", "3 hours").await;
     seed_day(&fresh, &pool, &fresh_project, "1 day", "1 minute").await;
 
-    let resp = get(&old, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&old, "/v1/healthz/journal", &[], Some(&old.token)).await;
     let body: Value = resp.json().await.unwrap();
     assert_eq!(
         find_group(&body, &old_project)["stale"],
@@ -1265,7 +1302,7 @@ async fn journal_tick_record_surfaces_in_health() {
     let recorded: Value = resp.json().await.unwrap();
     assert!(recorded["tick_at"].is_string(), "{recorded:?}");
 
-    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
         .await
         .json()
         .await
@@ -1281,7 +1318,7 @@ async fn journal_tick_record_surfaces_in_health() {
 
     // A backfill is a tick too — it drains real work — and says so.
     post_tick(&hub, json!({"mode": "backfill", "groups_pending": 0}), true).await;
-    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
         .await
         .json()
         .await
@@ -1311,7 +1348,7 @@ async fn journal_tick_record_validates_and_requires_a_token() {
     );
 
     // Nothing above wrote a row, so health still reports "never ticked".
-    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
         .await
         .json()
         .await
@@ -1331,7 +1368,7 @@ async fn journal_tick_identity_is_stored_and_reported() {
     clear_ticks(&pool).await;
 
     // Empty table: identity is null, but the hub still names itself.
-    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
         .await
         .json()
         .await
@@ -1344,7 +1381,7 @@ async fn journal_tick_identity_is_stored_and_reported() {
     // "an old distiller is ticking", which is itself the point.
     let resp = post_tick(&hub, json!({"mode": "forward", "groups_pending": 0}), true).await;
     assert_eq!(resp.status(), 200);
-    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
         .await
         .json()
         .await
@@ -1367,7 +1404,7 @@ async fn journal_tick_identity_is_stored_and_reported() {
     )
     .await;
     assert_eq!(resp.status(), 200);
-    let body: Value = get(&hub, "/v1/healthz/journal", &[], None)
+    let body: Value = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token))
         .await
         .json()
         .await
@@ -1431,7 +1468,7 @@ async fn journal_tick_age_alerts_only_when_a_budget_is_supplied() {
     seed_day(&hub, &pool, &project, "1 day", "3 hours").await;
 
     // No tick has ever been recorded — and with no budget that changes nothing.
-    let resp = get(&hub, "/v1/healthz/journal", &[], None).await;
+    let resp = get(&hub, "/v1/healthz/journal", &[], Some(&hub.token)).await;
     assert_eq!(resp.status(), 503);
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "stale");
