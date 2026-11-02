@@ -22,14 +22,15 @@ block, and scan everything else.
   byte length of one exact text (one version of an instructions file as Claude Code injects it), and
   the sha256 of its first 64 bytes.
 - The classifier removes from a message string every span that starts at a word start and whose bytes
-  hash to a registered block. Each version is registered as injected and in its `search_text` form. It matches markers in what is left, piece by piece. Nothing is skipped by
+  hash to a registered block. Each version is registered as injected and in its `search_text` form
+  (whitespace collapsed). It matches markers in what is left, piece by piece. Nothing is skipped by
   row type or block type.
 - A block shorter than 256 bytes, or a malformed entry, makes the policy unknown (every session
   client), like any other invalid routing file.
 - A new instruction block is a narrowing: it lowers what marks, so the hub treats it like a removed
   marker and holds the policy unknown until the audited `client-scope accept-routing`.
-- `hub client-scope instruction-entry FILE` prints the entry for a file, as injected (trailing
-  whitespace trimmed).
+- `hub client-scope instruction-entry FILE` prints the two entries for a file: as injected (trailing
+  whitespace trimmed) and in its `search_text` form.
 - `hub client-scope census --routing FILE --floor FILE` re-classifies, read-only, the sessions the hub
   has stamped client and prints how many would land in each class, and the ids of those that would be
   lab. It writes nothing.

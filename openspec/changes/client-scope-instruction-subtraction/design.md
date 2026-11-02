@@ -12,7 +12,7 @@ The injected copies, measured on pg1 2026-11-02 (hashes and lengths only):
 
 ## Decisions
 
-### D1. Registered by hash, located at line starts
+### D1. Registered by hash, located at word starts
 
 An entry is `{sha256, bytes, head_sha256}`: the sha256 and length of the block, and the sha256 of its
 first 64 bytes. In a string, a candidate start is offset 0 or any offset just after ASCII whitespace
@@ -23,13 +23,14 @@ as `search_text` holds it. `search_text` (history-core `search_text`) joins the 
 collapses every whitespace run to one space, so there the block follows a space, not a newline. The
 first census (2026-11-02, infra-hlp) found the injected form alone lowered no `text_marker` session:
 `search_text` still marked all 11 Exa sessions, and its collapsed form of the global file is present
-verbatim in all 11. At a
-candidate, the classifier hashes the next 64 bytes; only when that matches a registered head does it
+verbatim in all 11.
+
+At a candidate, the classifier hashes the next 64 bytes; only when that matches a registered head does it
 hash the full length of each block with that head and compare. A match removes the span and the scan
 resumes at its end.
 
 The hub never holds the block's text, only hashes. The head keeps the cost to one 64-byte hash per
-line of a string that already holds a marker; strings without a marker are not searched at all.
+word of a string that already holds a marker; strings without a marker are not searched at all.
 
 Rejected: skipping `attachment` or `api-request-blob` rows (security d457e4cf: an attachment can hold
 a client file); skipping by attachment path (a path says nothing about the bytes).
