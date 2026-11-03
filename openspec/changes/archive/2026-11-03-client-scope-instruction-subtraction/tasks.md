@@ -30,4 +30,4 @@
       and V2 `git cat-file` done.
 - [x] 4.3 Census on pg1 with a candidate routing file (the six global-file versions, two forms each);
       counts and ids to manager-aruba (census 3: 761 client-stamped in 31 days, 187 to lab).
-- [ ] 4.4 Release; manager-aruba registers the blocks; infra runs `accept-routing` right after.
+- [x] 4.4 Release; manager-aruba registers the blocks; infra runs `accept-routing` right after. (0.42.0 live 2026-11-03 03:19Z; 12 blocks accepted 06:50:58Z, generation c8dd5d24b864; raise-only sweep 07:04-07:18Z, 0 lowered; census-4: 202 read lab, 98 held (protected journal entries), 104 cleared 07:32Z one audited row each, approved-by security+manager-aruba; read-back: 104 none, 0 lowered outside, 6825144 client.)
