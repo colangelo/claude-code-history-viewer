@@ -14,4 +14,4 @@
 
 ## 3. Ship
 
-- [ ] 3.1 Gate, security review (diff), release, swap via infra; tell monitoring and quota-tap about the 503 and the field.
+- [x] 3.1 Gate, security review (diff), release, swap via infra; tell monitoring and quota-tap about the 503 and the field. (cchv-v0.43.0, swapped 2026-11-03 18:32Z, infra-hlp 18399a58; monitoring c1288233, infra 72c5e9ca)
