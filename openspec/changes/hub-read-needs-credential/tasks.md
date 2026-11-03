@@ -10,7 +10,7 @@
 - [ ] 1.2 Failed-credential limit across all routes, global (D4): over the limit a failing credential gets 429 + Retry-After; a valid credential is never refused; tokens under 32 chars refused at load.
 - [ ] 1.3 Fingerprint check across tables (D7): a client hash equal to SHA256 of an ingest/reader token refuses the config; a restricted token stays restricted.
 - [ ] 1.4 Webapp cookie login (D3): no same-origin header probe, no token in local storage (a stored one deleted); vitest; frontend review for the visible change.
-- [ ] 1.5 Release A, swap. Then infra removes `trust_tailscale_identity` from hub.toml and its template (R2); counts and header log show 0 header hits over one full cycle of the slowest caller.
+- [ ] 1.5 Security single read of release A's code diff (security be7f0c79), then release A, swap. Then infra removes `trust_tailscale_identity` from hub.toml and its template (R2); counts and header log show 0 header hits over one full cycle of the slowest caller.
 
 ## 2. Release B (code only)
 
@@ -20,4 +20,4 @@
 
 ## 3. Backlog
 
-- [ ] 3.1 File B1-B6 as Gitea issues.
+- [ ] 3.1 File B1-B6 as Gitea issues. B4 (cookie-only writes refused on every write route) lands before any write is ever allowed with the cookie (security be7f0c79); today every write needs a bearer token.
