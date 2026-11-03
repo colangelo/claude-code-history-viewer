@@ -347,6 +347,51 @@ pub async fn session(
 /// D3 condition 2: the counts cannot become an oracle over all of history).
 pub const MAX_WINDOW_DAYS: i64 = 31;
 
+/// How long a lab-eligible unscanned session may still be being written
+/// before it makes a lab stats answer stale (openspec
+/// stats-stale-after-generation D4; security: a fixed short constant).
+pub const STALE_MARGIN_MINUTES: i32 = 15;
+
+/// A 200 to a lab reader is complete (openspec stats-stale-after-generation).
+/// Sessions with activity in `[from, to)` whose class is `none` or unset and
+/// whose stamp is not the live generation are missing from a lab reader's
+/// counts. Written before the margin, they make the answer 503; inside it they
+/// are left out and returned as the count for `unscanned_excluded`. A client
+/// class hides a session whether it is scanned or not, so it is not counted
+/// (D1); a full-scope reader sees unscanned sessions (D5).
+async fn unscanned_lab_sessions(
+    state: &AppState,
+    vis: &Visibility,
+    from: DateTime<Utc>,
+    to: Option<DateTime<Utc>>,
+) -> Result<i64, HubError> {
+    let Visibility::Lab(Some(generation)) = vis else {
+        return Ok(0);
+    };
+    let (stale, inside): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE last_message_time <= now() - make_interval(mins => $4)),
+                count(*) FILTER (WHERE last_message_time >  now() - make_interval(mins => $4))
+           FROM sessions
+          WHERE (client_class IS NULL OR client_class = 'none')
+            AND client_gen IS DISTINCT FROM $1
+            AND last_message_time >= $2
+            AND ($3::timestamptz IS NULL OR COALESCE(first_message_time, last_message_time) < $3)",
+    )
+    .bind(generation)
+    .bind(from)
+    .bind(to)
+    .bind(STALE_MARGIN_MINUTES)
+    .fetch_one(&state.pool)
+    .await?;
+    if stale > 0 {
+        return Err(HubError::Unavailable(format!(
+            "{stale} lab sessions in the window are unscanned under generation {generation}; \
+             a client-scope sweep stamps them"
+        )));
+    }
+    Ok(inside)
+}
+
 /// `/v1/stats/daily` parameters: these three and no others (D3 condition 2).
 /// An unknown parameter is a 400, so a filter on a project, a session or
 /// content cannot be added by a caller and silently ignored.
@@ -366,6 +411,10 @@ pub struct DailyAnswer {
     pub from: NaiveDate,
     pub to: NaiveDate,
     pub tz: String,
+    /// Lab-eligible sessions in the window still being written and not yet
+    /// stamped under the live generation: left out of `rows` (openspec
+    /// stats-stale-after-generation D4).
+    pub unscanned_excluded: i64,
     pub rows: Vec<stats::DailyRow>,
 }
 
@@ -404,17 +453,41 @@ pub async fn daily(
 ) -> Result<(StatsHeaders, Json<DailyAnswer>), HubError> {
     let w = params.window()?;
     let vis = stats_read_visibility(&state, &auth)?;
-    let snap = MirrorSnapshot::take(&state)?;
-    let w = restrict(&state, vis, w, snap.flags_as_of()).await?;
     let (from, to, tz) = (
         w.from.expect("set by DailyParams::window"),
         w.to.expect("set by DailyParams::window"),
         w.tz.name().to_string(),
     );
+    // The local days in UTC, widened by the largest zone offset (14 h) so no
+    // zone's session is missed; a wider check can only refuse more (D3).
+    let wide = chrono::Duration::hours(14);
+    let unscanned_excluded = unscanned_lab_sessions(
+        &state,
+        &vis,
+        from.and_time(chrono::NaiveTime::MIN).and_utc() - wide,
+        Some(
+            (to + chrono::Duration::days(1))
+                .and_time(chrono::NaiveTime::MIN)
+                .and_utc()
+                + wide,
+        ),
+    )
+    .await?;
+    let snap = MirrorSnapshot::take(&state)?;
+    let w = restrict(&state, vis, w, snap.flags_as_of()).await?;
     let (headers, rows) = snap
         .run(move |c| Ok(stats::daily_by_project(c, &w)?))
         .await?;
-    Ok((headers, Json(DailyAnswer { from, to, tz, rows })))
+    Ok((
+        headers,
+        Json(DailyAnswer {
+            from,
+            to,
+            tz,
+            unscanned_excluded,
+            rows,
+        }),
+    ))
 }
 
 /// `/v1/stats/tool-calls` parameters, these two and no others (D3 condition 2).
@@ -448,6 +521,8 @@ pub struct ToolCallsAnswer {
     /// the counts are. Not the machines' `last_seen`, which client-only ingest
     /// moves (security T1).
     pub last_message_at: Option<DateTime<Utc>>,
+    /// As in [`DailyAnswer::unscanned_excluded`], over `since` to now.
+    pub unscanned_excluded: i64,
     pub by_tool: Vec<ToolCount>,
     pub by_host: Vec<HostCount>,
 }
@@ -493,7 +568,9 @@ pub async fn tool_calls(
             "since is more than {MAX_WINDOW_DAYS} days back"
         )));
     }
-    let visible = stats_read_visibility(&state, &auth)?.session_ok("s");
+    let vis = stats_read_visibility(&state, &auth)?;
+    let unscanned_excluded = unscanned_lab_sessions(&state, &vis, since, None).await?;
+    let visible = vis.session_ok("s");
     let sql = format!(
         r#"WITH hits AS (
                SELECT u.tool_name, m.machine_id
@@ -542,6 +619,7 @@ pub async fn tool_calls(
     Ok(Json(ToolCallsAnswer {
         since,
         last_message_at,
+        unscanned_excluded,
         by_tool,
         by_host,
     }))

@@ -422,7 +422,7 @@ ingested.
 
 - `GET /v1/stats/daily?from=YYYY-MM-DD&to=YYYY-MM-DD&tz=<IANA>`: one row per local
   day and project. Defaults: `tz` Europe/Rome, `to` today, `from` 30 days before.
-  Answers `{from, to, tz, rows}`. From the stats mirror (503 while it builds).
+  Answers `{from, to, tz, unscanned_excluded, rows}`. From the stats mirror (503 while it builds).
   Columns (monitoring's names):
 
   | column | meaning |
@@ -440,9 +440,23 @@ ingested.
 
 - `GET /v1/stats/tool-calls?prefix=<name>&since=<RFC 3339>`: tool calls since T
   (at most 31 days back) whose name equals `prefix` or ends in `__<prefix>`.
-  Answers `{since, last_message_at, by_tool: [{tool, server, count}], by_host:
+  Answers `{since, last_message_at, unscanned_excluded, by_tool: [{tool, server, count}], by_host:
   [{host, count}]}`. From Postgres. Codex MCP calls count from cchv-v0.41.0 on,
   under `mcp__<server>__<tool>` (#102); earlier Codex calls stay `exec`.
+
+**A 200 to a lab reader is complete (from the release after cchv-v0.42.1;
+openspec `stats-stale-after-generation`).** After a client-scope generation
+change, every session is unscanned until `client-scope sweep` stamps it, and a lab
+reader never sees an unscanned session. Both routes therefore answer **503**
+(reason: `N lab sessions in the window are unscanned under generation G; a
+client-scope sweep stamps them`) while a session in the window whose class is
+`none` or unset carries another generation and was last written more than 15
+minutes ago. Run the sweep, and the routes answer 200 again. Such a session written
+within the last 15 minutes (the sweep skips sessions an ingest touches) is left out
+instead, and both answers carry the count as `unscanned_excluded`. An unscanned
+client-class session is hidden whatever its stamp and does not count. A full-scope
+reader sees unscanned sessions, so its `unscanned_excluded` is always 0. The hub
+never sweeps by itself.
 
 **The mirror rebuild with cchv-v0.41.0.** The mirror gains three columns
 (`has_content`, `prompt`, `compaction`) that need the Postgres row, so the first

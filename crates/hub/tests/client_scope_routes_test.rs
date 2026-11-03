@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
@@ -253,6 +253,27 @@ async fn world_with(enforce: bool) -> World {
         .format("%Y-%m-%dT%H%%3A%M%%3A%SZ")
         .to_string();
     let tool_calls_url = format!("/v1/stats/tool-calls?prefix=rt_{}&since={since}", &r[..8]);
+    // The world is a swept hub: every session in the shared test database is
+    // stamped under this generation, as production is after a sweep. Without
+    // it, other tests' unscanned sessions make the stats routes say stale
+    // (openspec stats-stale-after-generation).
+    let hub::client_policy::Load::Ready(policy) =
+        hub::client_policy::load_paths(&dir.join("r.toml"), &dir.join("f.json"))
+    else {
+        panic!("policy")
+    };
+    hub::client_sweep::sweep(
+        &pool,
+        &policy,
+        &hub::client_sweep::SweepOptions {
+            dry_run: false,
+            batch: 500,
+            only_sessions: None,
+            rescan: false,
+        },
+    )
+    .await
+    .unwrap();
     mirror.refresh(&pool).await.unwrap();
     let today = chrono::Utc::now().date_naive();
     let daily_url = format!(
@@ -1148,4 +1169,99 @@ fn daily_by_project_refuses_an_unset_visibility() {
     let conn = duckdb::Connection::open_in_memory().unwrap();
     let w = hub::stats::Window::default();
     assert!(hub::stats::daily_by_project(&conn, &w).is_err());
+}
+
+/// openspec stats-stale-after-generation: stamp one session's coverage, as a
+/// generation change (another generation) or a sweep (the live one) would.
+async fn stamp(w: &World, id: i64, generation: &str) {
+    sqlx::query("UPDATE sessions SET client_gen = $2 WHERE id = $1")
+        .bind(id)
+        .bind(generation)
+        .execute(&w.state.pool)
+        .await
+        .unwrap();
+}
+
+async fn live_generation(w: &World) -> String {
+    sqlx::query_scalar("SELECT generation FROM client_scope_state")
+        .fetch_one(&w.state.pool)
+        .await
+        .unwrap()
+}
+
+fn unscanned_excluded(body: &str) -> i64 {
+    serde_json::from_str::<Value>(body).unwrap()["unscanned_excluded"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("no unscanned_excluded: {body}"))
+}
+
+/// Tasks 1.1, 1.2 and 1.6: a lab session last written before the margin and
+/// unscanned under the live generation makes both lab stats routes 503 (never
+/// a 200 without it); once a sweep stamps it, they answer 200 again.
+#[tokio::test]
+async fn a_generation_change_without_a_sweep_is_stale_never_empty() {
+    let w = world_with(false).await;
+    let live = live_generation(&w).await;
+    stamp(&w, w.lab_id, "an-older-generation").await;
+    for url in [&w.daily_url, &w.tool_calls_url] {
+        for who in ["lab", "stats"] {
+            let (status, body) = get(&w, url, who).await;
+            assert_eq!(status, 503, "{who} {url}: {body}");
+            assert!(
+                body.contains("unscanned") && body.contains(&live),
+                "{who} {url}: the reason names the count and the generation: {body}"
+            );
+        }
+    }
+    stamp(&w, w.lab_id, &live).await;
+    w.mirror.refresh(&w.state.pool).await.unwrap();
+    for url in [&w.daily_url, &w.tool_calls_url] {
+        let (status, body) = get(&w, url, "lab").await;
+        assert_eq!(status, 200, "{url}: {body}");
+        assert_eq!(unscanned_excluded(&body), 0, "{url}");
+    }
+    let (_, daily) = get(&w, &w.daily_url, "lab").await;
+    assert!(
+        daily.contains("\"project\""),
+        "the lab row is back: {daily}"
+    );
+}
+
+/// Task 1.3: a lab session still being written (inside the margin) is left
+/// out and counted, not a 503.
+#[tokio::test]
+async fn a_session_still_being_written_is_left_out_and_counted() {
+    let w = world_with(false).await;
+    stamp(&w, w.lab_id, "an-older-generation").await;
+    sqlx::query(
+        "UPDATE sessions SET last_message_time = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(w.lab_id)
+    .execute(&w.state.pool)
+    .await
+    .unwrap();
+    for url in [&w.daily_url, &w.tool_calls_url] {
+        let (status, body) = get(&w, url, "lab").await;
+        assert_eq!(status, 200, "{url}: {body}");
+        assert_eq!(unscanned_excluded(&body), 1, "{url}");
+    }
+}
+
+/// Tasks 1.4 and 1.5: an unscanned client-class session cannot make lab
+/// counts incomplete, and a full-scope reader sees unscanned sessions.
+#[tokio::test]
+async fn unscanned_client_sessions_and_full_scope_readers_are_not_stale() {
+    let w = world_with(false).await;
+    stamp(&w, w.client_id, "an-older-generation").await;
+    for url in [&w.daily_url, &w.tool_calls_url] {
+        let (status, body) = get(&w, url, "lab").await;
+        assert_eq!(status, 200, "{url}: {body}");
+        assert_eq!(unscanned_excluded(&body), 0, "{url}");
+    }
+    stamp(&w, w.lab_id, "an-older-generation").await;
+    for url in [&w.daily_url, &w.tool_calls_url] {
+        let (status, body) = get(&w, url, "client").await;
+        assert_eq!(status, 200, "{url}: {body}");
+        assert_eq!(unscanned_excluded(&body), 0, "{url}");
+    }
 }
