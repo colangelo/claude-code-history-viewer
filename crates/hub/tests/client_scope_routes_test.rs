@@ -336,6 +336,8 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
         ("/v1/healthz/findings", "/v1/healthz/findings".into(), None),
         // Refused identity-header requests by route template (security fe3fd22 F1): no rows.
         ("/v1/healthz/origin", "/v1/healthz/origin".into(), None),
+        // Counts by credential kind only (hub-read-needs-credential D1): no rows.
+        ("/v1/healthz/auth", "/v1/healthz/auth".into(), None),
         (
             "/v1/healthz/client-scope",
             "/v1/healthz/client-scope".into(),
