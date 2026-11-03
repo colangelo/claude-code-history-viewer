@@ -987,11 +987,14 @@ const ACTIVE_GAP_CAP_SECS: i64 = 300;
 /// Per local day and project display name, over the window (D2).
 ///
 /// A project is its identity (`identity_key`, else its path). Its name comes
-/// only from project rows that have an in-scope session, so a name is never
-/// read off a project the caller cannot see. Identities that share a display
-/// name share a row: the name is the row's key for the reader.
+/// only from project rows that have a session the caller may see, so a name is
+/// never read off a project the caller cannot see. Those rows are taken over
+/// all time, not only the window, so a day keeps its name whatever window asks
+/// for it (infra, 2026-11-03). Identities that share a display name share a
+/// row: the name is the row's key for the reader.
 pub fn daily_by_project(conn: &Connection, w: &Window) -> duckdb::Result<Vec<DailyRow>> {
     materialize_scope(conn, &Scope::Global, w)?;
+    let visible = w.sessions_visible.as_deref().unwrap_or("true");
     let sql = format!(
         r"
         WITH r AS (
@@ -1022,7 +1025,8 @@ pub fn daily_by_project(conn: &Connection, w: &Window) -> duckdb::Result<Vec<Dai
         seen AS (
             SELECT coalesce(identity_key, project_path, '(unknown)') AS ident,
                    project_name, project_path
-              FROM projects WHERE id IN (SELECT DISTINCT project_id FROM stats_scope)),
+              FROM projects
+             WHERE id IN (SELECT s.project_id FROM sessions s WHERE {visible})),
         names AS (
             SELECT s.ident,
                    coalesce(

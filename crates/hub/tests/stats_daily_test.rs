@@ -401,3 +401,72 @@ async fn a_lab_reader_gets_503_without_client_scope() {
         "the control: a client reader is served"
     );
 }
+
+/// A day's project name does not depend on the requested window (infra,
+/// 2026-11-03): an identity's name is chosen from all of its visible project
+/// rows, not only from those with a session inside the window.
+#[tokio::test]
+async fn a_days_project_name_does_not_depend_on_the_window() {
+    let hub = spawn().await;
+    let key = format!("key-{}", Uuid::new_v4().simple());
+    let tag = Uuid::new_v4().simple().to_string();
+    let (alpha, beta) = (format!("alpha-{tag}"), format!("beta-{tag}"));
+    let mut sessions = Vec::new();
+    for (i, name) in [&alpha, &beta, &beta].into_iter().enumerate() {
+        let project_id: i64 = sqlx::query_scalar(
+            "INSERT INTO projects (machine_id, provider, project_path, name, identity_key)
+             VALUES ($1, 'claude', $2, $3, $4) RETURNING id",
+        )
+        .bind(hub.machine)
+        .bind(format!("/tmp/daily-name-{tag}-{i}"))
+        .bind(name)
+        .bind(&key)
+        .fetch_one(&hub.pool)
+        .await
+        .expect("insert project");
+        let s: i64 = sqlx::query_scalar(
+            "INSERT INTO sessions (machine_id, provider, session_id, project_id)
+             VALUES ($1, 'claude', $2, $3) RETURNING id",
+        )
+        .bind(hub.machine)
+        .bind(format!("{tag}-{i}"))
+        .bind(project_id)
+        .fetch_one(&hub.pool)
+        .await
+        .expect("insert session");
+        sessions.push(s);
+    }
+    // alpha's session on 10-05 only; the two beta rows on 10-06 and 10-07.
+    for (s, ts) in sessions.iter().zip([
+        "2026-10-05T10:00:00Z",
+        "2026-10-06T10:00:00Z",
+        "2026-10-07T10:00:00Z",
+    ]) {
+        hub.row(
+            *s,
+            ts,
+            Some("user"),
+            Some(json!([{"type": "text", "text": "hi"}])),
+            json!({"type": "user"}),
+            (None, None),
+            None,
+        )
+        .await;
+    }
+    let names_on_0505 = |body: &Value| -> Vec<String> {
+        body["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .filter(|r| {
+                r["day"] == "2026-10-05" && r["project"].as_str().is_some_and(|p| p.ends_with(&tag))
+            })
+            .map(|r| r["project"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (s1, narrow) = hub.get("?from=2026-10-05&to=2026-10-05&tz=UTC").await;
+    let (s2, wide) = hub.get("?from=2026-10-05&to=2026-10-07&tz=UTC").await;
+    assert_eq!((s1, s2), (200, 200));
+    assert_eq!(names_on_0505(&narrow), vec![beta.clone()], "{narrow}");
+    assert_eq!(names_on_0505(&narrow), names_on_0505(&wide));
+}
