@@ -4,7 +4,7 @@ Security P2 (2026-11-03, ruling 344b9cfa / 3d720785): pick (2) "drop the identit
 
 ## Decisions
 
-**D1. Measure before removing.** A per-principal-kind counter (`/v1/healthz/auth`: counts since start by kind, no names, no tokens) runs for at least 24 h on the release before the drop. Any non-zero `tailscale` count is traced to its caller (time and route only) and moved to a credential first.
+**D1. Measure before removing.** A per-principal-kind counter (`/v1/healthz/auth`: counts since start by kind, no names, no tokens) runs for at least 24 h on the release before the drop. Any non-zero `tailscale` count is traced to its caller (time and route only) and moved to a credential first. The window must cover one full cycle of the slowest caller (security 535b605d): every caller in D2 runs at least daily except on-demand ones (a manual `--backfill-from` loader run, `just tm-backfill`, a hand-run cchv-find). Each on-demand caller is run once by hand with its token, and shown working, before release B.
 
 **D2. Callers today** (task 1 verifies each against the counter and the caller's own config):
 
@@ -27,7 +27,7 @@ Security P2 (2026-11-03, ruling 344b9cfa / 3d720785): pick (2) "drop the identit
 
 **D5. Refuse the old key.** `trust_tailscale_identity` in hub.toml becomes an error at start ("removed: reads need a credential; see deployment.md"), so a forgotten line cannot silently keep or drop behaviour.
 
-**D6. Enforce last.** After D1-D5 are live and the counter shows no header use, infra sets `enforce = true`. Under enforce, a lab principal (machine tokens included) sees no client row on any route; the distiller keeps its client reader. ac's browser logs in with a client-scope reader if he wants client rows (minting is infra's, on ac's word).
+**D6. Enforce last.** After D1-D5 are live and the counter shows no header use, infra sets `enforce = true`. Under enforce, a lab principal (machine tokens included) sees no client row on any route; the distiller keeps its client reader. ac's browser logs in with a LAB reader by default, so client rows never show in an everyday view; a client-scope login is separate and explicit (security 535b605d). A full view by default is ac's preference to state (a desk row via manager-lab), and its minting is infra's.
 
 ## Risks
 
