@@ -58,6 +58,8 @@ pub struct AppState {
     pub cors_origins: Arc<Vec<String>>,
     /// Identity-header requests refused for a foreign Origin or Host (F1).
     pub origin_refusals: crate::origin_guard::Refusals,
+    /// Requests by credential kind and failed checks (hub-read-needs-credential D1, D4).
+    pub auth_stats: crate::auth_stats::Shared,
 }
 
 impl AppState {
@@ -83,6 +85,7 @@ impl AppState {
             public_origins: Arc::new(Vec::new()),
             cors_origins: Arc::new(Vec::new()),
             origin_refusals: crate::origin_guard::Refusals::default(),
+            auth_stats: crate::auth_stats::Shared::default(),
         }
     }
 
@@ -104,7 +107,18 @@ impl AppState {
         .with_client_scope(config.client_scope.clone())
         .with_client_readers(config.client_reader_map())
         .with_public_origins(config.public_origins.clone())
-        .with_cors_origins(config.cors_origins.clone()))
+        .with_cors_origins(config.cors_origins.clone())
+        // `run()` swaps in the hub's file key; a test hub keeps a random one.
+        .with_logins(crate::login::Logins::new(
+            crate::login::random_key(),
+            config.login_eligible(),
+        )))
+    }
+
+    /// The browser-login side (builder-style, same reason).
+    pub fn with_logins(mut self, logins: crate::login::Logins) -> Self {
+        self.logins = logins;
+        self
     }
 
     /// The hub's own origins (builder-style, same reason). Invalid entries are

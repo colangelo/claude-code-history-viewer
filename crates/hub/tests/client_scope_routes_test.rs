@@ -791,7 +791,7 @@ async fn login_cookie_carries_the_tokens_scope_and_nothing_more() {
     let (status, _) = with_cookie(lab_cookie, client_msgs.clone()).await;
     assert_eq!(status, 404, "a lab token's cookie stays lab");
 
-    let (status, _) = with_cookie("cchv_session=forged".into(), client_msgs.clone()).await;
+    let (status, _) = with_cookie("__Host-cchv_session=forged".into(), client_msgs.clone()).await;
     assert_eq!(status, 401);
 
     let r = reqwest::Client::new()

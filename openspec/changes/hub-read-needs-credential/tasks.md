@@ -1,16 +1,17 @@
 ## 0. Before anything ships
 
 - [ ] 0.1 Caller inventory (R2): every D2 caller, on-demand ones included, run once with its own token and shown working; Gatus's credentials from infra.
-- [ ] 0.2 Enforce precondition (R1, D6): infra mints the distiller's client-reader token; the distiller reads a client session with it.
-- [ ] 0.3 Enforce on m4m (R1): timing with manager-lab (a latch); read-back: lab and stats readers see no client row, the distiller still reads its sessions.
+- [ ] 0.2 POSTPONED (D6): enforce precondition: infra mints the distiller's client-reader token; the distiller reads a client session with it.
+- [ ] 0.3 POSTPONED (D6): enforce on m4m: timing with manager-lab (a latch); read-back: lab and stats readers see no client row, the distiller still reads its sessions.
 
 ## 1. Release A (tests first, each RED on today's main)
 
 - [ ] 1.1 Principal counter by kind + `/v1/healthz/auth` (counts only); every header-accepted request logged with route and time.
 - [ ] 1.2 Failed-credential limit across all routes, global (D4): over the limit a failing credential gets 429 + Retry-After; a valid credential is never refused; tokens under 32 chars refused at load.
 - [ ] 1.3 Fingerprint check across tables (D7): a client hash equal to SHA256 of an ingest/reader token refuses the config; a restricted token stays restricted.
-- [ ] 1.4 Webapp cookie login (D3): no same-origin header probe, no token in local storage (a stored one deleted); vitest; frontend review for the visible change.
-- [ ] 1.5 Security single read of release A's code diff (security be7f0c79), then release A, swap. Then infra removes `trust_tailscale_identity` from hub.toml and its template (R2); counts and header log show 0 header hits over one full cycle of the slowest caller.
+- [ ] 1.4 Webapp cookie login (D3): no token in local storage, a URL or a log (a stored one deleted); password-manager form; 401 brings the form back; vitest; frontend review for the visible change.
+- [ ] 1.4b Persistent sessions (D3, security eff460e1): `browser_sessions` with sha256 ids and an HMAC token fingerprint under the hub's key file; scope from the current config at each lookup; 7 d idle / 30 d absolute; rotation on re-login; cap 5; `DELETE /v1/login` and `hub sessions revoke`; only readers log in; `__Host-` cookie. Tests: each of those, plus a restart under the same key keeps the session and another key does not.
+- [ ] 1.5 Security TWO-vendor review of release A's code diff (eff460e1: a new session store), then release A, swap. Then infra removes `trust_tailscale_identity` from hub.toml and its template (R2); counts and header log show 0 header hits over one full cycle of the slowest caller.
 
 ## 2. Release B (code only)
 
@@ -20,4 +21,4 @@
 
 ## 3. Backlog
 
-- [ ] 3.1 File B1-B6 as Gitea issues. B4 (cookie-only writes refused on every write route) lands before any write is ever allowed with the cookie (security be7f0c79); today every write needs a bearer token.
+- [ ] 3.1 File B1, B4, B5, B6 as Gitea issues (B2 and B3 are in release A, D3). B4 (cookie-only writes refused on every write route) lands before any write is ever allowed with the cookie (security be7f0c79); today every write needs a bearer token.

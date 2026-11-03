@@ -5,6 +5,7 @@
 //! are public so integration tests can drive them against a throwaway database.
 
 pub mod auth;
+pub mod auth_stats;
 pub mod backfill;
 pub mod browse;
 pub mod client_admin;
@@ -131,6 +132,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/healthz/findings", get(findings::healthz))
         .route("/v1/healthz/client-scope", get(client_state::healthz))
         .route("/v1/healthz/origin", get(origin_guard::healthz))
+        .route("/v1/healthz/auth", get(auth_stats::healthz))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/login", post(login::login).delete(login::logout))
         .route("/v1/findings/summary", get(findings::summary))
@@ -192,6 +194,12 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
             state.clone(),
             auth::refuse_stats_only_elsewhere,
         ))
+        // Counts every 401 on any route; past the limit a failing credential
+        // gets 429 (hub-read-needs-credential D4). Inside CORS, like the rest.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_stats::limit_failed_credentials,
+        ))
         .layer(cors)
         // API responses carry NO freshness metadata of their own, which lets a
         // browser heuristically cache a `/v1/journal/entries` (or search/browse)
@@ -224,6 +232,20 @@ pub async fn run_migrate() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
     tracing::info!("migrations applied");
+    Ok(())
+}
+
+/// `hub sessions revoke --principal P | --all`: end browser sessions (security
+/// eff460e1 (4)). A cookie that was ended reads nothing on its next request.
+pub async fn run_sessions_revoke(principal: Option<String>) -> anyhow::Result<()> {
+    let config = HubConfig::load()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&config.database_url)
+        .await?;
+    let n = login::revoke(&pool, principal.as_deref()).await?;
+    println!("browser sessions ended: {n}");
     Ok(())
 }
 
@@ -707,7 +729,16 @@ pub async fn run() -> anyhow::Result<()> {
         .await?;
     MIGRATOR.run(&pool).await?;
 
-    let state = AppState::from_config(pool, &config)?;
+    let mut state = AppState::from_config(pool, &config)?;
+    // Browser sessions outlive a restart only with a key the hub keeps
+    // (security eff460e1 (1)): a file, never the database.
+    match config.login_key_path() {
+        Some(path) => {
+            state.logins = state.logins.with_key(login::load_or_create_key(&path)?);
+            tracing::info!(path = %path.display(), "browser sessions persist across restarts");
+        }
+        None => tracing::warn!("no login key file: browser sessions end at every restart"),
+    }
     tracing::info!(
         redact = ?state.redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
         "credential detection: every rule flags; listed rules also redact"

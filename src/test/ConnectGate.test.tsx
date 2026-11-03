@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectGate } from "../components/ArchiveBrowser/ConnectGate";
 import {
@@ -16,11 +16,14 @@ vi.mock("react-i18next", () => ({
 const { mockHubApi } = vi.hoisted(() => ({
   mockHubApi: {
     listProjects: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
   },
 }));
 
 vi.mock("../services/hubApi", () => ({
   hubApi: mockHubApi,
+  HUB_UNAUTHORIZED_EVENT: "cchv:hub-unauthorized",
 }));
 
 vi.mock("../components/ArchiveBrowser/index", () => ({
@@ -77,7 +80,7 @@ describe("ConnectGate", () => {
     expect(screen.queryByTestId("archive-browser")).not.toBeInTheDocument();
   });
 
-  it("persists the config and mounts the browser when the probe succeeds", async () => {
+  it("on another origin holds the token in memory only and mounts the browser", async () => {
     mockHubApi.listProjects
       .mockRejectedValueOnce(new Error("401")) // same-origin auto-probe
       .mockResolvedValueOnce([]); // manual connect
@@ -96,11 +99,88 @@ describe("ConnectGate", () => {
       { url: "http://hub.example:8787", token: "tok-1" },
       { limit: 1 }
     );
+    expect(mockHubApi.login).not.toHaveBeenCalled();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("on the page's own hub trades the token for the session cookie and stores no token", async () => {
+    mockHubApi.listProjects
+      .mockRejectedValueOnce(new Error("401")) // same-origin auto-probe
+      .mockResolvedValueOnce([]); // probe on the new cookie
+    mockHubApi.login.mockResolvedValueOnce(undefined);
+    render(<ConnectGate />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
+    );
+    expect(screen.getByLabelText("archive.web.urlLabel")).toHaveValue(window.location.origin);
+    fillAndSubmit(window.location.origin, "reader-token");
+
+    await waitFor(() => expect(screen.getByTestId("archive-browser")).toBeInTheDocument());
+    expect(mockHubApi.login).toHaveBeenCalledWith(window.location.origin, "reader-token");
+    expect(mockHubApi.listProjects).toHaveBeenLastCalledWith(
+      { url: window.location.origin, token: "" },
+      { limit: 1 }
+    );
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
       v: 1,
-      url: "http://hub.example:8787",
-      token: "tok-1",
+      url: window.location.origin,
+      token: "",
     });
+    expect(JSON.stringify(localStorage)).not.toContain("reader-token");
+  });
+
+  it("offers the form to a password manager", async () => {
+    mockHubApi.listProjects.mockRejectedValueOnce(new Error("401"));
+    const { container } = render(<ConnectGate />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("archive.web.tokenLabel")).toBeInTheDocument()
+    );
+    expect(screen.getByLabelText("archive.web.tokenLabel")).toHaveAttribute(
+      "autocomplete",
+      "current-password"
+    );
+    expect(container.querySelector('input[autocomplete="username"]')).toHaveValue("cchv-reader");
+  });
+
+  it("returns to the form, saying why, when a read answers 401", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ v: 1, url: window.location.origin, token: "" })
+    );
+    render(<ConnectGate />);
+    expect(screen.getByTestId("archive-browser")).toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new Event("cchv:hub-unauthorized"));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("archive.web.sessionEnded")
+    );
+    expect(screen.queryByTestId("archive-browser")).not.toBeInTheDocument();
+  });
+
+  it("a login failure shows the error and stores nothing", async () => {
+    mockHubApi.listProjects.mockRejectedValueOnce(new Error("401"));
+    mockHubApi.login.mockRejectedValueOnce(new Error("hub request to /v1/login failed: 401"));
+    render(<ConnectGate />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
+    );
+    fillAndSubmit(window.location.origin, "machine-token");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "archive.web.connectFailed:hub request to /v1/login failed: 401"
+      )
+    );
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it("deletes a token stored by an older build", () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ v: 1, url: "http://stored:8787", token: "old-token" })
+    );
+    expect(loadStoredHubConfig()).toBeNull();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
   it("shows the error and persists nothing when the probe fails", async () => {
@@ -122,10 +202,10 @@ describe("ConnectGate", () => {
     expect(screen.queryByTestId("archive-browser")).not.toBeInTheDocument();
   });
 
-  it("skips the form on a returning visit with a stored config", () => {
+  it("skips the form on a returning visit with a stored hub URL", () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ v: 1, url: "http://stored:8787", token: "tok" })
+      JSON.stringify({ v: 1, url: "http://stored:8787", token: "" })
     );
     render(<ConnectGate />);
     expect(screen.getByTestId("archive-browser")).toHaveTextContent(
@@ -134,15 +214,17 @@ describe("ConnectGate", () => {
     expect(mockHubApi.listProjects).not.toHaveBeenCalled();
   });
 
-  it("disconnect clears storage and returns to the form", async () => {
+  it("disconnect ends the session, clears storage and returns to the form", async () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ v: 1, url: "http://stored:8787", token: "tok" })
+      JSON.stringify({ v: 1, url: "http://stored:8787", token: "" })
     );
+    mockHubApi.logout.mockResolvedValueOnce(undefined);
     render(<ConnectGate />);
     fireEvent.click(
       screen.getByRole("button", { name: "archive.web.disconnect" })
     );
+    expect(mockHubApi.logout).toHaveBeenCalledWith("http://stored:8787");
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
     await waitFor(() =>
       expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
@@ -153,7 +235,7 @@ describe("ConnectGate", () => {
     // Connected state (stored config).
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ v: 1, url: "http://stored:8787", token: "tok" })
+      JSON.stringify({ v: 1, url: "http://stored:8787", token: "" })
     );
     const { unmount } = render(<ConnectGate />);
     expect(screen.getByTestId("app-version").textContent).toMatch(
@@ -173,7 +255,7 @@ describe("ConnectGate", () => {
     );
   });
 
-  it("connects without a token when the host vouches (identity auth)", async () => {
+  it("connects without a token on a live session", async () => {
     mockHubApi.listProjects
       .mockRejectedValueOnce(new Error("401")) // same-origin auto-probe
       .mockResolvedValueOnce([]); // manual tokenless connect
@@ -192,7 +274,7 @@ describe("ConnectGate", () => {
       { url: "https://hub.tailnet:8788", token: "" },
       { limit: 1 }
     );
-    // Empty token persists and round-trips as a valid stored config.
+    // The URL persists with an empty token and round-trips.
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
       v: 1,
       url: "https://hub.tailnet:8788",

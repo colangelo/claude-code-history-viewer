@@ -9,6 +9,9 @@ USAGE:
     hub                                  serve (default)
     hub migrate                          apply pending migrations, then exit
     hub backfill-analytics [--batch N]   derive analytics fields over stored messages
+    hub sessions revoke --principal P | --all
+                                         end browser sessions (from /v1/login) of one principal
+                                         (machine:<id> or client-reader:<id>), or every one
     hub mirror rebuild                   rebuild the statistics mirror and swap it in
                                          (required after backfill-analytics)
     hub findings dry-run [--since 7d|<RFC3339>] [--rule ID]... [--expect ROW|SESSION:UUID]... [--batch N] [--fingerprint-key-file PATH]
@@ -214,6 +217,16 @@ async fn main() -> anyhow::Result<()> {
             let batch = flag_i64(&args, "--batch").unwrap_or(hub::backfill::DEFAULT_BATCH);
             hub::run_backfill(batch).await
         }
+        Some("sessions") => match (args.get(1).map(String::as_str), &args[2.min(args.len())..]) {
+            (Some("revoke"), [flag]) if flag == "--all" => hub::run_sessions_revoke(None).await,
+            (Some("revoke"), [flag, p]) if flag == "--principal" => {
+                hub::run_sessions_revoke(Some(p.clone())).await
+            }
+            _ => {
+                eprintln!("usage: hub sessions revoke --principal P | --all\n\n{USAGE}");
+                std::process::exit(2);
+            }
+        },
         Some("mirror") => match args.get(1).map(String::as_str) {
             Some("rebuild") => hub::run_mirror_rebuild().await,
             other => {

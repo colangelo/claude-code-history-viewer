@@ -55,3 +55,22 @@ All read endpoints SHALL require a credential: a valid bearer token, or the sess
 #### Scenario: Unknown query params are rejected
 - **WHEN** a browse endpoint is queried with a parameter it does not support (e.g. a typo of a real filter)
 - **THEN** the hub responds `400` naming the unknown parameter, instead of returning plausible-looking unfiltered rows
+
+### Requirement: Browser sessions
+`POST /v1/login` SHALL trade a reader token (a lab reader that is not `stats_only`, or a client reader) for an `HttpOnly` `__Host-` session cookie that reads with that token's scope and never writes. Sessions SHALL survive a hub restart, SHALL take their principal and scope from the configuration current at each request, and SHALL end after 7 days unused or 30 days in all. The hub SHALL store only a hash of the cookie value and a keyed fingerprint of the token.
+
+#### Scenario: Only a reader logs in
+- **WHEN** a machine token, an ingest-only token or a `stats_only` reader posts to `/v1/login`
+- **THEN** no cookie is set and the answer is `401` (machine, ingest) or `403` (`stats_only`)
+
+#### Scenario: A restart keeps the session
+- **WHEN** the hub restarts with the same configuration and key file
+- **THEN** a cookie minted before the restart still reads
+
+#### Scenario: A removed token ends its sessions
+- **WHEN** the token that opened a session is removed from the configuration and the hub restarts
+- **THEN** that session's cookie gets `401`
+
+#### Scenario: Re-login, cap, revoke and expiry
+- **WHEN** a login carries an existing cookie, or a principal opens a sixth session, or the session is deleted (`DELETE /v1/login`, `hub sessions revoke`), or it has been unused 7 days or open 30 days
+- **THEN** the replaced, oldest, deleted or expired cookie gets `401`, and the others keep reading

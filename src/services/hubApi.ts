@@ -272,6 +272,13 @@ export class HubHttpError extends Error {
   }
 }
 
+/**
+ * Fired on `window` when a hub read answers 401: the browser session ended
+ * (expired, revoked, or the token behind it was removed). The connect gate
+ * listens and shows the login form in place.
+ */
+export const HUB_UNAUTHORIZED_EVENT = "cchv:hub-unauthorized";
+
 async function hubGet(url: URL, config: HubConfig): Promise<Response> {
   // `cache: "no-store"` bypasses the browser HTTP cache on every read — the
   // client-side pair to the hub's `Cache-Control: no-store` on `/v1/*`. Without
@@ -284,6 +291,9 @@ async function hubGet(url: URL, config: HubConfig): Promise<Response> {
     cache: "no-store",
   });
   if (!res.ok) {
+    if (res.status === 401) {
+      window.dispatchEvent(new Event(HUB_UNAUTHORIZED_EVENT));
+    }
     throw new HubHttpError(res.status, url.pathname);
   }
   return res;
@@ -328,6 +338,33 @@ function statsParams(url: URL, options?: HubStatsOptions): URL {
 }
 
 export const hubApi = {
+  /**
+   * Trade a reader token for the hub's `HttpOnly` session cookie
+   * (`POST /v1/login`). The token goes in the Authorization header only, never
+   * a URL; the caller keeps it nowhere afterwards.
+   */
+  async login(url: string, token: string): Promise<void> {
+    const path = "/v1/login";
+    const res = await fetch(`${baseUrl({ url, token: "" })}${path}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (!res.ok) throw new HubHttpError(res.status, path);
+  },
+
+  /** End the browser session (`DELETE /v1/login`). */
+  async logout(url: string): Promise<void> {
+    const path = "/v1/login";
+    const res = await fetch(`${baseUrl({ url, token: "" })}${path}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    if (!res.ok) throw new HubHttpError(res.status, path);
+  },
+
   /** `GET /v1/healthz` — no auth; true iff the hub is reachable and healthy. */
   async healthz(config: HubConfig): Promise<boolean> {
     try {

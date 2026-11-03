@@ -55,7 +55,7 @@ enum Scope {
 }
 
 /// The bearer token in the request headers, if any (trimmed, non-empty).
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -67,7 +67,9 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 /// Resolve the bearer token from request headers to its machine id, or 401
 /// when the token is unknown or its kind does not allow `scope`.
 fn resolve_machine(parts: &Parts, state: &AppState, scope: Scope) -> Result<Uuid, HubError> {
-    resolve_machine_headers(&parts.headers, state, scope)
+    let found = resolve_machine_headers(&parts.headers, state, scope)?;
+    state.auth_stats.accepted(crate::auth_stats::Kind::Bearer);
+    Ok(found)
 }
 
 fn resolve_machine_headers(
@@ -232,7 +234,7 @@ fn client_reader(state: &AppState, token: &str) -> Option<Uuid> {
 /// Resolve the caller's read principal: a valid read-capable bearer token first,
 /// then a trusted Tailscale identity header, else 401.
 /// A read principal from the bearer token alone (no cookie, no Tailscale
-/// identity): what `/v1/login` accepts.
+/// identity).
 pub fn bearer_read_principal(
     headers: &HeaderMap,
     state: &AppState,
@@ -249,15 +251,30 @@ pub fn bearer_read_principal(
     Err(HubError::Unauthorized)
 }
 
-fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticated, HubError> {
+async fn resolve_read_principal(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<Authenticated, HubError> {
+    use crate::auth_stats::Kind;
     if let Ok(found) = bearer_read_principal(&parts.headers, state) {
+        state.auth_stats.accepted(if found.1 == ReadScope::Client {
+            Kind::ClientReader
+        } else {
+            Kind::Bearer
+        });
         return Ok(found);
     }
     // A browser session from `/v1/login` (R2-H). A cookie that is presented
     // but not live ends here (security fe3fd22 F1c): logout or revocation must
     // not fall back to the identity header.
     if let Some(value) = crate::login::cookie_value(&parts.headers) {
-        return state.logins.lookup(value).ok_or(HubError::Unauthorized);
+        let found = state
+            .logins
+            .lookup(&state.pool, value)
+            .await?
+            .ok_or(HubError::Unauthorized)?;
+        state.auth_stats.accepted(Kind::Cookie);
+        return Ok(found);
     }
     // The Tailscale identity is lab read, always: the hub cannot tell ac's
     // browser from any other process of his login (design D5). It counts only
@@ -267,11 +284,23 @@ fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticat
     if let Some(login) = trusted_tailscale_identity(parts, state) {
         let (host, origin) = crate::origin_guard::context(parts);
         if crate::origin_guard::header_context_ok(host, origin, &state.public_origins) {
+            // D1/D5: every caller still on the header is found by route and
+            // time before the trust is dropped. Route template, Host and Origin
+            // only (security F6, manager-aruba d3924f8e); never the login.
+            state.auth_stats.accepted(Kind::Tailscale);
+            tracing::info!(
+                route = crate::origin_guard::route_template(parts),
+                host = host.unwrap_or("-"),
+                origin = origin.unwrap_or("-"),
+                "read accepted by the Tailscale identity header"
+            );
             return Ok(Authenticated(format!("tailscale:{login}"), ReadScope::Lab));
         }
         let route = state.origin_refusals.record(parts);
         tracing::warn!(
             %route,
+            host = host.unwrap_or("-"),
+            origin = origin.unwrap_or("-"),
             "identity header refused: request from a foreign page or to a foreign name"
         );
     }
@@ -281,12 +310,12 @@ fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticat
 impl FromRequestParts<AppState> for Authenticated {
     type Rejection = HubError;
 
-    // Synchronous, like `AuthedMachine` above — see the note there.
-    fn from_request_parts(
+    // Async: a browser cookie is looked up in `browser_sessions`.
+    async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
-    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        ready(resolve_read_principal(parts, state))
+    ) -> Result<Self, Self::Rejection> {
+        resolve_read_principal(parts, state).await
     }
 }
 
@@ -296,11 +325,11 @@ impl FromRequestParts<AppState> for Authenticated {
 impl OptionalFromRequestParts<AppState> for Authenticated {
     type Rejection = Infallible;
 
-    fn from_request_parts(
+    async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
-    ) -> impl Future<Output = Result<Option<Self>, Self::Rejection>> + Send {
-        ready(Ok(resolve_read_principal(parts, state).ok()))
+    ) -> Result<Option<Self>, Self::Rejection> {
+        Ok(resolve_read_principal(parts, state).await.ok())
     }
 }
 

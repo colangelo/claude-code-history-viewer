@@ -3,12 +3,16 @@
  * (spec: openspec/specs/static-archive-webapp/spec.md).
  *
  * Owns the hub connection lifecycle. Order of attempts:
- * 1. stored config from a previous manual connect (`localStorage`);
+ * 1. stored hub URL from a previous login (`localStorage`, never a token);
  * 2. same-origin auto-connect — a tokenless probe of the page origin, which
- *    succeeds when the host authenticates the request itself (hub behind
- *    Tailscale serve with `trust_tailscale_identity`); persists nothing;
- * 3. the manual URL+token form, validated with an authenticated probe
- *    before persisting (healthz alone would not validate the token).
+ *    succeeds while the browser holds a live session cookie; persists nothing;
+ * 3. the login form. On the page's own hub the token is traded once for the
+ *    hub's `HttpOnly` session cookie (`POST /v1/login`) and kept nowhere
+ *    (openspec hub-read-needs-credential D3). Another origin cannot use that
+ *    cookie, so there the token is held in memory for this tab only.
+ *
+ * A read that answers 401 later (session expired or revoked) brings the form
+ * back in place; the hash route is kept, so logging in returns to the view.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
@@ -19,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { ArchiveBrowser } from "./index";
 import { FontScaleControl } from "./FontScaleControl";
 import { ThemeToggle } from "./ThemeToggle";
-import { hubApi, type HubConfig } from "../../services/hubApi";
+import { HUB_UNAUTHORIZED_EVENT, hubApi, type HubConfig } from "../../services/hubApi";
 import {
   clearStoredHubConfig,
   loadStoredHubConfig,
@@ -35,14 +39,24 @@ function hubHost(url: string): string {
   }
 }
 
+/** Whether `url` is the page's own origin (where the session cookie lives). */
+function isPageOrigin(url: string): boolean {
+  try {
+    return new URL(url).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 export function ConnectGate() {
   const { t } = useTranslation();
   const [config, setConfig] = useState<HubConfig | null>(() => loadStoredHubConfig());
   const [probing, setProbing] = useState(() => loadStoredHubConfig() == null);
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(() => window.location.origin);
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionEnded, setSessionEnded] = useState(false);
   const probeStarted = useRef(false);
   const urlId = useId();
   const tokenId = useId();
@@ -75,20 +89,41 @@ export function ConnectGate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A read answered 401 while connected: the session ended. Back to the form.
+  useEffect(() => {
+    if (config == null) return;
+    const onUnauthorized = () => {
+      setConfig(null);
+      setSessionEnded(true);
+    };
+    window.addEventListener(HUB_UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(HUB_UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [config]);
+
   const handleSubmit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
-      // Token optional (issue #21): an identity-authed hub (Tailscale serve)
-      // vouches for the request itself, so an empty token can still probe OK.
-      const candidate: HubConfig = { url: url.trim(), token: token.trim() };
-      if (!candidate.url) return;
+      const target = url.trim();
+      const secret = token.trim();
+      if (!target) return;
       setConnecting(true);
       setError(null);
       try {
-        // Authenticated probe: validates URL, reachability AND credentials
-        // (bearer token, or host-side identity when the token is empty).
+        let candidate: HubConfig;
+        if (secret && isPageOrigin(target)) {
+          // Trade the token for the session cookie; keep the token nowhere.
+          await hubApi.login(target, secret);
+          candidate = { url: target, token: "" };
+        } else {
+          // Another origin: bearer for this tab only. An empty token probes
+          // with whatever session the browser already has.
+          candidate = { url: target, token: secret };
+        }
+        // Authenticated probe: validates URL, reachability AND the credential.
         await hubApi.listProjects(candidate, { limit: 1 });
-        storeHubConfig(candidate);
+        if (candidate.token === "") storeHubConfig(candidate);
+        setToken("");
+        setSessionEnded(false);
         setConfig(candidate);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -100,10 +135,15 @@ export function ConnectGate() {
   );
 
   const handleDisconnect = useCallback(() => {
+    if (config != null && config.token === "") {
+      // Best effort: the cookie is ended server-side; a failure leaves it to expire.
+      hubApi.logout(config.url).catch(() => undefined);
+    }
     clearStoredHubConfig();
     setConfig(null);
     setError(null);
-  }, []);
+    setSessionEnded(false);
+  }, [config]);
 
   if (probing && config == null) {
     return (
@@ -201,6 +241,19 @@ export function ConnectGate() {
             required
           />
         </div>
+        {/* A fixed account name, so a password manager files the token under
+            one entry for this hub and fills it next time. Visually hidden, not
+            `hidden`: password managers skip fields that are not rendered. */}
+        <input
+          type="text"
+          name="username"
+          autoComplete="username"
+          value="cchv-reader"
+          readOnly
+          tabIndex={-1}
+          aria-hidden="true"
+          className="sr-only"
+        />
         <div className="space-y-1">
           <label htmlFor={tokenId} className="text-xs font-medium">
             {t("archive.web.tokenLabel")}
@@ -208,11 +261,18 @@ export function ConnectGate() {
           <Input
             id={tokenId}
             type="password"
+            name="password"
+            autoComplete="current-password"
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder={t("archive.web.tokenPlaceholder")}
           />
         </div>
+        {sessionEnded && error == null && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {t("archive.web.sessionEnded")}
+          </p>
+        )}
         {error != null && (
           <p role="alert" className="text-xs text-destructive">
             {t("archive.web.connectFailed", { error })}

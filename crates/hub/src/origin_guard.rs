@@ -59,6 +59,15 @@ pub fn context(parts: &Parts) -> (Option<&str>, Option<&str>) {
     (get(HOST), get(ORIGIN))
 }
 
+/// The request's route template (Axum's `MatchedPath`), never the path: a
+/// path can carry a project key that names a client (security F6).
+pub fn route_template(parts: &Parts) -> &str {
+    parts
+        .extensions
+        .get::<MatchedPath>()
+        .map_or("(unmatched)", MatchedPath::as_str)
+}
+
 /// Refused header requests by route template, since start.
 #[derive(Clone)]
 pub struct Refusals {
@@ -78,11 +87,7 @@ impl Default for Refusals {
 impl Refusals {
     /// Count one refusal under the request's route template.
     pub fn record(&self, parts: &Parts) -> String {
-        let route = parts
-            .extensions
-            .get::<MatchedPath>()
-            .map_or("(unmatched)", MatchedPath::as_str)
-            .to_string();
+        let route = route_template(parts).to_string();
         *self
             .by_route
             .lock()

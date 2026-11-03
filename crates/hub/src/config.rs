@@ -7,6 +7,23 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// The shortest plaintext token a config may hold (openspec
+/// hub-read-needs-credential D4, security R4): guessing must stay infeasible
+/// even without a per-source limit behind Tailscale serve.
+pub const MIN_TOKEN_LEN: usize = 32;
+
+/// Lowercase hex SHA256, the form `[[client_readers]]` stores.
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubConfig {
     pub database_url: String,
@@ -62,6 +79,22 @@ pub struct HubConfig {
     /// same-origin webapp does not need.
     #[serde(default)]
     pub cors_origins: Vec<String>,
+    /// The key file behind browser-session fingerprints (`/v1/login`). Unset:
+    /// `hub-login.key` next to `HUB_CONFIG`, created on first start. Without
+    /// either, sessions end at every restart.
+    #[serde(default)]
+    pub login_key_file: Option<PathBuf>,
+}
+
+impl HubConfig {
+    /// Where the login key lives, if anywhere (see `login_key_file`).
+    pub fn login_key_path(&self) -> Option<PathBuf> {
+        self.login_key_file.clone().or_else(|| {
+            std::env::var_os("HUB_CONFIG")
+                .map(PathBuf::from)
+                .and_then(|p| p.parent().map(|d| d.join("hub-login.key")))
+        })
+    }
 }
 
 /// One `[[client_readers]]` entry.
@@ -350,6 +383,7 @@ impl HubConfig {
             client_readers: Vec::new(),
             public_origins: Vec::new(),
             cors_origins: Vec::new(),
+            login_key_file: None,
         })
     }
 
@@ -448,6 +482,44 @@ impl HubConfig {
                 anyhow::bail!("duplicate machine_id {machine_id}: {first} and {who}");
             }
         }
+        // Fingerprints across tables (openspec hub-read-needs-credential D7,
+        // security R3): a client-reader hash equal to the SHA256 of a
+        // plaintext token would give that token client reads, so a
+        // restricted token could widen. The plain map above compares strings
+        // only and cannot see it.
+        let client_hashes: std::collections::HashSet<&str> = self
+            .client_readers
+            .iter()
+            .map(|r| r.token_sha256.as_str())
+            .collect();
+        let plaintext = self
+            .tokens
+            .iter()
+            .map(|t| {
+                (
+                    t.token.as_str(),
+                    format!(
+                        "token `{}`",
+                        t.label.clone().unwrap_or_else(|| t.machine_id.to_string())
+                    ),
+                )
+            })
+            .chain(
+                self.readers
+                    .iter()
+                    .map(|r| (r.token.as_str(), format!("reader `{}`", r.label))),
+            );
+        for (token, who) in plaintext {
+            if token.len() < MIN_TOKEN_LEN {
+                anyhow::bail!("{who}: tokens must be at least {MIN_TOKEN_LEN} characters");
+            }
+            if client_hashes.contains(sha256_hex(token).as_str()) {
+                anyhow::bail!(
+                    "{who}: a client reader's token_sha256 is the hash of this token; \
+                     one token cannot hold two scopes"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -456,6 +528,27 @@ impl HubConfig {
         self.client_readers
             .iter()
             .map(|r| (r.token_sha256.clone(), r.machine_id))
+            .collect()
+    }
+
+    /// The tokens that may log in at `/v1/login` (security eff460e1 (6)): lab
+    /// readers that are not `stats_only`, and client readers. Never a machine
+    /// or ingest token.
+    pub fn login_eligible(&self) -> Vec<crate::login::Eligible> {
+        use crate::visibility::ReadScope;
+        self.readers
+            .iter()
+            .filter(|r| !r.stats_only)
+            .map(|r| crate::login::Eligible {
+                token_sha256: crate::login::token_sha256(&r.token),
+                principal: format!("machine:{}", r.machine_id),
+                scope: ReadScope::Lab,
+            })
+            .chain(self.client_readers.iter().map(|c| crate::login::Eligible {
+                token_sha256: c.token_sha256.to_ascii_lowercase(),
+                principal: format!("client-reader:{}", c.machine_id),
+                scope: ReadScope::Client,
+            }))
             .collect()
     }
 
@@ -490,18 +583,19 @@ mod tests {
         ))?)
     }
 
+    /// Tokens long enough for `validate` (MIN_TOKEN_LEN).
+    const MAC: &str = "mac-token-0123456789abcdef0123456789";
+    const BLOG: &str = "blog-token-0123456789abcdef012345678";
+
     #[test]
     fn readers_are_collected_into_the_token_map_and_the_reader_set() {
         let config = parse(&format!(
-            "[[tokens]]\ntoken = \"mac\"\nmachine_id = \"{ID}\"\n\
-             [[readers]]\ntoken = \"blog\"\nmachine_id = \"{ID2}\"\nlabel = \"agents-blog\"\n"
+            "[[tokens]]\ntoken = \"{MAC}\"\nmachine_id = \"{ID}\"\n\
+             [[readers]]\ntoken = \"{BLOG}\"\nmachine_id = \"{ID2}\"\nlabel = \"agents-blog\"\n"
         ))
         .unwrap();
         assert_eq!(config.token_map().len(), 2);
-        assert_eq!(
-            config.read_only_tokens(),
-            HashSet::from(["blog".to_string()])
-        );
+        assert_eq!(config.read_only_tokens(), HashSet::from([BLOG.to_string()]));
         assert!(config.ingest_only_tokens().is_empty());
         config.validate().unwrap();
     }
@@ -525,6 +619,56 @@ mod tests {
             "[[readers]]\ntoken = \"t\"\nmachine_id = \"{ID}\"\nlabel = \"r\"\ningest_only = true\n"
         ))
         .is_err());
+    }
+
+    /// hub-read-needs-credential D7 (security R3): a client-reader hash equal
+    /// to the SHA256 of an ingest or reader token is refused, without printing
+    /// the token; a different hash is fine.
+    #[test]
+    fn a_client_hash_of_a_plaintext_token_is_refused() {
+        let token = "t".repeat(40);
+        let hash = super::sha256_hex(&token);
+        for table in ["tokens", "readers"] {
+            let extra = if table == "tokens" {
+                "ingest_only = true\n"
+            } else {
+                ""
+            };
+            let cfg = format!(
+                "[[{table}]]\ntoken = \"{token}\"\nmachine_id = \"{ID}\"\nlabel = \"guest\"\n{extra}\
+                 [[client_readers]]\ntoken_sha256 = \"{hash}\"\nmachine_id = \"{ID2}\"\nlabel = \"distiller\"\n"
+            );
+            let err = parse(&cfg).unwrap().validate().unwrap_err().to_string();
+            assert!(err.contains("two scopes"), "{table}: {err}");
+            assert!(
+                !err.contains(&token),
+                "{table}: the error must not print a token: {err}"
+            );
+        }
+        let other = super::sha256_hex(&"u".repeat(40));
+        let ok = format!(
+            "[[tokens]]\ntoken = \"{token}\"\nmachine_id = \"{ID}\"\nlabel = \"m4m\"\n\
+             [[client_readers]]\ntoken_sha256 = \"{other}\"\nmachine_id = \"{ID2}\"\nlabel = \"distiller\"\n"
+        );
+        parse(&ok).unwrap().validate().unwrap();
+    }
+
+    /// hub-read-needs-credential D4 (security R4): a plaintext token under 32
+    /// characters is refused at load.
+    #[test]
+    fn a_short_token_is_refused() {
+        for (table, len, refused) in [
+            ("tokens", 31, true),
+            ("readers", 31, true),
+            ("tokens", 32, false),
+        ] {
+            let cfg = format!(
+                "[[{table}]]\ntoken = \"{}\"\nmachine_id = \"{ID}\"\nlabel = \"x\"\n",
+                "k".repeat(len)
+            );
+            let r = parse(&cfg).unwrap().validate();
+            assert_eq!(r.is_err(), refused, "{table} {len}: {r:?}");
+        }
     }
 
     /// C1: a reader leaf copied from a guest leaf (same token) or any repeat
