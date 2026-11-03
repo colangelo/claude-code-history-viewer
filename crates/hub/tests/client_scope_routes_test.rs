@@ -76,6 +76,10 @@ struct World {
     daily_url: String,
     /// `/v1/stats/tool-calls` for the one tool both sessions called, two days ago.
     tool_calls_url: String,
+    /// `/v1/journal/pending` from the world's own pending day (two days ago):
+    /// pending is newest first, and the world sweeps the shared test database,
+    /// so an early `from` lets other tests' groups push the world's off the page.
+    pending_url: String,
     _dir: std::path::PathBuf,
 }
 
@@ -280,7 +284,12 @@ async fn world_with(enforce: bool) -> World {
         "/v1/stats/daily?from={}&to={today}&tz=UTC",
         today - chrono::Duration::days(30)
     );
+    let pending_url = format!(
+        "/v1/journal/pending?from={}&limit=500",
+        (chrono::Utc::now() - chrono::Duration::days(2)).format("%Y-%m-%d")
+    );
     World {
+        pending_url,
         base,
         lab_reader,
         stats_reader,
@@ -336,11 +345,7 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
             None,
         ),
         ("/v1/search", format!("/v1/search?q={l}"), lab()),
-        (
-            "/v1/journal/pending",
-            "/v1/journal/pending?from=2026-10-01&limit=500".into(),
-            lab_path(),
-        ),
+        ("/v1/journal/pending", w.pending_url.clone(), lab_path()),
         (
             "/v1/journal/entries",
             "/v1/journal/entries?from=2026-10-01".into(),
@@ -634,7 +639,7 @@ async fn lab_responses_equal_responses_with_client_rows_deleted() {
         format!("/v1/journal/entries?project={cp}"),
         "/v1/journal/open-questions?days=3650".to_string(),
         format!("/v1/journal/open-questions?days=3650&project={cp}"),
-        "/v1/journal/pending?from=2026-10-01&limit=500".to_string(),
+        w.pending_url.clone(),
         "/v1/identities".to_string(),
         format!("/v1/sessions/{}/messages", w.client_id),
         format!("/v1/sessions/{}/messages", w.client_sid),
@@ -902,7 +907,7 @@ async fn unscanned_sessions_and_route_less_entries_are_hidden() {
             "/v1/journal/open-questions?days=3650&project={}",
             urlencode(&ids[1].0)
         ),
-        "/v1/journal/pending?from=2026-10-01&limit=500".to_string(),
+        w.pending_url.clone(),
         "/v1/healthz/journal?within_days=7".to_string(),
     ] {
         for who in ["lab", "tailscale"] {
