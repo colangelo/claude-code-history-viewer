@@ -289,7 +289,6 @@ async fn world_with(enforce: bool) -> World {
         (chrono::Utc::now() - chrono::Duration::days(2)).format("%Y-%m-%d")
     );
     World {
-        pending_url,
         base,
         lab_reader,
         stats_reader,
@@ -310,6 +309,7 @@ async fn world_with(enforce: bool) -> World {
         mirror_cfg,
         daily_url,
         tool_calls_url,
+        pending_url,
         dir,
     }
 }
