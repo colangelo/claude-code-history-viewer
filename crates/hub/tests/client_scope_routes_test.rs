@@ -155,6 +155,8 @@ async fn world_with(enforce: bool) -> World {
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    // The hub's own name is the address the tests call (security fe3fd22 F1).
+    let state = state.with_public_origins(vec![base.clone()]);
     let router = hub::router(state.clone(), None);
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
@@ -332,6 +334,8 @@ fn cases(w: &World) -> Vec<(&'static str, String, Option<String>)> {
         ),
         ("/v1/healthz/stats", "/v1/healthz/stats".into(), None),
         ("/v1/healthz/findings", "/v1/healthz/findings".into(), None),
+        // Refused identity-header requests by route template (security fe3fd22 F1): no rows.
+        ("/v1/healthz/origin", "/v1/healthz/origin".into(), None),
         (
             "/v1/healthz/client-scope",
             "/v1/healthz/client-scope".into(),

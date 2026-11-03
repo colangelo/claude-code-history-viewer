@@ -55,9 +55,11 @@ async fn spawn_with(static_dir: Option<&std::path::Path>) -> TestHub {
     ))
     .expect("config");
     config.validate().expect("valid config");
-    let state = hub::AppState::from_config(pool, &config).expect("state");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let state = hub::AppState::from_config(pool, &config)
+        .expect("state")
+        .with_public_origins(vec![format!("http://{addr}")]);
     let router = hub::router(state, static_dir);
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();

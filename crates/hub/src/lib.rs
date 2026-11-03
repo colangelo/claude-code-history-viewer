@@ -29,6 +29,7 @@ pub mod journal;
 pub mod journal_threads;
 pub mod login;
 pub mod mirror;
+pub mod origin_guard;
 pub mod pagination;
 pub mod pair;
 pub mod redact;
@@ -49,7 +50,7 @@ use sqlx::postgres::PgPoolOptions;
 use std::path::Path;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -98,8 +99,16 @@ const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 /// since it isn't on the CORS-safelisted response header list `fetch` allows
 /// scripts to read by default.
 pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
+    // Only the configured pages, never `*` and never a reflection of the
+    // caller (security fe3fd22 F1a). Empty: no CORS headers at all; the
+    // webapp is same-origin and needs none.
+    let cors_origins: Vec<HeaderValue> = state
+        .cors_origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::list(cors_origins))
         .allow_methods(Any)
         // CONTENT_TYPE: the alias POST sends application/json, which is not
         // preflight-safelisted once the request also carries Authorization.
@@ -121,6 +130,7 @@ pub fn router(state: AppState, static_dir: Option<&Path>) -> Router {
         .route("/v1/healthz/stats", get(health::healthz_stats))
         .route("/v1/healthz/findings", get(findings::healthz))
         .route("/v1/healthz/client-scope", get(client_state::healthz))
+        .route("/v1/healthz/origin", get(origin_guard::healthz))
         .route("/v1/ingest", post(ingest::ingest))
         .route("/v1/login", post(login::login).delete(login::logout))
         .route("/v1/findings/summary", get(findings::summary))

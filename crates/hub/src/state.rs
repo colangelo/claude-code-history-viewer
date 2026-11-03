@@ -52,6 +52,12 @@ pub struct AppState {
     pub client_readers: Arc<HashMap<String, Uuid>>,
     /// Browser sessions minted by `/v1/login` (R2-H).
     pub logins: crate::login::Logins,
+    /// The hub's own origins, normalized (`HubConfig::public_origins`).
+    pub public_origins: Arc<Vec<String>>,
+    /// Pages allowed cross-origin (`HubConfig::cors_origins`), normalized.
+    pub cors_origins: Arc<Vec<String>>,
+    /// Identity-header requests refused for a foreign Origin or Host (F1).
+    pub origin_refusals: crate::origin_guard::Refusals,
 }
 
 impl AppState {
@@ -74,6 +80,9 @@ impl AppState {
             client_scope: None,
             client_readers: Arc::new(HashMap::new()),
             logins: crate::login::Logins::default(),
+            public_origins: Arc::new(Vec::new()),
+            cors_origins: Arc::new(Vec::new()),
+            origin_refusals: crate::origin_guard::Refusals::default(),
         }
     }
 
@@ -93,7 +102,32 @@ impl AppState {
         .with_stats_only_tokens(config.stats_only_tokens())
         .with_redact_rules(config.redaction.rules()?)
         .with_client_scope(config.client_scope.clone())
-        .with_client_readers(config.client_reader_map()))
+        .with_client_readers(config.client_reader_map())
+        .with_public_origins(config.public_origins.clone())
+        .with_cors_origins(config.cors_origins.clone()))
+    }
+
+    /// The hub's own origins (builder-style, same reason). Invalid entries are
+    /// dropped; `HubConfig::validate` refuses them at load.
+    pub fn with_public_origins(mut self, origins: Vec<String>) -> Self {
+        self.public_origins = Arc::new(
+            origins
+                .iter()
+                .filter_map(|o| crate::origin_guard::normalize_origin(o))
+                .collect(),
+        );
+        self
+    }
+
+    /// Pages allowed cross-origin (builder-style, same reason).
+    pub fn with_cors_origins(mut self, origins: Vec<String>) -> Self {
+        self.cors_origins = Arc::new(
+            origins
+                .iter()
+                .filter_map(|o| crate::origin_guard::normalize_origin(o))
+                .collect(),
+        );
+        self
     }
 
     /// Client-read principals by token hash (builder-style, same reason).

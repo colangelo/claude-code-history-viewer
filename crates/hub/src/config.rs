@@ -51,6 +51,17 @@ pub struct HubConfig {
     /// sessions. The config holds only the sha256 of each token, never the token.
     #[serde(default)]
     pub client_readers: Vec<ClientReaderEntry>,
+    /// The hub's own origins, `scheme://host[:port]` as browsers address it
+    /// (on m4m the two tailscale serve fronts). The Tailscale identity header
+    /// counts only on a request to one of these names from one of these pages
+    /// or from no page (security fe3fd22 F1). Empty: the header never counts.
+    #[serde(default)]
+    pub public_origins: Vec<String>,
+    /// Other pages allowed to call the hub cross-origin (with a bearer token;
+    /// never with credentials). Empty, the default: no CORS at all, which the
+    /// same-origin webapp does not need.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 /// One `[[client_readers]]` entry.
@@ -337,6 +348,8 @@ impl HubConfig {
             // Client scope needs `hub.toml`.
             client_scope: None,
             client_readers: Vec::new(),
+            public_origins: Vec::new(),
+            cors_origins: Vec::new(),
         })
     }
 
@@ -370,6 +383,24 @@ impl HubConfig {
     /// twice makes the audit principal ambiguous. The error names entries by
     /// label (else machine id), never by token.
     pub fn validate(&self) -> anyhow::Result<()> {
+        for (key, list) in [
+            ("public_origins", &self.public_origins),
+            ("cors_origins", &self.cors_origins),
+        ] {
+            for o in list {
+                if crate::origin_guard::normalize_origin(o).is_none() {
+                    anyhow::bail!(
+                        "{key}: `{o}` is not an http(s) origin (scheme://host[:port], no path)"
+                    );
+                }
+            }
+        }
+        if !self.trust_tailscale_identity.is_empty() && self.public_origins.is_empty() {
+            tracing::warn!(
+                "trust_tailscale_identity is set but public_origins is empty: \
+                 the identity header will never count (security fe3fd22 F1)"
+            );
+        }
         let entries = self
             .tokens
             .iter()

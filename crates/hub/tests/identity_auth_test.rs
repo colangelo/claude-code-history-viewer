@@ -22,9 +22,11 @@ async fn spawn(trusted: Vec<String>) -> String {
         .expect("connect");
     hub::MIGRATOR.run(&pool).await.expect("migrate");
 
-    let state = hub::AppState::new(pool, HashMap::new(), trusted);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    // The hub's own name is the address the tests call (security fe3fd22 F1).
+    let state = hub::AppState::new(pool, HashMap::new(), trusted)
+        .with_public_origins(vec![format!("http://{addr}")]);
     tokio::spawn(async move {
         axum::serve(listener, hub::router(state, None))
             .await

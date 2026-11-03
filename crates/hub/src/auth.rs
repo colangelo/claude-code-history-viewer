@@ -253,16 +253,27 @@ fn resolve_read_principal(parts: &Parts, state: &AppState) -> Result<Authenticat
     if let Ok(found) = bearer_read_principal(&parts.headers, state) {
         return Ok(found);
     }
-    // A browser session from `/v1/login` (R2-H).
-    if let Some(found) =
-        crate::login::cookie_value(&parts.headers).and_then(|v| state.logins.lookup(v))
-    {
-        return Ok(found);
+    // A browser session from `/v1/login` (R2-H). A cookie that is presented
+    // but not live ends here (security fe3fd22 F1c): logout or revocation must
+    // not fall back to the identity header.
+    if let Some(value) = crate::login::cookie_value(&parts.headers) {
+        return state.logins.lookup(value).ok_or(HubError::Unauthorized);
     }
     // The Tailscale identity is lab read, always: the hub cannot tell ac's
-    // browser from any other process of his login (design D5).
+    // browser from any other process of his login (design D5). It counts only
+    // on a request to the hub's own name from the hub's own page or no page
+    // (F1b): tailscale serve adds it to every request from ac's devices,
+    // including a hostile page's cross-origin fetch.
     if let Some(login) = trusted_tailscale_identity(parts, state) {
-        return Ok(Authenticated(format!("tailscale:{login}"), ReadScope::Lab));
+        let (host, origin) = crate::origin_guard::context(parts);
+        if crate::origin_guard::header_context_ok(host, origin, &state.public_origins) {
+            return Ok(Authenticated(format!("tailscale:{login}"), ReadScope::Lab));
+        }
+        let route = state.origin_refusals.record(parts);
+        tracing::warn!(
+            %route,
+            "identity header refused: request from a foreign page or to a foreign name"
+        );
     }
     Err(HubError::Unauthorized)
 }
