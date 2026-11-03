@@ -136,7 +136,7 @@ pub struct Eligible {
 pub struct Logins {
     key: Arc<[u8; 32]>,
     eligible: Arc<Vec<Eligible>>,
-    /// token_fp → index into `eligible`.
+    /// `token_fp` → index into `eligible`.
     by_fp: Arc<HashMap<String, usize>>,
 }
 

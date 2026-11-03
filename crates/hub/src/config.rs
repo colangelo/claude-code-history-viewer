@@ -583,7 +583,7 @@ mod tests {
         ))?)
     }
 
-    /// Tokens long enough for `validate` (MIN_TOKEN_LEN).
+    /// Tokens long enough for `validate` (`MIN_TOKEN_LEN`).
     const MAC: &str = "mac-token-0123456789abcdef0123456789";
     const BLOG: &str = "blog-token-0123456789abcdef012345678";
 

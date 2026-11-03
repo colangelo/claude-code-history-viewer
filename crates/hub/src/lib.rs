@@ -732,12 +732,11 @@ pub async fn run() -> anyhow::Result<()> {
     let mut state = AppState::from_config(pool, &config)?;
     // Browser sessions outlive a restart only with a key the hub keeps
     // (security eff460e1 (1)): a file, never the database.
-    match config.login_key_path() {
-        Some(path) => {
-            state.logins = state.logins.with_key(login::load_or_create_key(&path)?);
-            tracing::info!(path = %path.display(), "browser sessions persist across restarts");
-        }
-        None => tracing::warn!("no login key file: browser sessions end at every restart"),
+    if let Some(path) = config.login_key_path() {
+        state.logins = state.logins.with_key(login::load_or_create_key(&path)?);
+        tracing::info!(path = %path.display(), "browser sessions persist across restarts");
+    } else {
+        tracing::warn!("no login key file: browser sessions end at every restart");
     }
     tracing::info!(
         redact = ?state.redact_rules.iter().map(redact::Rule::id).collect::<Vec<_>>(),
