@@ -1,6 +1,14 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: Authentication and pagination
+
+**Reason**: its identity-header path let any process with ac's tailnet identity, or any local process on m4m, read every row with no credential (security P2, 2026-11-03). Replaced by "Read authentication and pagination", which keeps the bearer, pagination and parameter rules and drops the header path.
+
+**Migration**: callers that relied on the `Tailscale-User-Login` header log in with a token: the webapp through `POST /v1/login`, any other caller with a bearer token (design D2 lists every caller).
+
+## ADDED Requirements
+
+### Requirement: Read authentication and pagination
 
 All read endpoints SHALL require a credential: a valid bearer token, or the session cookie that `POST /v1/login` issues in exchange for one. A `Tailscale-User-Login` header SHALL grant nothing, whatever its value, and the hub SHALL refuse to start with a `trust_tailscale_identity` key in its config. The login cookie SHALL be `HttpOnly`, `Secure`, `SameSite=Strict`, with a lifetime, and failed logins SHALL be rate-limited per source address. `/v1/ingest` SHALL keep requiring a bearer token, since writes bind to a machine identity. All read endpoints SHALL support bounded pagination via limit and offset, returning a stable order so that paging does not drop or duplicate rows. Truncation MUST be detectable: the session messages endpoint SHALL report the session's total message count, and the projects and sessions lists their filtered totals, in an `X-Total-Count` response header, so a client that receives a default-limit page (50; max 200) can tell it is partial. Browse endpoints SHALL reject unknown query parameters with `400` instead of ignoring them: an unsupported filter that silently returns unfiltered rows reads exactly like a real answer.
 
