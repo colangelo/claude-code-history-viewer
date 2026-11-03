@@ -181,8 +181,9 @@ impl Logins {
         value: &str,
     ) -> Result<Option<Authenticated>, HubError> {
         let id_hash = Sha256::digest(value.as_bytes()).to_vec();
-        let row: Option<(String, bool)> = sqlx::query_as(
-            "SELECT token_fp, last_seen < now() - make_interval(secs => $2) FROM browser_sessions
+        let row: Option<(String, String, bool)> = sqlx::query_as(
+            "SELECT token_fp, principal, last_seen < now() - make_interval(secs => $2)
+             FROM browser_sessions
              WHERE id_hash = $1 AND expires_at > now()
                AND last_seen > now() - make_interval(secs => $3)",
         )
@@ -191,17 +192,30 @@ impl Logins {
         .bind(IDLE_SECS as f64)
         .fetch_optional(pool)
         .await?;
-        let Some((fp, stale)) = row else {
+        let Some((fp, stored_principal, stale)) = row else {
             return Ok(None);
         };
         let Some(e) = self.by_fp.get(&fp).map(|&i| &self.eligible[i]) else {
             return Ok(None);
         };
+        // The token now belongs to another principal (security fe3fd22 F2):
+        // the session would take the new name and escape revocation by the
+        // name it was opened under. End it.
+        if e.principal != stored_principal {
+            end(pool, value).await?;
+            return Ok(None);
+        }
         if stale {
-            sqlx::query("UPDATE browser_sessions SET last_seen = now() WHERE id_hash = $1")
-                .bind(&id_hash)
-                .execute(pool)
-                .await?;
+            // The age condition is in the UPDATE too, so concurrent lookups of
+            // one session write once (security F9).
+            sqlx::query(
+                "UPDATE browser_sessions SET last_seen = now()
+                 WHERE id_hash = $1 AND last_seen < now() - make_interval(secs => $2)",
+            )
+            .bind(&id_hash)
+            .bind(TOUCH_SECS as f64)
+            .execute(pool)
+            .await?;
         }
         Ok(Some(Authenticated(
             format!("cookie:{}", e.principal),

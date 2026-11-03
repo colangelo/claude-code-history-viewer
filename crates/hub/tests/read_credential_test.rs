@@ -29,14 +29,16 @@ async fn spawn() -> Hub {
     hub::MIGRATOR.run(&pool).await.expect("run migrations");
     let machine = Uuid::new_v4();
     let token = format!("tok-{}-{}", machine.simple(), Uuid::new_v4().simple());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    // The hub's own name is the address the tests call (security fe3fd22 F1).
     let state = hub::AppState::new(
         pool,
         HashMap::from([(token.clone(), machine)]),
         vec![LOGIN.to_string()],
-    );
+    )
+    .with_public_origins(vec![format!("http://{addr}")]);
     let app = hub::router(state, None);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Hub {
         base: format!("http://{addr}"),
@@ -120,6 +122,13 @@ async fn past_the_limit_a_failing_credential_gets_429_and_a_valid_one_is_served(
     assert!(
         r.headers().get("retry-after").is_some(),
         "Retry-After is set"
+    );
+    assert_eq!(
+        r.headers()
+            .get(hub::auth_stats::AUTH_FAILED_HEADER)
+            .and_then(|v| v.to_str().ok()),
+        Some("1"),
+        "the 429 says the credential failed, so a browser shows its login form (F3)"
     );
     let bearer = format!("Bearer {}", hub.token);
     assert_eq!(

@@ -9,7 +9,10 @@
 //! per source address means nothing. Failed credential checks on every route
 //! share one window instead; past the limit a request whose credential fails
 //! gets 429. A request with a valid credential never fails its check, so the
-//! limiter never refuses it.
+//! limiter never refuses it. This signals failures; it does not throttle a
+//! guesser (the check has already run), and its 429 carries
+//! [`AUTH_FAILED_HEADER`] so a browser goes back to its login form (security
+//! fe3fd22 F3). A refused write by a valid credential is 403, not counted.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,6 +27,10 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 
 use crate::state::AppState;
+
+/// On a 429 from the limiter: the request's credential failed (security F3),
+/// so a browser shows its login form instead of a "try later" page.
+pub const AUTH_FAILED_HEADER: &str = "x-cchv-auth-failed";
 
 /// The window failed credential checks are counted over.
 pub const FAIL_WINDOW: Duration = Duration::from_secs(600);
@@ -93,6 +100,11 @@ impl AuthStats {
             window.pop_front();
         }
         window.push_back(now);
+        // Bounded (security F3): past the limit only "over" matters, so the
+        // record never holds more than FAIL_LIMIT + 1 instants.
+        while window.len() > FAIL_LIMIT + 1 {
+            window.pop_front();
+        }
         window.len() > FAIL_LIMIT
     }
 
@@ -148,6 +160,30 @@ pub async fn limit_failed_credentials(
         HeaderValue::from_str(&FAIL_WINDOW.as_secs().to_string()).expect("retry-after"),
     );
     limited
+        .headers_mut()
+        .insert(AUTH_FAILED_HEADER, HeaderValue::from_static("1"));
+    limited
 }
 
 pub type Shared = Arc<AuthStats>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Security F3: a flood of failures keeps the record bounded.
+    #[test]
+    fn the_failure_record_is_bounded() {
+        let stats = AuthStats::default();
+        let now = Instant::now();
+        for _ in 0..(FAIL_LIMIT * 4) {
+            assert!(stats.failed_at(now) || stats.window.lock().unwrap().len() <= FAIL_LIMIT);
+        }
+        assert_eq!(stats.window.lock().unwrap().len(), FAIL_LIMIT + 1);
+        assert!(stats.failed_at(now), "still over the limit");
+        assert_eq!(
+            stats.failed.load(Ordering::Relaxed),
+            (FAIL_LIMIT * 4 + 1) as u64
+        );
+    }
+}

@@ -266,3 +266,30 @@ async fn a_session_ends_after_seven_idle_days_or_thirty_in_all() {
     assert_eq!(read(&base, &idle).await, 401, "seven idle days");
     assert_eq!(read(&base, &old).await, 401, "thirty days in all");
 }
+
+/// Security fe3fd22 F2: a token moved to another principal does not carry its
+/// sessions along: the old cookie is ended, so revoking either name works.
+#[tokio::test]
+async fn a_token_moved_to_another_principal_ends_its_sessions() {
+    let (pool, url) = pool().await;
+    let ids = ids();
+    let before = spawn(&pool, &config(&url, &ids, true), [9; 32]).await;
+    let (_, cookie) = login(&before, &ids.reader, None).await;
+    let cookie = cookie.unwrap();
+    assert_eq!(read(&before, &cookie).await, 200);
+    // Same token, another machine id: another principal.
+    let moved = Ids {
+        reader_id: Uuid::new_v4(),
+        reader: ids.reader.clone(),
+        stats: ids.stats.clone(),
+        machine: ids.machine.clone(),
+    };
+    let after = spawn(&pool, &config(&url, &moved, true), [9; 32]).await;
+    assert_eq!(read(&after, &cookie).await, 401);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM browser_sessions WHERE id_hash = $1")
+        .bind(id_hash(&cookie))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "the row is deleted, not just refused");
+}

@@ -22,3 +22,4 @@
 ## 3. Backlog
 
 - [ ] 3.1 File B1, B4, B5, B6 as Gitea issues (B2 and B3 are in release A, D3). B4 (cookie-only writes refused on every write route) lands before any write is ever allowed with the cookie (security be7f0c79); today every write needs a bearer token.
+- [ ] 3.2 Security fe3fd22 P3 follow-ups as Gitea issues: F4 key file (no symlink, 0600 and owner checked, create without overwrite, "created" logged distinctly), F5 the 32-character rule on the env-var load path and on presented client tokens, F7 /v1/healthz/auth window fields only for a lab credential, F8 rotate any reader token the old webapp stored, state the cross-origin exception in the spec, F9 per-principal lock at login (cap under concurrency) and the missing tests (ingest token at login, a token moved between tables, cookie plus header); 38d9c6f: refuse `Sec-Fetch-Site: cross-site`, and `frame-ancestors 'none'` with B5.

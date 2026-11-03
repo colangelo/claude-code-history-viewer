@@ -286,7 +286,11 @@ pub struct CreateAlias {
 /// (A `[[readers]]` bearer is refused earlier, by the write layer.)
 fn refuse_read_only_principal(auth: &Authenticated) -> Result<(), HubError> {
     if auth.0.starts_with("cookie:") || auth.0.starts_with("client-reader:") {
-        return Err(HubError::Unauthorized);
+        // 403, not 401: the credential is valid, so this is no credential
+        // failure for the limiter (security fe3fd22 F3).
+        return Err(HubError::Forbidden(
+            "a login cookie or a client reader only reads".into(),
+        ));
     }
     Ok(())
 }

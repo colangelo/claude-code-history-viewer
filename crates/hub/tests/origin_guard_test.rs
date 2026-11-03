@@ -130,13 +130,8 @@ async fn a_foreign_host_gets_401_dns_rebinding() {
 #[tokio::test]
 async fn a_dead_cookie_does_not_fall_back_to_the_header() {
     let base = spawn(true).await;
-    let (status, _) = read(
-        &base,
-        Some("hub.example:8788"),
-        None,
-        Some("cchv_session=revoked-or-made-up"),
-    )
-    .await;
+    let cookie = format!("{}=revoked-or-made-up", hub::login::COOKIE_NAME);
+    let (status, _) = read(&base, Some("hub.example:8788"), None, Some(&cookie)).await;
     assert_eq!(status, 401);
 }
 

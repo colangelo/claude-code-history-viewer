@@ -293,7 +293,12 @@ async function hubGet(url: URL, config: HubConfig): Promise<Response> {
     cache: "no-store",
   });
   if (!res.ok) {
-    if (res.status === 401) {
+    // A 429 from the failed-credential limit is marked: the credential failed
+    // too, so the login form comes back instead of a "try later" (security F3).
+    if (
+      res.status === 401 ||
+      (res.status === 429 && res.headers.get("x-cchv-auth-failed") === "1")
+    ) {
       window.dispatchEvent(new Event(HUB_UNAUTHORIZED_EVENT));
     }
     throw new HubHttpError(res.status, url.pathname);

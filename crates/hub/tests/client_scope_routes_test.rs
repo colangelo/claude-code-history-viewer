@@ -815,7 +815,7 @@ async fn login_cookie_carries_the_tokens_scope_and_nothing_more() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status().as_u16(), 401, "a cookie cannot write aliases");
+    assert_eq!(r.status().as_u16(), 403, "a cookie cannot write aliases");
 
     // Only a bearer token logs in: not the Tailscale identity.
     let r = reqwest::Client::new()
