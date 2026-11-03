@@ -13,7 +13,7 @@ fn load_refuses_a_duplicate_and_accepts_the_fixed_file() {
     let file = |reader_token: &str| {
         format!(
             "database_url = \"postgres://unused\"\n\
-             [[tokens]]\ntoken = \"secret-guest\"\nmachine_id = \"{}\"\nlabel = \"guest\"\ningest_only = true\n\
+             [[tokens]]\ntoken = \"secret-guest-0123456789abcdef0123456\"\nmachine_id = \"{}\"\nlabel = \"guest\"\ningest_only = true\n\
              [[readers]]\ntoken = \"{reader_token}\"\nmachine_id = \"{}\"\nlabel = \"blog\"\n",
             Uuid::new_v4(),
             Uuid::new_v4()
@@ -22,7 +22,7 @@ fn load_refuses_a_duplicate_and_accepts_the_fixed_file() {
     // The only test in this binary: nothing else reads the environment concurrently.
     std::env::set_var("HUB_CONFIG", &path);
 
-    std::fs::write(&path, file("secret-guest")).unwrap();
+    std::fs::write(&path, file("secret-guest-0123456789abcdef0123456")).unwrap();
     let err = hub::HubConfig::load().unwrap_err().to_string();
     assert!(err.contains("duplicate"), "{err}");
     assert!(
@@ -30,7 +30,7 @@ fn load_refuses_a_duplicate_and_accepts_the_fixed_file() {
         "the error must not print a token: {err}"
     );
 
-    std::fs::write(&path, file("secret-reader")).unwrap();
+    std::fs::write(&path, file("secret-reader-0123456789abcdef012345")).unwrap();
     let config = hub::HubConfig::load().expect("the fixed file loads");
     assert_eq!(config.readers.len(), 1);
 
