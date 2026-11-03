@@ -80,7 +80,7 @@ struct World {
     /// pending is newest first, and the world sweeps the shared test database,
     /// so an early `from` lets other tests' groups push the world's off the page.
     pending_url: String,
-    _dir: std::path::PathBuf,
+    dir: std::path::PathBuf,
 }
 
 async fn world() -> World {
@@ -310,7 +310,7 @@ async fn world_with(enforce: bool) -> World {
         mirror_cfg,
         daily_url,
         tool_calls_url,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -1278,7 +1278,7 @@ async fn unscanned_client_sessions_and_full_scope_readers_are_not_stale() {
 #[tokio::test]
 async fn no_live_generation_is_stale_never_empty() {
     let w = world_with(false).await;
-    std::fs::remove_file(w._dir.join("r.toml")).unwrap();
+    std::fs::remove_file(w.dir.join("r.toml")).unwrap();
     w.state
         .client_scope
         .as_ref()
