@@ -12,9 +12,9 @@ Client scope is in observe mode, so on the browse and search routes "lab read" i
 - **Measure first:** the hub counts requests per principal kind (bearer token, reader token, client reader, cookie, Tailscale identity) and exposes the counts without names, so every caller that relies on the header is found before the trust is dropped.
 - **Give every caller a credential:** each caller of the read routes today is listed with the credential it sends. A caller with none gets a token before the trust is removed (security's addition (a)).
 - **The webapp logs in:** the archive webapp exchanges a token for the `/v1/login` cookie (HttpOnly, Secure, SameSite=Strict, 8 h; already built in R2-H) instead of relying on the header. It no longer keeps a token in local storage.
-- **Login is rate-limited:** failed `POST /v1/login` attempts are limited per source address (security's addition (b)).
-- **Drop the trust:** remove `trust_tailscale_identity` from the hub's config and code path. **BREAKING** for any caller still on the header: it gets 401.
-- **Then enforce:** switch `[client_scope] enforce = true` on m4m, so a lab principal sees no client row on any route. ac's browser then needs a client-scope reader for a full view.
+- **Failed credentials are rate-limited:** one global limit on failed credential checks on all routes (per-source limits mean nothing behind serve); a valid credential is never refused; tokens under 32 characters and client hashes that equal a plaintext token's SHA256 are refused at load (security R3, R4).
+- **Drop the trust:** infra removes `trust_tailscale_identity` from hub.toml and its template on the A binary; release B removes the code path and refuses the key (even empty) and its env var. **BREAKING** for any caller still on the header: it gets 401.
+- **Enforce first (R1):** switch `[client_scope] enforce = true` on m4m before or right after release A (timing with manager-lab), after the distiller gets a client-reader token. ac's browser logs in with a lab reader by default.
 
 ## Capabilities
 

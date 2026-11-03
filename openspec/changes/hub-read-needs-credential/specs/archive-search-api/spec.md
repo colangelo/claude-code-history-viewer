@@ -10,7 +10,7 @@
 
 ### Requirement: Read authentication and pagination
 
-All read endpoints SHALL require a credential: a valid bearer token, or the session cookie that `POST /v1/login` issues in exchange for one. A `Tailscale-User-Login` header SHALL grant nothing, whatever its value, and the hub SHALL refuse to start with a `trust_tailscale_identity` key in its config. The login cookie SHALL be `HttpOnly`, `Secure`, `SameSite=Strict`, with a lifetime, and failed logins SHALL be rate-limited per source address. `/v1/ingest` SHALL keep requiring a bearer token, since writes bind to a machine identity. All read endpoints SHALL support bounded pagination via limit and offset, returning a stable order so that paging does not drop or duplicate rows. Truncation MUST be detectable: the session messages endpoint SHALL report the session's total message count, and the projects and sessions lists their filtered totals, in an `X-Total-Count` response header, so a client that receives a default-limit page (50; max 200) can tell it is partial. Browse endpoints SHALL reject unknown query parameters with `400` instead of ignoring them: an unsupported filter that silently returns unfiltered rows reads exactly like a real answer.
+All read endpoints SHALL require a credential: a valid bearer token, or the session cookie that `POST /v1/login` issues in exchange for one. A `Tailscale-User-Login` header SHALL grant nothing, whatever its value, and the hub SHALL refuse to start with a `trust_tailscale_identity` key in its config. The login cookie SHALL be `HttpOnly`, `Secure`, `SameSite=Strict`, with a lifetime, and failed credential checks SHALL be rate-limited globally without ever refusing a valid credential. The config SHALL refuse a token shorter than 32 characters, and a client-reader hash equal to the SHA256 of any plaintext token. `/v1/ingest` SHALL keep requiring a bearer token, since writes bind to a machine identity. All read endpoints SHALL support bounded pagination via limit and offset, returning a stable order so that paging does not drop or duplicate rows. Truncation MUST be detectable: the session messages endpoint SHALL report the session's total message count, and the projects and sessions lists their filtered totals, in an `X-Total-Count` response header, so a client that receives a default-limit page (50; max 200) can tell it is partial. Browse endpoints SHALL reject unknown query parameters with `400` instead of ignoring them: an unsupported filter that silently returns unfiltered rows reads exactly like a real answer.
 
 #### Scenario: Unauthenticated read is rejected
 - **WHEN** a client calls any read endpoint without a valid bearer token and without a live login cookie
@@ -21,16 +21,24 @@ All read endpoints SHALL require a credential: a valid bearer token, or the sess
 - **THEN** the hub responds `401`
 
 #### Scenario: The old trust key is refused
-- **WHEN** the hub starts with `trust_tailscale_identity` in its config
+- **WHEN** the hub starts with `trust_tailscale_identity` in its config (even `[]`), or with `HUB_TRUST_TAILSCALE_IDENTITY` set
 - **THEN** it exits with an error that names the removed key
+
+#### Scenario: A client hash of a plaintext token is refused
+- **WHEN** a `[[client_readers]]` hash equals the SHA256 of a `[[tokens]]` or `[[readers]]` token
+- **THEN** the config is refused, so a restricted token can never gain client reads
+
+#### Scenario: A short token is refused
+- **WHEN** a configured plaintext token is shorter than 32 characters
+- **THEN** the config is refused
 
 #### Scenario: A browser reads after login
 - **WHEN** a browser posts a valid read token to `/v1/login` and then calls a read route with the returned cookie
 - **THEN** the request is served with that token's read scope
 
-#### Scenario: Failed logins are rate-limited
-- **WHEN** one source address sends more than 10 failed logins within 10 minutes
-- **THEN** further attempts get `429` with `Retry-After` until the window passes
+#### Scenario: Failed credentials are rate-limited, valid ones never
+- **WHEN** failed credential checks across all routes exceed the global limit within its window
+- **THEN** requests whose credential fails get `429` with `Retry-After`, while a request with a valid credential is still served
 
 #### Scenario: Ingest ignores identity headers
 - **WHEN** a request to `/v1/ingest` carries a `Tailscale-User-Login` header but no valid bearer token
