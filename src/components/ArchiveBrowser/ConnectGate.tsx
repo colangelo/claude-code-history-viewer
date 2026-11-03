@@ -23,7 +23,12 @@ import { Input } from "@/components/ui/input";
 import { ArchiveBrowser } from "./index";
 import { FontScaleControl } from "./FontScaleControl";
 import { ThemeToggle } from "./ThemeToggle";
-import { HUB_UNAUTHORIZED_EVENT, hubApi, type HubConfig } from "../../services/hubApi";
+import {
+  HUB_UNAUTHORIZED_EVENT,
+  HubHttpError,
+  hubApi,
+  type HubConfig,
+} from "../../services/hubApi";
 import {
   clearStoredHubConfig,
   loadStoredHubConfig,
@@ -60,6 +65,8 @@ export function ConnectGate() {
   const probeStarted = useRef(false);
   const urlId = useId();
   const tokenId = useId();
+  const endedId = useId();
+  const tokenRef = useRef<HTMLInputElement>(null);
 
   // Same-origin auto-connect: if the host authenticates us (e.g. Tailscale
   // serve identity headers), skip the gate entirely. Never persisted — the
@@ -100,6 +107,12 @@ export function ConnectGate() {
     return () => window.removeEventListener(HUB_UNAUTHORIZED_EVENT, onUnauthorized);
   }, [config]);
 
+  // After a session ends, land on the token field: keyboard users start
+  // there, and a password manager offers to fill it.
+  useEffect(() => {
+    if (sessionEnded && config == null) tokenRef.current?.focus();
+  }, [sessionEnded, config]);
+
   const handleSubmit = useCallback(
     async (event: FormEvent) => {
       event.preventDefault();
@@ -126,12 +139,20 @@ export function ConnectGate() {
         setSessionEnded(false);
         setConfig(candidate);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (e instanceof HubHttpError && e.status === 401) {
+          setError(t("archive.web.tokenRejected"));
+        } else if (e instanceof HubHttpError && e.status === 429) {
+          setError(t("archive.web.tooManyTries", { seconds: e.retryAfterSecs ?? 60 }));
+        } else {
+          setError(
+            t("archive.web.connectFailed", { error: e instanceof Error ? e.message : String(e) })
+          );
+        }
       } finally {
         setConnecting(false);
       }
     },
-    [url, token]
+    [url, token, t]
   );
 
   const handleDisconnect = useCallback(() => {
@@ -198,7 +219,7 @@ export function ConnectGate() {
               onClick={handleDisconnect}
               className="text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
             >
-              {t("archive.web.disconnect")}
+              {t("archive.web.logout")}
             </Button>
           </div>
         </div>
@@ -227,6 +248,11 @@ export function ConnectGate() {
             </span>
           </div>
           <p className="text-xs text-muted-foreground">{t("archive.web.subtitle")}</p>
+          {sessionEnded && (
+            <p id={endedId} role="status" className="text-xs font-medium text-foreground">
+              {t("archive.web.sessionEnded")}
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <label htmlFor={urlId} className="text-xs font-medium">
@@ -237,6 +263,7 @@ export function ConnectGate() {
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            autoComplete="url"
             placeholder={t("archive.web.urlPlaceholder")}
             required
           />
@@ -260,6 +287,8 @@ export function ConnectGate() {
           </label>
           <Input
             id={tokenId}
+            ref={tokenRef}
+            aria-describedby={sessionEnded ? endedId : undefined}
             type="password"
             name="password"
             autoComplete="current-password"
@@ -268,24 +297,19 @@ export function ConnectGate() {
             placeholder={t("archive.web.tokenPlaceholder")}
           />
         </div>
-        {sessionEnded && error == null && (
-          <p role="status" className="text-xs text-muted-foreground">
-            {t("archive.web.sessionEnded")}
-          </p>
-        )}
         {error != null && (
           <p role="alert" className="text-xs text-destructive">
-            {t("archive.web.connectFailed", { error })}
+            {error}
           </p>
         )}
         <Button type="submit" className="w-full" disabled={connecting}>
           {connecting ? (
             <>
               <Loader2 className="mr-2 h-3 w-3 animate-spin" aria-hidden="true" />
-              {t("archive.web.connecting")}
+              {t("archive.web.loggingIn")}
             </>
           ) : (
-            t("archive.web.connect")
+            t("archive.web.login")
           )}
         </Button>
         <p className="text-px12 text-muted-foreground">{t("archive.web.storageHint")}</p>

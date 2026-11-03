@@ -9,20 +9,37 @@ import {
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, params?: Record<string, unknown>) =>
-      params?.error != null ? `${key}:${String(params.error)}` : key,
+      params?.error != null
+        ? `${key}:${String(params.error)}`
+        : params?.seconds != null
+          ? `${key}:${String(params.seconds)}`
+          : key,
   }),
 }));
 
-const { mockHubApi } = vi.hoisted(() => ({
-  mockHubApi: {
-    listProjects: vi.fn(),
-    login: vi.fn(),
-    logout: vi.fn(),
-  },
-}));
+const { mockHubApi, MockHubHttpError } = vi.hoisted(() => {
+  class MockHubHttpError extends Error {
+    constructor(
+      readonly status: number,
+      readonly path: string,
+      readonly retryAfterSecs?: number
+    ) {
+      super(`hub request to ${path} failed: ${status}`);
+    }
+  }
+  return {
+    mockHubApi: {
+      listProjects: vi.fn(),
+      login: vi.fn(),
+      logout: vi.fn(),
+    },
+    MockHubHttpError,
+  };
+});
 
 vi.mock("../services/hubApi", () => ({
   hubApi: mockHubApi,
+  HubHttpError: MockHubHttpError,
   HUB_UNAUTHORIZED_EVENT: "cchv:hub-unauthorized",
 }));
 
@@ -46,7 +63,7 @@ function fillAndSubmit(url: string, token: string) {
   fireEvent.change(screen.getByLabelText("archive.web.tokenLabel"), {
     target: { value: token },
   });
-  fireEvent.click(screen.getByRole("button", { name: "archive.web.connect" }));
+  fireEvent.click(screen.getByRole("button", { name: "archive.web.login" }));
 }
 
 beforeEach(() => {
@@ -142,7 +159,7 @@ describe("ConnectGate", () => {
     expect(container.querySelector('input[autocomplete="username"]')).toHaveValue("cchv-reader");
   });
 
-  it("returns to the form, saying why, when a read answers 401", async () => {
+  it("returns to the form, saying why, with the token field focused and described", async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({ v: 1, url: window.location.origin, token: "" })
@@ -156,20 +173,34 @@ describe("ConnectGate", () => {
       expect(screen.getByRole("status")).toHaveTextContent("archive.web.sessionEnded")
     );
     expect(screen.queryByTestId("archive-browser")).not.toBeInTheDocument();
+    const field = screen.getByLabelText("archive.web.tokenLabel");
+    await waitFor(() => expect(field).toHaveFocus());
+    expect(field).toHaveAttribute("aria-describedby", screen.getByRole("status").id);
+  });
+
+  it("a 429 from the failed-credential limit says how long to wait", async () => {
+    mockHubApi.listProjects.mockRejectedValueOnce(new Error("401"));
+    mockHubApi.login.mockRejectedValueOnce(new MockHubHttpError(429, "/v1/login", 42));
+    render(<ConnectGate />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
+    );
+    fillAndSubmit(window.location.origin, "reader-token");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("archive.web.tooManyTries:42")
+    );
   });
 
   it("a login failure shows the error and stores nothing", async () => {
     mockHubApi.listProjects.mockRejectedValueOnce(new Error("401"));
-    mockHubApi.login.mockRejectedValueOnce(new Error("hub request to /v1/login failed: 401"));
+    mockHubApi.login.mockRejectedValueOnce(new MockHubHttpError(401, "/v1/login"));
     render(<ConnectGate />);
     await waitFor(() =>
       expect(screen.getByLabelText("archive.web.urlLabel")).toBeInTheDocument()
     );
     fillAndSubmit(window.location.origin, "machine-token");
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "archive.web.connectFailed:hub request to /v1/login failed: 401"
-      )
+      expect(screen.getByRole("alert")).toHaveTextContent("archive.web.tokenRejected")
     );
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
@@ -222,7 +253,7 @@ describe("ConnectGate", () => {
     mockHubApi.logout.mockResolvedValueOnce(undefined);
     render(<ConnectGate />);
     fireEvent.click(
-      screen.getByRole("button", { name: "archive.web.disconnect" })
+      screen.getByRole("button", { name: "archive.web.logout" })
     );
     expect(mockHubApi.logout).toHaveBeenCalledWith("http://stored:8787");
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();

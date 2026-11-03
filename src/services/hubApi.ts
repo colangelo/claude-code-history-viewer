@@ -265,7 +265,9 @@ function authHeaders(config: HubConfig): HeadersInit {
 export class HubHttpError extends Error {
   constructor(
     readonly status: number,
-    readonly path: string
+    readonly path: string,
+    /** Seconds from a `Retry-After` header (a 429 from the failed-credential limit). */
+    readonly retryAfterSecs?: number
   ) {
     super(`hub request to ${path} failed: ${status}`);
     this.name = "HubHttpError";
@@ -351,7 +353,14 @@ export const hubApi = {
       credentials: "same-origin",
       cache: "no-store",
     });
-    if (!res.ok) throw new HubHttpError(res.status, path);
+    if (!res.ok) {
+      const retry = Number(res.headers.get("Retry-After"));
+      throw new HubHttpError(
+        res.status,
+        path,
+        Number.isFinite(retry) && retry > 0 ? retry : undefined
+      );
+    }
   },
 
   /** End the browser session (`DELETE /v1/login`). */
