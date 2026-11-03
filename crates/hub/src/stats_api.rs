@@ -195,8 +195,9 @@ impl StatsParams {
 
 /// The window limited to what `vis` lets the caller see (R2-E), checked
 /// against `flags_as_of`, the watermark of the snapshot the request will
-/// aggregate on (security T2). A caller that sees everything gets the window
-/// unchanged.
+/// aggregate on (security T2). A caller that sees everything gets the
+/// predicate `true`, so every window that went through here carries one and a
+/// query that needs it can refuse a window that did not (security, 2026-11-03).
 #[doc(hidden)]
 pub async fn restrict(
     state: &AppState,
@@ -205,6 +206,7 @@ pub async fn restrict(
     flags_as_of: Option<String>,
 ) -> Result<Window, HubError> {
     if vis.sees_all() {
+        w.sessions_visible = Some("true".into());
         return Ok(w);
     }
     // Refuse rather than serve a mirror that cannot prove the current flags.

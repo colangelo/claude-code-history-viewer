@@ -1102,3 +1102,50 @@ async fn the_flag_check_and_the_rollup_share_one_mirror_handle() {
     let (status, _) = get(&w, &w.daily_url, "lab").await;
     assert_eq!(status, 503, "over HTTP too");
 }
+
+/// The daily project name comes only from project rows the reader may see,
+/// even when a client project row shares the identity and would win the name
+/// (security, 2026-11-03, on afd762c9).
+#[tokio::test]
+async fn a_lab_reader_never_gets_a_client_projects_name() {
+    let w = world_with(false).await;
+    let pool = w.state.pool.clone();
+    let key = format!("idk-{}", Uuid::new_v4().simple());
+    // Sorts first, so on a tie of counts it would be the name.
+    let client_name = format!("aaaclient-{}", Uuid::new_v4().simple());
+    sqlx::query("UPDATE projects SET identity_key = $1 WHERE project_path = ANY($2)")
+        .bind(&key)
+        .bind(vec![w.lab_path.clone(), w.client_path.clone()])
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE projects SET name = $1 WHERE project_path = $2")
+        .bind(&client_name)
+        .bind(&w.client_path)
+        .execute(&pool)
+        .await
+        .unwrap();
+    w.mirror.refresh(&pool).await.unwrap();
+    // The control: a client reader is named by the client row.
+    let (status, client) = get(&w, &w.daily_url, "client").await;
+    assert_eq!(status, 200);
+    assert!(client.contains(&client_name), "{client}");
+    for who in ["lab", "stats"] {
+        let (status, lab) = get(&w, &w.daily_url, who).await;
+        assert_eq!(status, 200, "{who}");
+        assert!(!lab.contains(&client_name), "{who}: {lab}");
+        assert!(
+            lab.contains("\"project\""),
+            "{who}: the lab row is still there: {lab}"
+        );
+    }
+}
+
+/// A caller that skipped `restrict` is refused, never answered over every
+/// session.
+#[test]
+fn daily_by_project_refuses_an_unset_visibility() {
+    let conn = duckdb::Connection::open_in_memory().unwrap();
+    let w = hub::stats::Window::default();
+    assert!(hub::stats::daily_by_project(&conn, &w).is_err());
+}

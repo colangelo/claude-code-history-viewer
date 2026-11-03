@@ -993,8 +993,16 @@ const ACTIVE_GAP_CAP_SECS: i64 = 300;
 /// for it (infra, 2026-11-03). Identities that share a display name share a
 /// row: the name is the row's key for the reader.
 pub fn daily_by_project(conn: &Connection, w: &Window) -> duckdb::Result<Vec<DailyRow>> {
+    // Refused, never defaulted (security, 2026-11-03): the names subquery
+    // reads sessions outside `stats_scope`, so a caller that skipped
+    // `restrict` must not get names picked over every session. A
+    // full-scope reader passes `Some("true")`.
+    let Some(visible) = w.sessions_visible.as_deref() else {
+        return Err(duckdb::Error::ToSqlConversionFailure(
+            "daily_by_project needs the caller's session visibility".into(),
+        ));
+    };
     materialize_scope(conn, &Scope::Global, w)?;
-    let visible = w.sessions_visible.as_deref().unwrap_or("true");
     let sql = format!(
         r"
         WITH r AS (
