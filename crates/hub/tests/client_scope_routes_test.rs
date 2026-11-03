@@ -1265,3 +1265,29 @@ async fn unscanned_client_sessions_and_full_scope_readers_are_not_stale() {
         assert_eq!(unscanned_excluded(&body), 0, "{url}");
     }
 }
+
+/// Security c9d749e (P3): client scope is configured but has no live
+/// generation (the routing file cannot be read), so every session filters to
+/// false for a lab reader. Both stats routes answer 503, never 200 with empty
+/// rows.
+#[tokio::test]
+async fn no_live_generation_is_stale_never_empty() {
+    let w = world_with(false).await;
+    std::fs::remove_file(w._dir.join("r.toml")).unwrap();
+    w.state
+        .client_scope
+        .as_ref()
+        .unwrap()
+        .refresh(&w.state.pool)
+        .await
+        .unwrap();
+    for url in [&w.daily_url, &w.tool_calls_url] {
+        for who in ["lab", "stats"] {
+            let (status, body) = get(&w, url, who).await;
+            assert_eq!(status, 503, "{who} {url}: {body}");
+            assert!(body.contains("no live generation"), "{who} {url}: {body}");
+        }
+    }
+    let (status, _) = get(&w, &w.daily_url, "client").await;
+    assert_eq!(status, 200, "a full-scope reader still reads");
+}

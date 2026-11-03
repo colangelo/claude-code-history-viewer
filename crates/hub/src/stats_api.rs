@@ -358,15 +358,24 @@ pub const STALE_MARGIN_MINUTES: i32 = 15;
 /// counts. Written before the margin, they make the answer 503; inside it they
 /// are left out and returned as the count for `unscanned_excluded`. A client
 /// class hides a session whether it is scanned or not, so it is not counted
-/// (D1); a full-scope reader sees unscanned sessions (D5).
+/// (D1); a full-scope reader sees unscanned sessions (D5). With no live
+/// generation at all, every lab answer would be empty: 503.
 async fn unscanned_lab_sessions(
     state: &AppState,
     vis: &Visibility,
     from: DateTime<Utc>,
     to: Option<DateTime<Utc>>,
 ) -> Result<i64, HubError> {
-    let Visibility::Lab(Some(generation)) = vis else {
-        return Ok(0);
+    let generation = match vis {
+        Visibility::All => return Ok(0),
+        // Client scope is configured but has no live generation (the policy is
+        // unknown): every session filters to false, so a 200 would be empty
+        // (security c9d749e).
+        Visibility::Lab(None) => return Err(HubError::Unavailable(
+            "client scope has no live generation (policy unknown); lab statistics would be empty"
+                .into(),
+        )),
+        Visibility::Lab(Some(generation)) => generation,
     };
     let (stale, inside): (i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE last_message_time <= now() - make_interval(mins => $4)),
