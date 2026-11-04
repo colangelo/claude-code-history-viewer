@@ -1210,6 +1210,9 @@ def describe(text: str) -> str:
     return f"<{len(text)} chars, sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]}>"
 
 
+NO_CONNECTORS_SETTINGS = Path.home() / ".config/claude/direct-noconnectors.settings.json"
+
+
 def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str, set[str]]:
     """One `claude -p` call → (result, the models its `modelUsage` reports).
 
@@ -1224,6 +1227,11 @@ def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str
         for k, v in os.environ.items()
         if not (direct and k in PROXY_ENV) and k not in HUB_TOKEN_ENV
     }
+    # No claude.ai connector loads in a distiller call, on either route (ac
+    # a1103-08, security #56): the env switch always, the fleet's settings file
+    # too when it exists. Either alone suffices.
+    env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+    settings = ["--settings", str(NO_CONNECTORS_SETTINGS)] if NO_CONNECTORS_SETTINGS.is_file() else []
 
     def show(text: str) -> str:
         return describe(text) if direct else repr(text[:300])
@@ -1233,7 +1241,8 @@ def _claude_generate(model: str, prompt: str, direct: bool = False) -> tuple[str
             # Print mode persists a session by default, and from cwd=~ it lands in
             # the home project, where the daemon archives the whole prompt and the
             # next night distills it again outside its protected route (B-1).
-            ["claude", "-p", "--no-session-persistence", "--model", model, "--output-format", "json"],
+            ["claude", "-p", "--no-session-persistence", *settings,
+             "--model", model, "--output-format", "json"],
             input=prompt,
             capture_output=True,
             text=True,

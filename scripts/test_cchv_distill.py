@@ -614,6 +614,41 @@ def test_direct_claude_call_strips_proxy_env_and_reports_model_usage(monkeypatch
     assert "ANTHROPIC_BASE_URL" not in seen["env"] and "ANTHROPIC_AUTH_TOKEN" not in seen["env"]
 
 
+def _capture_claude(monkeypatch) -> dict:
+    seen: dict = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw.get("env")
+        out = d.json.dumps({"result": "ok", "modelUsage": {"m": {}}})
+        return d.subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(d.subprocess, "run", fake_run)
+    return seen
+
+
+@pytest.mark.parametrize("direct", [True, False])
+def test_claude_call_runs_without_claude_ai_connectors(tmp_path, monkeypatch, direct) -> None:
+    """ac a1103-08 / security #56: no claude.ai connector loads in a distiller
+    call, on either route. The env switch always; the fleet's settings file too
+    when it exists."""
+    settings = tmp_path / "direct-noconnectors.settings.json"
+    settings.write_text('{"env":{"ENABLE_CLAUDEAI_MCP_SERVERS":"false"}}')
+    monkeypatch.setattr(d, "NO_CONNECTORS_SETTINGS", settings)
+    monkeypatch.setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
+    seen = _capture_claude(monkeypatch)
+    d._claude_generate("m", "p", direct=direct)
+    assert seen["env"]["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    assert seen["cmd"][seen["cmd"].index("--settings") + 1] == str(settings)
+
+
+def test_claude_call_without_the_settings_file_still_disables_connectors(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(d, "NO_CONNECTORS_SETTINGS", tmp_path / "absent.json")
+    seen = _capture_claude(monkeypatch)
+    d._claude_generate("m", "p", direct=True)
+    assert seen["env"]["ENABLE_CLAUDEAI_MCP_SERVERS"] == "false"
+    assert "--settings" not in seen["cmd"]
+
+
 # --- whole-session routing (openspec/changes/distill-route-full-session) -------
 #
 # Made-up client marker and term, as above. "_clientx" is the folder name; the
