@@ -116,11 +116,10 @@ const PATTERNS: [&str; 6] = [
     // inner live `assign-strong` hit (security E1). Spans from this pass that
     // overlap any other span are dropped, so the live rules' output is unchanged.
     r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSW|API-KEY|BEARER)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
-    // `scheme://user:secret@host`: the value is the password part. Both parts stop
-    // at whitespace, quotes, angle brackets, braces and `/`, so a template
-    // (`${TOKEN}`, `{{ x }}`, `<password>`) never matches, and a host or path ends
-    // the search. The character after `@` must open a host.
-    r#"[A-Za-z][A-Za-z0-9+.\-]{1,15}://[^\s:/@"'<>{}]{1,64}:(?P<value>[^\s/@"'<>{}\[]{8,})@[A-Za-z0-9\[]"#,
+    // `scheme://`: where an authority starts. The userinfo is parsed by hand
+    // (`userinfo_secret`): the last `@` of the authority ends it, the first `:` opens
+    // the password.
+    r"[A-Za-z][A-Za-z0-9+.\-]{1,15}://",
 ];
 
 struct Detector {
@@ -460,25 +459,94 @@ fn mask_or_placeholder(value: &str) -> bool {
     chars.len() >= 16 && distinct.len() <= 3
 }
 
-/// A userinfo password that documents a shape rather than holding a secret:
-/// the shared placeholders and masks, plus the words examples use.
-fn userinfo_placeholder(value: &str) -> bool {
-    const WORDS: [&str; 8] = [
-        "password",
-        "passwd",
-        "secret",
-        "changeme",
-        "yourpassword",
-        "mypassword",
-        "redacted",
-        "example",
-    ];
-    // A display mask keeps the ends and elides the middle (`ab12...cd34`).
-    let elided = value.contains("..") || value.contains('\u{2026}') || value.contains('*');
-    placeholder(value)
-        || mask_or_placeholder(value)
-        || elided
-        || WORDS.iter().any(|word| value.eq_ignore_ascii_case(word))
+/// How far past `scheme://` the authority is read: a bound, so one `://` costs a
+/// fixed amount and the scan stays linear.
+const AUTHORITY_LIMIT: usize = 512;
+
+/// A display mask that elides its middle between two short ends: `ab12...cd34`.
+fn display_mask(value: &str) -> bool {
+    let (head, tail) = if let Some(at) = value.find("..") {
+        (&value[..at], value[at..].trim_start_matches('.'))
+    } else if let Some(at) = value.find('\u{2026}') {
+        (&value[..at], &value[at + '\u{2026}'.len_utf8()..])
+    } else {
+        return false;
+    };
+    let end =
+        |part: &str| (1..=6).contains(&part.chars().count()) && !part.contains(['.', '\u{2026}']);
+    end(head) && end(tail)
+}
+
+/// Whether a user name with no password is itself a token: 40 or 64 hex
+/// characters, or 20 and more characters of three classes with no dot.
+fn token_user(user: &str) -> bool {
+    if matches!(user.len(), 40 | 64) && user.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return true;
+    }
+    let (mut lower, mut upper, mut digit, mut other) = (false, false, false, false);
+    for c in user.chars() {
+        lower |= c.is_ascii_lowercase();
+        upper |= c.is_ascii_uppercase();
+        digit |= c.is_ascii_digit();
+        other |= !c.is_ascii_alphanumeric();
+    }
+    user.chars().count() >= 20
+        && !user.contains('.')
+        && [lower, upper, digit, other]
+            .into_iter()
+            .filter(|c| *c)
+            .count()
+            >= 3
+}
+
+/// A password that documents a shape: an existing marker, a shell variable, a
+/// whole-value run of `*`, or a short display mask. Everything else is a secret,
+/// including words like `changeme` that are real passwords in a homelab.
+fn userinfo_template(secret: &str) -> bool {
+    secret.starts_with("[REDACTED:")
+        || secret.starts_with('$')
+        || secret.bytes().all(|b| b == b'*')
+        || display_mask(secret)
+}
+
+/// The byte range of the secret in `scheme://user:secret@host`, with `from` just
+/// past the `://`. The authority ends at `/`, `?`, `#`, a quote, an angle bracket,
+/// a brace, a backslash or whitespace; its last `@` ends the userinfo and its first
+/// `:` opens the password. Without a `:` the userinfo is a secret only when it is
+/// token-shaped (`https://<token>@host`).
+fn userinfo_secret(text: &str, from: usize) -> Option<(usize, usize)> {
+    let rest = &text[from..];
+    let mut end = rest.len();
+    let mut last_at = None;
+    for (i, c) in rest.char_indices() {
+        if i >= AUTHORITY_LIMIT
+            || c.is_whitespace()
+            || matches!(
+                c,
+                '/' | '?' | '#' | '"' | '\'' | '<' | '>' | '\\' | '{' | '}'
+            )
+        {
+            end = i;
+            break;
+        }
+        if c == '@' {
+            last_at = Some(i);
+        }
+    }
+    let at = last_at?;
+    let host = rest[at + 1..end].chars().next()?;
+    if !(host.is_ascii_alphanumeric() || host == '[') {
+        return None;
+    }
+    let userinfo = &rest[..at];
+    match userinfo.find(':') {
+        Some(colon) => {
+            let secret = &userinfo[colon + 1..];
+            (secret.chars().count() >= 8 && !userinfo_template(secret))
+                .then_some((from + colon + 1, from + at))
+        }
+        None => (token_user(userinfo) && !userinfo_template(userinfo)).then_some((from, from + at)),
+    }
 }
 
 fn spans(text: &str) -> Vec<Span> {
@@ -521,11 +589,21 @@ fn spans(text: &str) -> Vec<Span> {
                 Rule::AssignHexSecret => unreachable!("assign-hex-secret has no pattern"),
                 Rule::Pair => unreachable!("pair spans come from crate::pair"),
                 Rule::Userinfo => {
-                    let value = captures.name("value").expect("userinfo value capture");
-                    if userinfo_placeholder(value.as_str()) {
-                        continue;
+                    let scheme_end = captures.get(0).expect("scheme match").end();
+                    if let Some((start, end)) = userinfo_secret(text, scheme_end) {
+                        // Exact repeats of the secret are replaced with it, as `pair`
+                        // does, and counted once.
+                        let secret = &text[start..end];
+                        for (at, _) in text.match_indices(secret) {
+                            spans.push(Span {
+                                start: at,
+                                end: at + secret.len(),
+                                finding: finding(rule, None, secret),
+                                counted: at == start,
+                            });
+                        }
                     }
-                    (value, finding(rule, None, value.as_str()))
+                    continue;
                 }
                 Rule::Assign => {
                     let value = captures
@@ -942,18 +1020,81 @@ pub fn apply_to_message(
     search_text: Option<&mut String>,
     redact_rules: &[Rule],
 ) -> Vec<FieldHits> {
+    // A token found as a `userinfo` secret in one leaf can sit bare in another leaf
+    // or field, where no rule sees it. Remember each value (in memory only) and
+    // replace its exact repeats across the message's text once the rules have run.
+    let userinfo = if Rule::Userinfo.selected(redact_rules) {
+        let mut values = userinfo_values(raw);
+        if let Some(c) = content.as_deref() {
+            values.extend(userinfo_values(c));
+        }
+        if let Some(t) = search_text.as_deref() {
+            values.extend(
+                scan_values(t)
+                    .into_iter()
+                    .filter(|(f, _)| f.rule == Rule::Userinfo)
+                    .map(|(_, v)| v.to_owned()),
+            );
+        }
+        values.sort();
+        values.dedup();
+        values
+    } else {
+        Vec::new()
+    };
     let mut out = group("raw", redact_json(raw, redact_rules), redact_rules);
+    replace_repeats(raw, &userinfo);
     if let Some(c) = content {
         out.extend(group("content", redact_json(c, redact_rules), redact_rules));
+        replace_repeats(c, &userinfo);
     }
     if let Some(t) = search_text {
         let (redacted, findings) = redact(t, redact_rules);
         if !redact_rules.is_empty() {
             *t = redacted;
         }
+        for value in &userinfo {
+            if t.contains(value.as_str()) {
+                *t = t.replace(value.as_str(), USERINFO_MARKER);
+            }
+        }
         out.extend(group("search_text", findings, redact_rules));
     }
     out
+}
+
+const USERINFO_MARKER: &str = "[REDACTED:userinfo]";
+
+fn userinfo_values(v: &Value) -> Vec<String> {
+    json_values(v)
+        .into_iter()
+        .filter(|(f, _, _)| f.rule == Rule::Userinfo)
+        .map(|(_, value, _)| value)
+        .collect()
+}
+
+/// Replace exact repeats of `values` in every string leaf. Object keys are not
+/// covered, and neither are other messages.
+fn replace_repeats(v: &mut Value, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+    match v {
+        Value::String(text) => {
+            for value in values {
+                if text.contains(value.as_str()) {
+                    *text = text.replace(value.as_str(), USERINFO_MARKER);
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| replace_repeats(item, values)),
+        Value::Object(map) => map
+            .values_mut()
+            .for_each(|item| replace_repeats(item, values)),
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -2324,30 +2465,184 @@ mod tests {
         }
     }
 
+    fn userinfo_hits(text: &str) -> usize {
+        scan(text)
+            .into_iter()
+            .filter(|h| h.rule == Rule::Userinfo)
+            .count()
+    }
+
+    fn userinfo_redacted(text: &str) -> String {
+        redact(text, &[Rule::Userinfo]).0
+    }
+
     #[test]
-    fn userinfo_ignores_placeholders_short_secrets_and_userless_urls() {
+    fn userinfo_ignores_templates_masks_short_secrets_and_userless_urls() {
         for text in [
-            "https://user:password@example.test/x".to_owned(),
-            "https://user:ChangeMe@example.test/x".to_owned(),
-            "https://user:pass@example.test/x".to_owned(),
-            "https://user:${GITEA_TOKEN}@example.test/x".to_owned(),
-            "https://user:{{ secrets.TOKEN }}@example.test/x".to_owned(),
-            "https://user:<password>@example.test/x".to_owned(),
-            "https://user:********@example.test/x".to_owned(),
-            "https://user:[REDACTED:userinfo]@example.test/x".to_owned(),
-            "https://ac:ab12...cd34@example.test/x".to_owned(),
-            "https://ac:ab12\u{2026}cd34@example.test/x".to_owned(),
-            "ssh://git@example.test:org/repo.git".to_owned(),
-            "https://example.test:8443/path?a=b@c".to_owned(),
-            "mailto:someone@example.test".to_owned(),
-            "git@example.test:org/repo.git".to_owned(),
+            "https://user:pass@example.test/x",
+            "https://user:${GITEA_TOKEN}@example.test/x",
+            "https://user:$GITEA_TOKEN@example.test/x",
+            "https://user:{{ secrets.TOKEN }}@example.test/x",
+            "https://user:<password>@example.test/x",
+            "https://user:********@example.test/x",
+            "https://user:[REDACTED:userinfo]@example.test/x",
+            "https://ac:ab12...cd34@example.test/x",
+            "https://ac:ab12\u{2026}cd34@example.test/x",
+            "ssh://git@example.test:org/repo.git",
+            "https://ac@example.test/x",
+            "https://first.last@example.test/x",
+            "https://example.test:8443/path?a=b@c",
+            "https://host/path@name",
+            "mailto:someone@example.test",
+            "git@example.test:org/repo.git",
         ] {
-            let hits: Vec<_> = scan(&text)
-                .into_iter()
-                .filter(|h| h.rule == Rule::Userinfo)
-                .collect();
-            assert!(hits.is_empty(), "{text}: {hits:?}");
+            assert_eq!(userinfo_hits(text), 0, "{text}");
         }
+    }
+
+    // Security row 1: words and shapes that are real passwords in a homelab must
+    // not be skipped as placeholders.
+    #[test]
+    fn userinfo_flags_real_looking_secrets_that_resemble_placeholders() {
+        for secret in [
+            "R7k*Q2m9Z4v8",
+            "xxxQ7m2V8p4",
+            "changeme",
+            "ChangeMe",
+            "password",
+            "a.b..c.d.e.f.g.h",
+        ] {
+            let text = format!("https://user:{secret}@example.test/x");
+            assert_eq!(userinfo_hits(&text), 1, "{secret}");
+            assert_eq!(
+                userinfo_redacted(&text),
+                "https://user:[REDACTED:userinfo]@example.test/x",
+                "{secret}"
+            );
+        }
+    }
+
+    // Row 2: the last `@` of the authority ends the userinfo.
+    #[test]
+    fn userinfo_with_a_raw_at_sign_in_the_password_is_redacted_whole() {
+        assert_eq!(
+            userinfo_redacted("https://u:Ab12Cd34@Ef56Gh78@host"),
+            "https://u:[REDACTED:userinfo]@host"
+        );
+        assert_eq!(
+            userinfo_redacted("https://u:abc@Ef56Gh78@host/x"),
+            "https://u:[REDACTED:userinfo]@host/x"
+        );
+        let text = "https://host/path@name";
+        assert_eq!(userinfo_redacted(text), text);
+    }
+
+    // Row 3: a token in the user position, with or without a password part.
+    #[test]
+    fn userinfo_sees_a_token_in_the_user_position() {
+        let token = hex(40);
+        for (text, expected) in [
+            (
+                format!("https://:{token}@h.example.test"),
+                "https://:[REDACTED:userinfo]@h.example.test",
+            ),
+            (
+                format!("https://{token}@h.example.test/org/r.git"),
+                "https://[REDACTED:userinfo]@h.example.test/org/r.git",
+            ),
+        ] {
+            assert_eq!(userinfo_hits(&text), 1, "{text}");
+            assert_eq!(userinfo_redacted(&text), expected);
+        }
+        let long = format!("https://{}@h.example.test", hex(64));
+        assert_eq!(userinfo_hits(&long), 1);
+    }
+
+    // Row 5: a query or fragment ends the authority.
+    #[test]
+    fn userinfo_stops_at_query_and_fragment() {
+        for text in [
+            "https://docs.example:8443?contact=help@example.test/",
+            "https://docs.example:8443#contact=help@example.test/",
+        ] {
+            assert_eq!(userinfo_hits(text), 0, "{text}");
+            assert_eq!(userinfo_redacted(text), text);
+        }
+        let secret = synthetic(20, ALPHABET);
+        let text = format!("https://u:{secret}@host.example:8443/p?x=1#f");
+        assert_eq!(
+            userinfo_redacted(&text),
+            "https://u:[REDACTED:userinfo]@host.example:8443/p?x=1#f"
+        );
+    }
+
+    // Row 4, within one text: exact repeats go, a different token with a long
+    // shared prefix stays.
+    #[test]
+    fn userinfo_repeats_in_one_text_are_replaced_and_counted_once() {
+        let token = hex(40);
+        let other = format!(
+            "{}{}",
+            &token[..39],
+            if token.ends_with('0') { '1' } else { '0' }
+        );
+        let text = format!("https://ac:{token}@h.example.test then {token} and {other}");
+        assert_eq!(userinfo_hits(&text), 1);
+        assert_eq!(
+            userinfo_redacted(&text),
+            format!(
+                "https://ac:[REDACTED:userinfo]@h.example.test then [REDACTED:userinfo] and {other}"
+            )
+        );
+    }
+
+    // Row 4, across a message: a bare copy in another leaf and another field.
+    #[test]
+    fn userinfo_repeats_across_a_message_are_replaced_in_every_field() {
+        let token = hex(40);
+        let url = format!("https://ac:{token}@h.example.test");
+        let mut raw = serde_json::json!({"a": url, "nested": {"b": [format!("bare {token} copy")]}, "key": token.clone()});
+        let mut content = serde_json::json!([{"type": "text", "text": format!("again {token}")}]);
+        let mut search = format!("{url} and {token}");
+        let hits = apply_to_message(
+            &mut raw,
+            Some(&mut content),
+            Some(&mut search),
+            &[Rule::Userinfo],
+        );
+        let stored = format!("{raw}{content}{search}");
+        assert!(!stored.contains(&token), "{stored}");
+        assert!(stored.contains("[REDACTED:userinfo]"));
+        // Only the URL is a finding; its bare repeats are replaced, not counted.
+        for field in ["raw", "search_text"] {
+            assert!(hits.iter().any(|h| h.field == field), "{field}: {hits:?}");
+        }
+        assert!(hits.iter().all(|h| h.hits == 1), "{hits:?}");
+        // Flag-only leaves everything in place.
+        let mut raw_flag = serde_json::json!({"a": url});
+        apply_to_message(&mut raw_flag, None, None, &[]);
+        assert_eq!(raw_flag, serde_json::json!({"a": url}));
+    }
+
+    // Row 6: the scan stays linear on hostile and on credential-heavy text.
+    #[test]
+    fn userinfo_scan_stays_fast_on_hostile_text() {
+        let secret = synthetic(24, ALPHABET);
+        let mut text = String::new();
+        while text.len() < 512 * 1024 {
+            text.push_str(&format!("see https://u:{secret}@h.example.test/x ok\n"));
+            text.push_str("a://a://a://a://a://a://b://");
+            text.push_str(&"x".repeat(2000));
+            text.push('\n');
+        }
+        let start = std::time::Instant::now();
+        let hits = userinfo_hits(&text);
+        assert!(hits > 100, "{hits}");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(20),
+            "scan took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

@@ -4,6 +4,10 @@
 - [x] 1.2 `Rule::Userinfo`, pattern, `userinfo_placeholder`, `Rule::ALL`/`RULES`/`PATTERNS` arity.
 - [x] 1.3 Elision rule for display masks (found by the real 2-day dry run: 3 of 7 hits).
 
+## 1b. Security c1afb74 rows 1-6 (0.44.2)
+
+- [x] 1b.1 Narrow exemptions (row 1), authority parse with last `@` (row 2), token in user position (row 3), repeats within a text and across a message (row 4), query/fragment end the authority (row 5), tests and spec correction (row 6).
+
 ## 2. Hub surface
 
 - [x] 2.1 `credential_findings_test`: `messages_by_rule_all` includes `userinfo`; new ingest test for the three fields.

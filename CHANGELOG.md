@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.2] - 2026-11-13
+
+### Fixed
+- **`userinfo` rule, security review `c1afb74` (rows 1-6).** Words like `changeme` and shapes like `R7k*Q2m9Z4v8` are no longer skipped as placeholders (only markers, `$` variables, `*` masks and short display masks are). The authority is parsed up to its last `@`, so a raw `@` in the password is redacted whole. A token in the user position (`https://<token>@host`, `https://:<token>@host`) is flagged. Exact repeats of a detected secret are replaced across the message's text. A query or fragment ends the authority. Tests pin each case and a hostile-input timing bound.
+
 ## [0.44.1] - 2026-11-13
 
 ### Added

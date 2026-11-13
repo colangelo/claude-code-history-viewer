@@ -659,8 +659,10 @@ redact = ["pem", "prefix"]
 
 `userinfo` (OpenSpec `userinfo-credential-rule`) is flag-only until
 security adds it to `redact`: a git credential-store line carries a bare token no
-other rule can see. It skips placeholders, templates, display masks (`ab12...cd34`)
-and example words. The one-off real run works without the setting:
+other rule can see. It skips templates, `$` variables, `*` masks and short display masks
+(`ab12...cd34`); words like `changeme` are findings. It reads the authority up to its last
+`@`, takes a token in the user position, and replaces exact repeats of a detected
+secret across the message. The one-off real run works without the setting:
 `hub findings redact --rule userinfo --expect <row> --max-rows N`.
 
 Applies from the next hub start, to new ingest only. Rows already archived are
