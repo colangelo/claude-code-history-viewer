@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.1] - 2026-11-13
+
+### Added
+- **`userinfo` credential rule** — the password part of a URL's userinfo (`scheme://user:secret@host`) is now a finding, covering git credential-store lines and database or proxy URLs that no key name, prefix or bearer word gives away. Placeholders, templates, display masks (`ab12...cd34`) and example words are skipped. In redact mode only the secret becomes `[REDACTED:userinfo]`. Flag-only until security adds it to `[redaction] redact`; `hub findings redact --rule userinfo` rewrites existing rows. `messages_by_rule_all` on `/v1/healthz/findings` gains a `userinfo` key. (OpenSpec `userinfo-credential-rule`)
+
+### Fixed
+- The distiller's `claude -p` runs without claude.ai connectors (`ENABLE_CLAUDEAI_MCP_SERVERS=false`, plus the no-connectors settings file when present).
+
+## [0.44.0] - 2026-11-03
+
+### Added
+- **Browser login with persistent sessions** and a failed-credential limit on `/v1/login` (release A of `hub-read-needs-credential`): auth counts at `/v1/healthz/auth`, token checks, cookie login, and login wording and focus per the frontend review.
+
 ## [Unreleased]
 
 ### Added
