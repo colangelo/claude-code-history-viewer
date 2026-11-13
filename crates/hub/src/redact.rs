@@ -27,10 +27,15 @@ pub enum Rule {
     /// A value field paired with a secret-named name field or a sensitivity
     /// flag in the same object (ac/security F7, 2026-10-22): `crate::pair`.
     Pair,
+    /// The password part of a URL's userinfo, `scheme://user:secret@host`, when
+    /// it is not a placeholder. A credential-store line carries a bare token with
+    /// no secret-named key or known prefix, which no other rule can see (a Gitea
+    /// token reached the archive that way, 2026-11-13).
+    Userinfo,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 7] = [
+    pub const ALL: [Rule; 8] = [
         Rule::Pem,
         Rule::Prefix,
         Rule::Bearer,
@@ -38,6 +43,7 @@ impl Rule {
         Rule::AssignStrong,
         Rule::AssignHexSecret,
         Rule::Pair,
+        Rule::Userinfo,
     ];
 
     pub fn from_id(id: &str) -> Option<Rule> {
@@ -61,6 +67,7 @@ impl Rule {
             Self::AssignStrong => "assign-strong",
             Self::AssignHexSecret => "assign-hex-secret",
             Self::Pair => "pair",
+            Self::Userinfo => "userinfo",
         }
     }
 }
@@ -89,16 +96,17 @@ pub struct Finding {
     pub origin: Option<&'static str>,
 }
 
-const RULES: [Rule; 5] = [
+const RULES: [Rule; 6] = [
     Rule::Pem,
     Rule::Prefix,
     Rule::Bearer,
     Rule::Assign,
     Rule::Assign,
+    Rule::Userinfo,
 ];
 /// Index of the second-pass `assign` pattern (see the comment on it).
 const EXTRA_ASSIGN: usize = 4;
-const PATTERNS: [&str; 5] = [
+const PATTERNS: [&str; 6] = [
     r"-----BEGIN (?P<label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
     r"\b(?:gh[pousr]_[A-Za-z0-9_\-]{36,}|github_pat_[A-Za-z0-9_\-]{22,}|sk-ant-[A-Za-z0-9_\-]{20,}|sk-lm-[A-Za-z0-9]{8}:[A-Za-z0-9]{16,}|(?:sk-(?:bf|mw)|aiproxy-(?:ws|pi))-[A-Za-z0-9_:\-]{30,}|sk-(?:proj-)?[A-Za-z0-9_\-]{20,}|xox[abposr]-[A-Za-z0-9_\-]{10,}|AKIA[0-9A-Z]{16}\b|hv[sbr]\.[A-Za-z0-9_\-]{20,}|gl(?:pat|rt)-[A-Za-z0-9_\-]{20,}(?:\.[A-Za-z0-9_\-]+)*)",
     r"\b(?i:Bearer)[ \t]+(?P<value>[A-Za-z0-9._~+/=\-]{20,})",
@@ -108,11 +116,16 @@ const PATTERNS: [&str; 5] = [
     // inner live `assign-strong` hit (security E1). Spans from this pass that
     // overlap any other span are dropped, so the live rules' output is unchanged.
     r#"\b(?P<key>[A-Za-z0-9_.\-]*(?i:PASSW|API-KEY|BEARER)[A-Za-z0-9_.\-]*)["']?[ \t]*[=:][ \t]*(?:"(?P<double>(?:\\.|[^"\\])*)"|'(?P<single>(?:\\.|[^'\\])*)'|(?P<bare>\$\{[^}\r\n]*\}|[^\s,;"'{}]+))"#,
+    // `scheme://user:secret@host`: the value is the password part. Both parts stop
+    // at whitespace, quotes, angle brackets, braces and `/`, so a template
+    // (`${TOKEN}`, `{{ x }}`, `<password>`) never matches, and a host or path ends
+    // the search. The character after `@` must open a host.
+    r#"[A-Za-z][A-Za-z0-9+.\-]{1,15}://[^\s:/@"'<>{}]{1,64}:(?P<value>[^\s/@"'<>{}\[]{8,})@[A-Za-z0-9\[]"#,
 ];
 
 struct Detector {
     prefilter: RegexSet,
-    patterns: [Regex; 5],
+    patterns: [Regex; 6],
 }
 
 static DETECTOR: LazyLock<Detector> = LazyLock::new(|| Detector {
@@ -447,6 +460,27 @@ fn mask_or_placeholder(value: &str) -> bool {
     chars.len() >= 16 && distinct.len() <= 3
 }
 
+/// A userinfo password that documents a shape rather than holding a secret:
+/// the shared placeholders and masks, plus the words examples use.
+fn userinfo_placeholder(value: &str) -> bool {
+    const WORDS: [&str; 8] = [
+        "password",
+        "passwd",
+        "secret",
+        "changeme",
+        "yourpassword",
+        "mypassword",
+        "redacted",
+        "example",
+    ];
+    // A display mask keeps the ends and elides the middle (`ab12...cd34`).
+    let elided = value.contains("..") || value.contains('\u{2026}') || value.contains('*');
+    placeholder(value)
+        || mask_or_placeholder(value)
+        || elided
+        || WORDS.iter().any(|word| value.eq_ignore_ascii_case(word))
+}
+
 fn spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut extra: Vec<Span> = Vec::new();
@@ -486,6 +520,13 @@ fn spans(text: &str) -> Vec<Span> {
                 Rule::AssignStrong => unreachable!("assign-strong has no pattern"),
                 Rule::AssignHexSecret => unreachable!("assign-hex-secret has no pattern"),
                 Rule::Pair => unreachable!("pair spans come from crate::pair"),
+                Rule::Userinfo => {
+                    let value = captures.name("value").expect("userinfo value capture");
+                    if userinfo_placeholder(value.as_str()) {
+                        continue;
+                    }
+                    (value, finding(rule, None, value.as_str()))
+                }
                 Rule::Assign => {
                     let value = captures
                         .name("double")
@@ -2227,5 +2268,100 @@ mod tests {
         assert!(!rules_in(ok).contains(&Rule::AssignStrong), "{ok}");
         let not = "token = \"CHANGEME_TO_A_REAL_SECRET_0123456789_ABCDE\"";
         assert!(rules_in(not).contains(&Rule::AssignStrong), "{not}");
+    }
+
+    // Credentials in URL userinfo (`scheme://user:secret@host`): a git credential
+    // store line is a bare 40-hex secret that no key name, prefix or bearer word
+    // gives away (a Gitea token reached the archive that way, 2026-11-13).
+    #[test]
+    fn userinfo_is_a_rule_id() {
+        assert_eq!(Rule::from_id("userinfo"), Some(Rule::Userinfo));
+        assert!(Rule::ALL.contains(&Rule::Userinfo));
+        assert_eq!(Rule::Userinfo.id(), "userinfo");
+        assert!(!Rule::Assign.eq(&Rule::Userinfo) && !Rule::Userinfo.selected(&[Rule::Assign]));
+    }
+
+    #[test]
+    fn userinfo_redacts_a_bare_hex_secret_in_a_credential_store_line() {
+        let value = hex(40);
+        let text = format!("cat ~/.git-credentials\nhttps://ac:{value}@gitea.example.test\n");
+        let hits = scan(&text);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].rule, Rule::Userinfo);
+        no_value(&hits, &value, "git credential line");
+        let (out, found) = redact(&text, &[Rule::Userinfo]);
+        assert_eq!(
+            out,
+            "cat ~/.git-credentials\nhttps://ac:[REDACTED:userinfo]@gitea.example.test\n"
+        );
+        assert_eq!(found, hits);
+        // Idempotent: the marker is not itself a credential.
+        let (again, again_hits) = redact(&out, &[Rule::Userinfo]);
+        assert_eq!(again, out);
+        assert!(again_hits.is_empty(), "{again_hits:?}");
+    }
+
+    #[test]
+    fn userinfo_flags_without_redacting_when_the_rule_is_not_selected() {
+        let value = hex(40);
+        let text = format!("https://ac:{value}@gitea.example.test");
+        let (out, found) = redact(&text, &[Rule::Pem, Rule::Prefix]);
+        assert_eq!(out, text);
+        assert_eq!(rules_in(&text), vec![Rule::Userinfo]);
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn userinfo_sees_a_database_url_inside_json_and_a_wrapped_host() {
+        let value = synthetic(24, ALPHABET);
+        for text in [
+            format!(r#"{{"text":"postgres://app:{value}@db.internal:5432/x"}}"#),
+            format!("https://ac:{value}@gitea.cat- bluegill.example.test"),
+        ] {
+            let (out, _) = redact(&text, &[Rule::Userinfo]);
+            assert!(!out.contains(&value), "{out}");
+            assert!(out.contains("[REDACTED:userinfo]@"), "{out}");
+        }
+    }
+
+    #[test]
+    fn userinfo_ignores_placeholders_short_secrets_and_userless_urls() {
+        for text in [
+            "https://user:password@example.test/x".to_owned(),
+            "https://user:ChangeMe@example.test/x".to_owned(),
+            "https://user:pass@example.test/x".to_owned(),
+            "https://user:${GITEA_TOKEN}@example.test/x".to_owned(),
+            "https://user:{{ secrets.TOKEN }}@example.test/x".to_owned(),
+            "https://user:<password>@example.test/x".to_owned(),
+            "https://user:********@example.test/x".to_owned(),
+            "https://user:[REDACTED:userinfo]@example.test/x".to_owned(),
+            "https://ac:ab12...cd34@example.test/x".to_owned(),
+            "https://ac:ab12\u{2026}cd34@example.test/x".to_owned(),
+            "ssh://git@example.test:org/repo.git".to_owned(),
+            "https://example.test:8443/path?a=b@c".to_owned(),
+            "mailto:someone@example.test".to_owned(),
+            "git@example.test:org/repo.git".to_owned(),
+        ] {
+            let hits: Vec<_> = scan(&text)
+                .into_iter()
+                .filter(|h| h.rule == Rule::Userinfo)
+                .collect();
+            assert!(hits.is_empty(), "{text}: {hits:?}");
+        }
+    }
+
+    #[test]
+    fn userinfo_and_prefix_share_one_value_without_leaking_it() {
+        let value = token("ghp_", 36);
+        let text = format!("https://ac:{value}@github.example.test/org/repo.git");
+        let rules = [Rule::Prefix, Rule::Userinfo];
+        let (out, found) = redact(&text, &rules);
+        assert!(!out.contains(&value), "{out}");
+        let kinds: Vec<_> = found.iter().map(|f| f.rule).collect();
+        assert!(
+            kinds.contains(&Rule::Prefix) && kinds.contains(&Rule::Userinfo),
+            "{kinds:?}"
+        );
+        no_value(&found, &value, "prefix and userinfo");
     }
 }

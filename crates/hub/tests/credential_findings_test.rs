@@ -242,6 +242,40 @@ async fn redact_mode_stores_the_marker_in_all_three_fields() {
 }
 
 #[tokio::test]
+async fn userinfo_rule_redacts_a_credential_store_token_in_all_three_fields() {
+    let hub = spawn(vec![Rule::Userinfo]).await;
+    // 40 lowercase hex characters, built at runtime: no key name, prefix or bearer
+    // word gives this away, only the `user:secret@host` position.
+    let secret: String = (0..40u32)
+        .map(|i| char::from_digit((i * 7 + i / 5 + 3) % 16, 16).expect("hex digit"))
+        .collect();
+    let text = format!("cat ~/.git-credentials\nhttps://ac:{secret}@gitea.example.test\n");
+    post(
+        &hub,
+        &batch(
+            hub.machine_id,
+            "s-userinfo",
+            vec![msg("s-userinfo", "k1", "2026-01-01T00:00:00Z", &text)],
+        ),
+    )
+    .await;
+
+    let (id, raw, content, search) = stored(&hub, "k1").await;
+    for (name, field) in [
+        ("raw", &raw),
+        ("content", &content),
+        ("search_text", &search),
+    ] {
+        assert!(!field.contains(&secret), "{name} still holds the value");
+        assert!(
+            field.contains("https://ac:[REDACTED:userinfo]@gitea.example.test"),
+            "{name} lacks the marker"
+        );
+    }
+    assert_eq!(findings_for(&hub, id).await, all_fields("userinfo", true));
+}
+
+#[tokio::test]
 async fn resent_batch_adds_no_row_and_no_finding() {
     let hub = spawn(Vec::new()).await;
     let text = format!("token {}", synthetic_token());
@@ -1316,7 +1350,7 @@ async fn acked_findings_stop_paging_and_a_new_one_still_pages() {
     // false positives; a row acked `handled` is real exposure and still counts.
     assert_eq!(
         body["messages_by_rule_all"],
-        serde_json::json!({"assign": 0, "assign-hex-secret": 0, "assign-strong": 0, "bearer": 0, "pair": 0, "pem": 0, "prefix": 1}),
+        serde_json::json!({"assign": 0, "assign-hex-secret": 0, "assign-strong": 0, "bearer": 0, "pair": 0, "pem": 0, "prefix": 1, "userinfo": 0}),
         "every rule present with an explicit number, so a threshold reads one"
     );
 

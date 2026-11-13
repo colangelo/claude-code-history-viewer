@@ -642,7 +642,8 @@ hosting the URL is just the page's own origin.
 ### Credential findings and redaction (`[redaction]`, cchv-v0.23.0+, #34)
 
 Every ingested message is scanned for credential shapes (`pem` private keys,
-known token `prefix`es, `bearer` headers, secret-named `assign`ments). Each hit
+known token `prefix`es, `bearer` headers, secret-named `assign`ments, and the
+password part of a URL's userinfo, `scheme://user:secret@host`, as `userinfo`). Each hit
 becomes a `credential_findings` row (rule, count, key *names*, redacted or not),
 never the value. A rule listed under `redact` also replaces the value with
 `[REDACTED:<rule>]` in `raw`, `content` and `search_text` before storage; an
@@ -655,6 +656,12 @@ flag `bearer` and `assign`:
 [redaction]
 redact = ["pem", "prefix"]
 ```
+
+`userinfo` (OpenSpec `userinfo-credential-rule`) is flag-only until
+security adds it to `redact`: a git credential-store line carries a bare token no
+other rule can see. It skips placeholders, templates, display masks (`ab12...cd34`)
+and example words. The one-off real run works without the setting:
+`hub findings redact --rule userinfo --expect <row> --max-rows N`.
 
 Applies from the next hub start, to new ingest only. Rows already archived are
 rewritten only by the real run below; the Mac-side transcript files are never
